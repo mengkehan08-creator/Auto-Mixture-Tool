@@ -1,0 +1,37 @@
+# 生产示例：通过 HTTP API 提交到高性能计算集群。
+# 与 demo_pipeline.yaml 的区别：executor_id=hpc-cluster + endpoint。
+
+dataset_uri: ./temp/preprocessed
+schema_uri: ./configs/schema_essential_web.yaml
+output_uri: ./result/demo_run
+
+algorithm_id: quadmix
+trainer_id: nanochat-stem
+validator_id: stem
+executor_id: hpc-cluster       # 生产：提交到 HPC 集群 API
+format_validator_id: quadmix
+
+algorithm_config:
+  num_experiments: 8
+  num_search: 1000
+  device_type: npu
+  npu_devices: 8
+  proxy_validation_set: cap_v1
+
+trainer_config:
+  npu_devices: 8
+  target_param_data_ratio: 0.5
+  nanochat_repo: /opt/nanochat
+  model_dir: /models/nanochat
+  base_model_tag: d24
+
+validator_config:
+  benchmarks: stem
+  tasks:
+    - gsm8k
+    - mmlu_stem
+    - arc_easy
+
+executor_config:
+  endpoint: https://hpc-cluster.example.com/api/v1/jobs   # 必填：集群任务提交 API
+  token_env: AMT_CLUSTER_TOKEN                            # 可选：承载令牌的环境变量名

@@ -1,0 +1,148 @@
+openapi: 3.0.3
+info:
+  title: QuaDMix Platform API
+  version: 0.1.0
+servers:
+  - url: http://127.0.0.1:8080/api/v1
+paths:
+  /health:
+    get:
+      summary: Service health
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema: {type: object}
+  /components:
+    get:
+      summary: List switchable pipeline components
+      responses:
+        '200':
+          description: Component catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  algorithms: {type: array, items: {$ref: '#/components/schemas/Component'}}
+                  trainers: {type: array, items: {$ref: '#/components/schemas/Component'}}
+                  validators: {type: array, items: {$ref: '#/components/schemas/Component'}}
+                  executors: {type: array, items: {$ref: '#/components/schemas/Component'}}
+  /datasets/inspect:
+    post:
+      summary: Validate an uploaded dataset against a QuaDMix schema
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/InspectionRequest'}
+      responses:
+        '200':
+          description: Inspection result; valid can be false
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/InspectionResult'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /jobs:
+    post:
+      summary: Validate and submit a pipeline job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/JobRequest'}
+      responses:
+        '201':
+          description: Job created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Job'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '502':
+          description: Cluster submission failure
+  /jobs/{jobId}:
+    get:
+      summary: Get an in-memory demo job
+      parameters:
+        - in: path
+          name: jobId
+          required: true
+          schema: {type: string}
+      responses:
+        '200':
+          description: Job state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Job'}
+        '404':
+          description: Job not found
+components:
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties: {error: {type: string}}
+  schemas:
+    Component:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+    InspectionRequest:
+      type: object
+      required: [dataset_uri, schema_uri]
+      properties:
+        dataset_uri: {type: string}
+        schema_uri: {type: string}
+        sample_size: {type: integer, minimum: 1, maximum: 1000, default: 100}
+    InspectionResult:
+      type: object
+      required: [valid, errors, warnings, columns]
+      properties:
+        valid: {type: boolean}
+        inspected_file: {type: string}
+        format: {type: string}
+        sampled_rows: {type: integer}
+        total_rows: {type: integer, nullable: true}
+        columns: {type: object, additionalProperties: {type: string}}
+        errors: {type: array, items: {type: string}}
+        warnings: {type: array, items: {type: string}}
+    JobRequest:
+      allOf:
+        - $ref: '#/components/schemas/InspectionRequest'
+        - type: object
+          required: [algorithm_id, trainer_id, validator_id, executor_id]
+          properties:
+            output_uri: {type: string}
+            algorithm_id: {type: string, example: quadmix}
+            trainer_id: {type: string, example: nanochat-stem}
+            validator_id: {type: string, example: stem}
+            executor_id: {type: string, enum: [mock, cluster-rest]}
+            algorithm_config: {type: object, additionalProperties: true}
+            trainer_config: {type: object, additionalProperties: true}
+            validator_config: {type: object, additionalProperties: true}
+            executor_config: {type: object, additionalProperties: true}
+    CommandSpec:
+      type: object
+      required: [name, executable, args, env]
+      properties:
+        name: {type: string}
+        executable: {type: string}
+        args: {type: array, items: {type: string}}
+        env: {type: object, additionalProperties: {type: string}}
+        cwd: {type: string, nullable: true}
+    Job:
+      type: object
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [VALIDATED, SUBMITTED, RUNNING, SUCCEEDED, FAILED, CANCELLED]}
+        executor: {type: string}
+        external_id: {type: string, nullable: true}
+        message: {type: string}
+        request: {type: object}
+        stages: {type: array, items: {$ref: '#/components/schemas/CommandSpec'}}

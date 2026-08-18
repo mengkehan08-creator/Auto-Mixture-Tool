@@ -1,0 +1,35 @@
+# Example Auto-Mixture-Tool pipeline configuration.
+# This file selects plugins and supplies their parameters.
+
+dataset_uri: ./temp/preprocessed
+schema_uri: ./configs/schema_essential_web.yaml
+output_uri: ./result/demo_run
+
+algorithm_id: quadmix
+trainer_id: nanochat-stem
+validator_id: stem
+executor_id: local               # dev：本地子进程执行；生产改 hpc-cluster（需配 endpoint）
+format_validator_id: quadmix   # 可替换的数据格式校验模块（默认：QuadMix 格式）
+
+algorithm_config:
+  num_experiments: 8
+  num_search: 1000
+  device_type: npu            # dev 8 NPU；无 NPU 时改 cpu
+  npu_devices: 8              # 8 张 NPU
+  proxy_validation_set: cap_v1
+
+trainer_config:
+  npu_devices: 8              # → NUM_NPU env，run_experiment.sh 据此设 ASCEND_VISIBLE_DEVICES/RANK_SIZE
+  target_param_data_ratio: 0.5
+  nanochat_repo: /opt/nanochat
+  model_dir: /models/nanochat
+  base_model_tag: d24
+
+validator_config:
+  benchmarks: stem
+  tasks:
+    - gsm8k
+    - mmlu_stem
+    - arc_easy
+
+executor_config: {}          # dev（local）留空；hpc-cluster 时填 endpoint / token_env

@@ -1,0 +1,6 @@
+text,domain,relevance,noise,char_count
+Solve the equation x plus two equals five.,math,0.94,0.02,38
+Newton's laws describe the motion of bodies.,physics,0.88,0.03,45
+Cells use DNA to store genetic information.,biology,0.91,0.01,43
+The derivative measures an instantaneous rate of change.,math,0.90,0.04,55
+Energy is conserved in an isolated system.,physics,0.86,0.02,43

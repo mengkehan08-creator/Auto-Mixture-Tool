@@ -1,0 +1,9 @@
+domain_col: domain
+domain_names: [math, physics, biology]
+quality_cols:
+  - relevance
+  - name: noise
+    higher_better: false
+text_col: text
+char_count_col: char_count
+row_in_shard_col: null

@@ -1,0 +1,12 @@
+{
+  "dataset_uri": "examples/platform/sample_dataset.csv",
+  "schema_uri": "examples/platform/sample_schema.yaml",
+  "algorithm_id": "quadmix",
+  "trainer_id": "nanochat-stem",
+  "validator_id": "stem",
+  "executor_id": "local",
+  "algorithm_config": {"num_experiments": 8, "num_search": 1000, "device_type": "npu", "npu_devices": 8},
+  "trainer_config": {"npu_devices": 8},
+  "validator_config": {"tasks": ["gsm8k", "mmlu_stem", "arc_easy"]},
+  "executor_config": {}
+}

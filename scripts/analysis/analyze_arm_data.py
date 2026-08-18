@@ -1,0 +1,1437 @@
+#!/usr/bin/env python3
+"""Compare per-arm training-data distributions across downstream A/B arms.
+
+Reads the sharded parquet arms produced by nanochat_mid_compare/prepare_data.py
+(<result-dir>/data/{quadmix,random,manual_ratio}_data/shard_*.parquet) and
+characterizes each arm to diagnose why min-val_loss selection may pick "easy"
+data: low-entropy / repetitive / low-diversity / short-fragment text that drives
+val_loss down without building capability.
+
+Outputs (into --output-dir, default = --result-dir):
+  fig_arm_length.png        — char-length histograms, arms overlaid (density)
+  fig_arm_entropy.png       — char-level Shannon entropy (bits) histograms
+  fig_arm_repetition.png    — single-char repetition fraction histograms
+  fig_arm_diversity.png     — lexical diversity (type/token) histograms
+  fig_arm_token_length.png  — TOKEN length histograms + 2k window marker
+                              (needs --tokenizer; skipped otherwise)
+  fig_arm_boundaries.png    — doc-boundaries per 2k packed row histograms
+                              (needs --tokenizer; skipped otherwise)
+  fig_arm_domain.png        — domain distribution grouped bars (needs domain col)
+  fig_length_by_domain.png  — per-arm × per-domain length boxplots
+  fig_entropy_by_domain.png — per-arm × per-domain entropy boxplots
+  fig_repetition_by_domain.png — per-arm × per-domain repetition boxplots
+  fig_diversity_by_domain.png  — per-arm × per-domain diversity boxplots
+  fig_loss_curves.png       — overlaid training-loss step curves from
+                              mid_train_*.log (needs --log-dir or logs in
+                              --result-dir; skipped if no logs found)
+  arm_data_comparison.txt   — per-arm doc/token counts + metric percentiles +
+                              domain mix + per-domain length/entropy/repetition/
+                              diversity stats + token-length & boundary stats
+  loss_curve_summary.txt    — initial loss, convergence step, final loss per arm
+                              (only when training logs are found)
+  quality_length_corr.txt   — Spearman(quality_signal, char_count) per arm.
+                              Signals: raw quality_cols for every arm that
+                              preserves them + the merged quality_rank (0=best)
+                              for the quadmix arm only (prepare_data
+                              drops quality_rank from the regular quadmix_train arm;
+                              pass --sampled-parquet to recover it).
+  fig_quality_length_corr.png — heatmap of the above Spearman matrix
+  within_stratum_rho.txt     — within-stratum quality-length ρ: splits each
+                              arm into K=4 length quartiles and computes ρ
+                              within each stratum.  If global ρ drops to ≈0
+                              within strata → bias is between-stratum only →
+                              length-residual normalization will be effective.
+                              Also computes per-domain within-stratum ρ when
+                              domain labels are available.
+  fig_within_stratum_rho.png — grouped bar: global vs within-stratum avg ρ
+  fig_arm_<quality>.png       — per-arm quality-signal histograms
+
+Text-based slices run on existing text-only parquets now; the token slices need
+--tokenizer (nanochat tokenizer.pkl) and the domain slice needs the "domain"
+label column (prepare_data preserves it when the source schema has domain_col).
+
+Usage:
+  python scripts/analysis/analyze_arm_data.py \
+      --result-dir nanochat_mid_compare/results_stem/<timestamp> \
+      --tokenizer /home/ma-user/work/nanochat_model_dir/tokenizer \
+      --sampled-parquet <search_output_dir>/sampled_dataset
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+from collections import Counter
+from pathlib import Path
+
+import numpy as np
+import pandas as pd  # noqa: F401  (ensures pyarrow backend present)
+import pyarrow.parquet as pq
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+try:
+    import quadmix  # noqa: F401
+except ImportError:
+    sys.path.insert(
+        0,
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src"),
+    )
+
+from quadmix.pipeline.report import setup_style, save_fig
+from quadmix.sampling.batch_sampler import resolve_parquet_source
+from _common.tokenize_helpers import init_tok_worker, tokenize_lens
+from _common.stats_helpers import spearman
+
+
+_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+
+
+# ── per-document metrics ──────────────────────────────────────────
+
+
+def _doc_metrics(text):
+    """Return (char_len, entropy_bits, repetition_frac, lexical_diversity).
+
+    Entropy & repetition are computed over Unicode code points via a uint32
+    view of the utf-32 encoding (one 32-bit unit per code point, no BOM), so
+    both reuse the same array. Lexical diversity uses whitespace tokens.
+    """
+    if not text:
+        return 0, 0.0, 0.0, 0.0
+    n = len(text)
+    arr = np.frombuffer(text.encode("utf-32-le"), dtype=np.uint32)
+    m = arr.size
+    if m > 1:
+        rep = float(np.count_nonzero(arr[1:] == arr[:-1])) / (m - 1)
+    else:
+        rep = 0.0
+    _, counts = np.unique(arr, return_counts=True)
+    p = counts / m
+    ent = float(-(p * np.log2(p)).sum())
+    toks = text.split()
+    div = len(set(toks)) / len(toks) if toks else 0.0
+    return n, ent, rep, div
+
+
+# ── shard worker ──────────────────────────────────────────────────
+
+
+def _scan_shard(task):
+    idx, path, has_domain, do_tok, quality_cols = task
+    schema_names = set(pq.read_schema(path).names)
+    cols = ["text"]
+    if has_domain and "domain" in schema_names:
+        cols.append("domain")
+    extra_cols = []
+    for c in ["doc_id", "char_count", "token_count", "quality_rank"] + (quality_cols or []):
+        if c and c in schema_names and c not in cols:
+            cols.append(c)
+            extra_cols.append(c)
+    cols = list(dict.fromkeys(cols))
+    table = pq.read_table(path, columns=cols)
+    texts = table["text"].to_pylist()
+    n = len(texts)
+    lens = np.empty(n, dtype=np.int64)
+    ents = np.empty(n, dtype=np.float32)
+    reps = np.empty(n, dtype=np.float32)
+    divs = np.empty(n, dtype=np.float32)
+    for i, t in enumerate(texts):
+        lens[i], ents[i], reps[i], divs[i] = _doc_metrics(t or "")
+    dom = None
+    dom_labels = None
+    if has_domain and "domain" in table.column_names:
+        dom_labels = table["domain"].to_pylist()
+        dom = Counter(dom_labels)
+    tok_lens = tokenize_lens(texts) if do_tok else None
+
+    text_hashes = [hashlib.sha1((t or "").encode("utf-8")).hexdigest() for t in texts]
+
+    result = {
+        "lens": lens, "ents": ents, "reps": reps, "divs": divs,
+        "dom": dom, "tok_lens": tok_lens,
+        "dom_labels": dom_labels,
+        "text_hashes": text_hashes,
+    }
+    for c in extra_cols:
+        if c in table.column_names:
+            arr = table[c].to_pylist()
+            if c in ("doc_id", "char_count", "token_count"):
+                result[c] = np.array(arr, dtype=np.int64)
+            else:
+                result[c] = np.array(arr, dtype=np.float64)
+    return result
+
+
+def _scan_sampled_batch(task):
+    """Process one Arrow RecordBatch from the sampled parquet (worker).
+
+    Each batch (~5000 rows) is streamed from a parquet file by the main
+    process via ``ParquetFile.iter_batches`` and dispatched to a Pool worker.
+    The worker extracts metadata arrays and (optionally) tokenizes text,
+    using the global ``_ENC`` / ``_TOK_THREADS`` initialized by
+    ``init_tok_worker``.
+    """
+    idx, batch, do_tok, domain_col, quality_cols = task
+    col_names = set(batch.schema.names)
+
+    texts = None
+    if "char_count" in col_names:
+        char_count = np.asarray(
+            batch.column("char_count").to_numpy(zero_copy_only=False),
+            dtype=np.int64)
+    elif "text" in col_names:
+        texts = batch.column("text").to_pylist()
+        char_count = np.array([len(t or "") for t in texts], dtype=np.int64)
+    else:
+        char_count = np.array([], dtype=np.int64)
+
+    tok_lens = None
+    if do_tok and "text" in col_names:
+        if texts is None:
+            texts = batch.column("text").to_pylist()
+        tok_lens = tokenize_lens(texts)
+
+    dom_labels = None
+    dom = Counter()
+    if domain_col and domain_col in col_names:
+        dom_labels = np.asarray(
+            batch.column(domain_col).to_numpy(zero_copy_only=False))
+        dom = Counter(dom_labels.tolist())
+
+    doc_ids = None
+    if "doc_id" in col_names:
+        doc_ids = np.asarray(
+            batch.column("doc_id").to_numpy(zero_copy_only=False),
+            dtype=np.int64)
+
+    result = {
+        "len": char_count,
+        "tok_lens": tok_lens,
+        "dom_labels": dom_labels,
+        "dom": dom,
+        "doc_ids": doc_ids,
+    }
+    if "quality_rank" in col_names:
+        result["quality_rank"] = np.asarray(
+            batch.column("quality_rank").to_numpy(zero_copy_only=False),
+            dtype=np.float64)
+    for c in (quality_cols or []):
+        if c in col_names:
+            result[c] = np.asarray(
+                batch.column(c).to_numpy(zero_copy_only=False),
+                dtype=np.float64)
+    return result
+
+
+def _scan_sampled_arm(parquet_path, quality_cols, domain_names, do_tok=False,
+                     num_workers=32, tokenizer_path=None, tok_threads=1):
+    """Scan a QuadMix sampled_dataset directory (or legacy .parquet) as an extra 'quadmix' arm.
+
+    sampled_dataset (batch_sampler.save_sampled_dataset) carries
+    char_count / quality_rank (merged, 0=best) / raw quality_cols / <domain_col>
+    (int labels). prepare_data drops quality_rank when building arm parquets, so
+    this is the only arm that can show rank<->length. Domain column name is the
+    schema's domain_col (category_name for STEM); falls back to 'domain'.
+
+    Parallelized: streams the parquet files in ~5000-row batches via
+    ``ParquetFile.iter_batches`` and dispatches each batch to a Pool worker
+    (``_scan_sampled_batch``) for metadata extraction + tokenization.  This
+    replaces the old single-threaded ``pq.read_table`` + ``to_pylist`` +
+    ``tokenize_lens`` pipeline that bottlenecked on 1 core regardless of
+    ``--num-workers``.
+
+    ent/rep/div are left empty so the text-only histograms simply skip this arm
+    (they are redundant with the quadmix_train arm, which is the same data
+    pre-packing).
+    """
+    sources = resolve_parquet_source(parquet_path)
+    schema_names = set(pq.read_schema(sources[0]).names)
+    print(f"    [info] sampled columns: {sorted(schema_names)}")
+    domain_col = None
+    for c in ("category_name", "domain"):
+        if c in schema_names:
+            domain_col = c
+            break
+
+    has_char_count = "char_count" in schema_names
+    has_doc_id = "doc_id" in schema_names
+    want = []
+    if has_char_count:
+        want.append("char_count")
+    if has_doc_id:
+        want.append("doc_id")
+    for c in ["quality_rank"] + list(quality_cols or []):
+        if c in schema_names and c not in want:
+            want.append(c)
+    if domain_col and domain_col not in want:
+        want.append(domain_col)
+    need_text = (not has_char_count) and ("text" in schema_names)
+    if need_text and "text" not in want:
+        want.append("text")
+    if do_tok and "text" in schema_names and "text" not in want:
+        want.append("text")
+
+    if not has_char_count and not need_text:
+        print(f"    [warn] no 'char_count' and no 'text' column; length unavailable")
+    if need_text:
+        print(f"    [info] no 'char_count' column (pre-0e7bd0c search output); "
+              f"will compute char length from text in workers")
+
+    # ── stream batches and process in parallel ──
+    from multiprocessing import Pool
+    from tqdm import tqdm
+
+    tasks = []
+    for path in sources:
+        pf = pq.ParquetFile(path)
+        for batch in pf.iter_batches(batch_size=5000, columns=want):
+            tasks.append((len(tasks), batch, do_tok, domain_col, quality_cols))
+
+    n_docs = sum(t[1].num_rows for t in tasks)
+    print(f"    [info] {len(tasks)} batches from {len(sources)} files "
+          f"({n_docs:,} rows, batch_size=5000)")
+
+    L, TOK, DOM = [], [], Counter()
+    dom_labels_all, doc_ids_all, extra_arrays = [], [], {}
+
+    with Pool(num_workers, initializer=init_tok_worker,
+              initargs=(tokenizer_path, tok_threads)) as pool:
+        for result in tqdm(
+            pool.imap_unordered(_scan_sampled_batch, tasks, chunksize=1),
+            total=len(tasks), desc="  quadmix", leave=False,
+        ):
+            L.append(result["len"])
+            if result.get("tok_lens") is not None:
+                TOK.append(result["tok_lens"])
+            if result["dom"]:
+                DOM.update(result["dom"])
+            if result.get("dom_labels") is not None:
+                dom_labels_all.extend(result["dom_labels"])
+            if result.get("doc_ids") is not None:
+                doc_ids_all.append(result["doc_ids"])
+            for key, val in result.items():
+                if key in ("len", "tok_lens", "dom_labels", "dom", "doc_ids"):
+                    continue
+                if isinstance(val, np.ndarray):
+                    extra_arrays.setdefault(key, []).append(val)
+
+    char_count = np.concatenate(L) if L else np.array([], dtype=np.int64)
+    tok_lens = np.concatenate(TOK) if TOK else None
+    if tok_lens is not None:
+        print(f"    [info] tokenized {len(tok_lens):,} sampled docs for tok_len")
+
+    if domain_names:
+        DOM = _normalize_domain(DOM, domain_names)
+        _dmap = {i: n for i, n in enumerate(domain_names)}
+        dom_labels_all = [
+            _dmap.get(int(d), str(d))
+            if isinstance(d, (int, np.integer)) and not isinstance(d, bool)
+            else d
+            for d in dom_labels_all
+        ]
+    dom_labels = np.array(dom_labels_all) if dom_labels_all else None
+    doc_ids = np.concatenate(doc_ids_all) if doc_ids_all else None
+
+    pa = {
+        "len": char_count,
+        "ent": np.array([], dtype=np.float32),
+        "rep": np.array([], dtype=np.float32),
+        "div": np.array([], dtype=np.float32),
+        "domain": DOM,
+        "has_domain": domain_col is not None,
+        "dom_labels": dom_labels,
+        "text_hashes": [],
+        "doc_ids": doc_ids,
+        "tok_len": tok_lens,
+        "boundaries": None,
+        "char_count": char_count,
+    }
+    for key, arrs in extra_arrays.items():
+        if arrs:
+            pa[key] = np.concatenate(arrs)
+    return pa
+
+
+# ── packing simulation (best-fit, mirrors nanochat dataloader) ────
+
+
+def _packing_boundary_dist(tok_lens, seq_len=2048, buffer_size=2000, max_docs=20000):
+    """Simulate best-fit packing into 2k-token rows; return boundaries/row array.
+
+    boundaries = docs_in_row - 1 (0 = single doc fills/exceeds the row).
+    Mirrors simulate_dataloader.py:117-150 (best-fit decreasing, overflow
+    truncates the shortest). Samples up to max_docs (strided for representativity;
+    steady-state boundary density is order-invariant under best-fit).
+    """
+    if tok_lens is None or len(tok_lens) == 0:
+        return np.array([], dtype=np.int32)
+    a = np.asarray(tok_lens)
+    if len(a) > max_docs:
+        step = max(1, len(a) // max_docs)
+        a = a[::step][:max_docs]
+    row_capacity = seq_len + 1
+    buf = []
+    boundaries = []
+    i = 0
+    N = len(a)
+    while i < N or buf:
+        pos = 0
+        docs_in_row = 0
+        while pos < row_capacity and (i < N or buf):
+            while len(buf) < buffer_size and i < N:
+                buf.append(int(a[i])); i += 1
+            if not buf:
+                break
+            remaining = row_capacity - pos
+            best_idx, best_len = -1, 0
+            for k in range(len(buf)):
+                dl = buf[k]
+                if dl <= remaining and dl > best_len:
+                    best_idx = k
+                    best_len = dl
+            if best_idx >= 0:
+                buf.pop(best_idx)
+                pos += best_len
+            else:
+                sk = min(range(len(buf)), key=lambda x: buf[x])
+                buf.pop(sk)
+                pos += remaining
+            docs_in_row += 1
+        boundaries.append(docs_in_row - 1)
+    return np.array(boundaries, dtype=np.int32)
+
+
+# ── figures ──────────────────────────────────────────────────────
+
+
+def _fig_hist(per_arm, key, xlabel, fname, out_dir, logx=False, vline=None):
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    pooled = np.concatenate(
+        [a[key] for a in per_arm.values() if a.get(key) is not None and len(a[key])]
+    ) if per_arm else np.array([])
+    if pooled.size == 0:
+        plt.close(fig)
+        print(f"  [skip] no data for {fname}")
+        return
+    lo, hi = np.percentile(pooled, [1, 99])
+    if logx:
+        lo = max(1.0, lo)
+        bins = np.logspace(np.log10(lo), np.log10(hi), 50)
+    else:
+        bins = np.linspace(lo, hi, 50)
+    for i, (label, arm) in enumerate(per_arm.items()):
+        v = arm.get(key)
+        if v is None or len(v) == 0:
+            continue
+        v = v[(v >= lo) & (v <= hi)]
+        if v.size == 0:
+            continue
+        ax.hist(
+            v, bins=bins, density=True, histtype="step", lw=1.6,
+            label=f"{label} (n={len(arm[key]):,})", color=_COLORS[i % len(_COLORS)],
+        )
+    if vline is not None:
+        ax.axvline(vline, color="red", ls="--", lw=1.2, label=f"2k window ({vline})")
+    if logx:
+        ax.set_xscale("log")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("density")
+    ax.set_title(xlabel)
+    ax.legend(fontsize=9)
+    save_fig(fig, out_dir, fname)
+
+
+def _fig_int_hist(per_arm, key, xlabel, fname, out_dir, xmax=None):
+    """Bar histogram for small-integer distributions (e.g. boundaries/row)."""
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    pooled = np.concatenate(
+        [a[key] for a in per_arm.values() if a.get(key) is not None and len(a[key])]
+    ) if per_arm else np.array([])
+    if pooled.size == 0:
+        plt.close(fig)
+        print(f"  [skip] no data for {fname}")
+        return
+    hi = int(pooled.max()) if xmax is None else xmax
+    bins = np.arange(0, hi + 2) - 0.5
+    for i, (label, arm) in enumerate(per_arm.items()):
+        v = arm.get(key)
+        if v is None or len(v) == 0:
+            continue
+        vc = np.bincount(np.clip(v.astype(np.int64), 0, hi), minlength=hi + 1).astype(float)
+        vc = vc / max(1, vc.sum())
+        ax.bar(
+            np.arange(hi + 1) + (i - (len(per_arm) - 1) / 2) * 0.8 / len(per_arm),
+            vc, 0.8 / len(per_arm), label=label, color=_COLORS[i % len(_COLORS)],
+        )
+    ax.set_xticks(range(hi + 1))
+    if xmax is not None:
+        ax.set_xticklabels([str(i) if i < hi else f"{hi}+" for i in range(hi + 1)])
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("fraction of rows")
+    ax.set_title(xlabel)
+    ax.legend(fontsize=9)
+    save_fig(fig, out_dir, fname)
+
+
+def _normalize_domain(dom, domain_names):
+    """Map integer domain codes (from quadmix sampled parquet) to names.
+
+    The quadmix pipeline's metadata_manager stores domain as int codes via
+    pd.CategoricalDtype(categories=domain_names), so code i = domain_names[i].
+    Manual/random arms already carry string names from source parquets.
+    """
+    if not domain_names or not dom:
+        return dom
+    out = Counter()
+    for k, v in dom.items():
+        if isinstance(k, bool):
+            out[k] += v
+        elif isinstance(k, (int, np.integer)):
+            idx = int(k)
+            if 0 <= idx < len(domain_names):
+                out[domain_names[idx]] += v
+            else:
+                out[f"D{idx}"] += v
+        else:
+            out[k] += v
+    return out
+
+
+def _fig_domain(per_arm, out_dir):
+    arms_with = {l: a for l, a in per_arm.items() if a["has_domain"] and a["domain"]}
+    if not arms_with:
+        print("  [skip] fig_arm_domain: no 'domain' column — re-run prepare_data to add it")
+        return
+    union = Counter()
+    for a in arms_with.values():
+        union.update(a["domain"])
+    domains = [d for d, _ in union.most_common()]
+    k = len(arms_with)
+    width = 0.8 / k
+    x = np.arange(len(domains))
+    fig, ax = plt.subplots(figsize=(max(6.0, 0.55 * len(domains) * k), 4.5))
+    for i, (label, arm) in enumerate(arms_with.items()):
+        total = sum(arm["domain"].values()) or 1
+        fr = [arm["domain"].get(d, 0) / total for d in domains]
+        ax.bar(
+            x + (i - (k - 1) / 2) * width, fr, width, label=label,
+            color=_COLORS[i % len(_COLORS)],
+        )
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(d) for d in domains], rotation=30, ha="right")
+    ax.set_ylabel("fraction of docs")
+    ax.set_title("Domain distribution by arm")
+    ax.legend(fontsize=9)
+    save_fig(fig, out_dir, "fig_arm_domain.png")
+
+
+# ── length by domain ──────────────────────────────────────────────
+
+
+def _fig_length_by_domain(per_arm, domain_names, out_dir,
+                          field="len", y_label="log10(char length)",
+                          filename="fig_length_by_domain.png", ref_line=None,
+                          log_scale=True):
+    arms_with = {l: a for l, a in per_arm.items()
+                 if a.get("dom_labels") is not None and len(a["dom_labels"])
+                 and a.get(field) is not None and len(a[field])}
+    if not arms_with:
+        print(f"  [skip] {filename}: no per-doc domain labels or {field} data")
+        return
+    all_doms = set()
+    for a in arms_with.values():
+        all_doms.update(a["dom_labels"])
+    domains = sorted(all_doms, key=str)
+    n_arms = len(arms_with)
+    fig, axes = plt.subplots(1, n_arms, figsize=(5 * n_arms, 5), squeeze=False)
+    for i, (label, arm) in enumerate(arms_with.items()):
+        ax = axes[0][i]
+        data = []
+        labels = []
+        for d in domains:
+            mask = arm["dom_labels"] == d
+            vals = arm[field][mask]
+            if len(vals):
+                if log_scale:
+                    data.append(np.log10(np.maximum(vals, 1)))
+                else:
+                    data.append(vals)
+                labels.append(str(d))
+        if data:
+            ax.boxplot(data, showfliers=False)
+            ax.set_xticklabels(labels)
+        if ref_line is not None:
+            ax.axhline(np.log10(ref_line) if log_scale else ref_line,
+                       color="0.5", ls="--", lw=0.8, zorder=0)
+        ax.set_title(f"{label}")
+        ax.set_ylabel(y_label)
+        ax.tick_params(axis='x', rotation=30)
+    fig.suptitle(f"{field} by domain" if field != "len" else "Document length by domain",
+                fontsize=13)
+    save_fig(fig, out_dir, filename)
+
+
+# ── quality-length correlation ───────────────────────────────────
+
+
+def _quality_length_correlation(per_arm, quality_cols, out_dir):
+    length_key = "char_count"
+    if not any(length_key in per_arm[a] for a in per_arm):
+        length_key = "len"
+    signal_keys = list(quality_cols or [])
+    if "quality_rank" not in signal_keys:
+        for a in per_arm:
+            if "quality_rank" in per_arm[a]:
+                signal_keys.append("quality_rank")
+                break
+    if not signal_keys:
+        print("  [skip] quality_length_correlation: no quality signal columns")
+        return
+    arms = [a for a in per_arm if length_key in per_arm[a] and len(per_arm[a][length_key])]
+    if not arms:
+        print("  [skip] quality_length_correlation: no length data")
+        return
+
+    lines = ["=== Quality–Length Spearman Correlation ===", ""]
+    header = f"  {'arm':>16s}"
+    for sk in signal_keys:
+        header += f"  {sk:>18s}"
+    lines.append(header)
+    lines.append("  " + "-" * (16 + 20 * len(signal_keys)))
+
+    matrix = []
+    for arm_label in arms:
+        a = per_arm[arm_label]
+        length = a[length_key]
+        row = []
+        row_str = f"  {arm_label:>16s}"
+        for sk in signal_keys:
+            if sk in a and len(a[sk]) == len(length):
+                rho = spearman(a[sk], length)
+                row.append(rho)
+                row_str += f"  {rho:>18.4f}"
+            else:
+                row.append(None)
+                row_str += f"  {'N/A':>18s}"
+        matrix.append(row)
+        lines.append(row_str)
+    lines.append("")
+
+    path = os.path.join(out_dir, "quality_length_corr.txt")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"  [Text] Saved: {path}")
+
+    has_data = any(any(v is not None for v in row) for row in matrix)
+    if has_data:
+        n_arms = len(arms)
+        n_sigs = len(signal_keys)
+        fig, ax = plt.subplots(figsize=(max(6, 2 * n_sigs), max(3, 0.6 * n_arms)))
+        data = np.full((n_arms, n_sigs), np.nan)
+        for i, row in enumerate(matrix):
+            for j, v in enumerate(row):
+                if v is not None:
+                    data[i, j] = v
+        im = ax.imshow(data, aspect='auto', cmap='RdBu_r', vmin=-1, vmax=1)
+        ax.set_xticks(range(n_sigs))
+        ax.set_xticklabels(signal_keys, rotation=30, ha='right')
+        ax.set_yticks(range(n_arms))
+        ax.set_yticklabels(arms)
+        ax.set_title("Spearman(signal, length)")
+        fig.colorbar(im, ax=ax, label="Spearman ρ")
+        for i in range(n_arms):
+            for j in range(n_sigs):
+                if not np.isnan(data[i, j]):
+                    ax.text(j, i, f"{data[i, j]:.2f}", ha='center', va='center', fontsize=8)
+        save_fig(fig, out_dir, "fig_quality_length_corr.png")
+
+
+# ── within-stratum quality-length correlation ────────────────────
+
+
+def _within_stratum_quality_length_correlation(per_arm, quality_cols, out_dir, n_strata=4):
+    """Compute within-stratum quality-length Spearman ρ per arm.
+
+    Splits each arm's documents into K length strata (by char_count quantiles)
+    and computes ρ(quality, length) within each stratum.  If global ρ drops to
+    near-zero within strata, the bias is purely between-stratum → length-residual
+    normalization will be effective.  Also computes per-domain results when
+    domain labels are available.
+    """
+    length_key = "char_count"
+    if not any(length_key in per_arm[a] for a in per_arm):
+        length_key = "len"
+    signal_keys = list(quality_cols or [])
+    for a in per_arm:
+        if "quality_rank" in per_arm[a] and "quality_rank" not in signal_keys:
+            signal_keys.append("quality_rank")
+            break
+    if not signal_keys:
+        print("  [skip] within_stratum_rho: no quality signal columns")
+        return
+    arms = [a for a in per_arm if length_key in per_arm[a] and len(per_arm[a][length_key])]
+    if not arms:
+        print("  [skip] within_stratum_rho: no length data")
+        return
+
+    lines = ["=== Within-Stratum Quality-Length ρ ===", ""]
+    K = n_strata
+    quantiles = np.linspace(0, 1, K + 1)
+    fig_data = {}
+
+    for arm_label in arms:
+        a = per_arm[arm_label]
+        length = a[length_key]
+        n_docs = len(length)
+        if n_docs < K * 10:
+            continue
+
+        lines.append(f"[{arm_label}]  docs={n_docs:,}")
+
+        boundaries = np.quantile(length.astype(np.float64), quantiles)
+        strata_masks = []
+        lines.append(f"  Strata ({K} quantiles by {length_key}):")
+        for k in range(K):
+            lo, hi = boundaries[k], boundaries[k + 1]
+            if k == 0:
+                mask = length <= hi
+            elif k == K - 1:
+                mask = length > lo
+            else:
+                mask = (length > lo) & (length <= hi)
+            strata_masks.append(mask)
+            n = int(mask.sum())
+            lines.append(f"    Q{k+1}: [{int(lo)}, {int(hi)}] — {n:,} docs ({n / n_docs * 100:.1f}%)")
+        lines.append("")
+
+        avail = [sk for sk in signal_keys if sk in a and len(a[sk]) == n_docs]
+        if not avail:
+            lines.append("  (no quality signals available for this arm)\n")
+            continue
+
+        lines.append("  Global ρ:")
+        global_rhos = {}
+        for sk in avail:
+            g = spearman(a[sk], length)
+            global_rhos[sk] = g
+            lines.append(f"    {sk:20s}: {g:+.4f}")
+        lines.append("")
+
+        within_rhos = {sk: [] for sk in global_rhos}
+        lines.append("  Within-stratum ρ:")
+        for k in range(K):
+            mask = strata_masks[k]
+            row = f"    Q{k+1} ({int(mask.sum()):>8,}):"
+            for sk in global_rhos:
+                w = spearman(a[sk][mask], length[mask])
+                within_rhos[sk].append(w)
+                row += f"  {sk[:8]}={w:+.3f}"
+            lines.append(row)
+        lines.append("")
+
+        lines.append("  Reduction:")
+        arm_fig = {}
+        for sk in global_rhos:
+            g = global_rhos[sk]
+            w_avg = float(np.mean(within_rhos[sk])) if within_rhos[sk] else 0.0
+            r = (1 - abs(w_avg) / abs(g)) * 100 if abs(g) > 1e-8 else 0.0
+            verdict = "EFFECTIVE" if r > 60 else ("PARTIAL" if r > 30 else "INEFFECTIVE")
+            lines.append(f"    {sk:20s}: global={g:+.4f} within_avg={w_avg:+.4f} reduction={r:.1f}% → {verdict}")
+            arm_fig[sk] = {"global": g, "within_avg": w_avg,
+                           "within_per_stratum": within_rhos[sk], "reduction": r}
+        fig_data[arm_label] = arm_fig
+        lines.append("")
+
+        dom_labels = a.get("dom_labels")
+        if dom_labels is not None and len(dom_labels) == n_docs:
+            all_doms = sorted(set(str(d) for d in dom_labels))
+            lines.append("  Per-domain reduction:")
+            for d in all_doms:
+                dmask = np.array([str(dl) == d for dl in dom_labels])
+                d_length = length[dmask]
+                d_n = int(dmask.sum())
+                if d_n < K * 10:
+                    lines.append(f"    {d:>12s}: n={d_n:,} (too few)")
+                    continue
+                d_boundaries = np.quantile(d_length.astype(np.float64), quantiles)
+                d_strata = []
+                for k in range(K):
+                    lo, hi = d_boundaries[k], d_boundaries[k + 1]
+                    if k == 0:
+                        m = d_length <= hi
+                    elif k == K - 1:
+                        m = d_length > lo
+                    else:
+                        m = (d_length > lo) & (d_length <= hi)
+                    d_strata.append(m)
+                d_row = f"    {d:>12s} (n={d_n:,}):"
+                for sk in global_rhos:
+                    d_q = a[sk][dmask]
+                    d_g = spearman(d_q, d_length)
+                    d_w = []
+                    for k in range(K):
+                        m = d_strata[k]
+                        if m.sum() > 5:
+                            d_w.append(spearman(d_q[m], d_length[m]))
+                    d_w_avg = float(np.mean(d_w)) if d_w else 0.0
+                    d_r = (1 - abs(d_w_avg) / abs(d_g)) * 100 if abs(d_g) > 1e-8 else 0.0
+                    d_row += f"  {sk[:8]}: g={d_g:+.3f} w={d_w_avg:+.3f} r={d_r:.0f}%"
+                lines.append(d_row)
+            lines.append("")
+
+    path = os.path.join(out_dir, "within_stratum_rho.txt")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"  [Text] Saved: {path}")
+
+    if fig_data:
+        _fig_within_stratum_rho(fig_data, out_dir)
+
+
+def _fig_within_stratum_rho(fig_data, out_dir):
+    """Grouped bar: global ρ vs within-stratum avg ρ, per arm."""
+    arm_list = list(fig_data.keys())
+    n_arms = len(arm_list)
+    all_signals = set()
+    for arm in arm_list:
+        all_signals.update(fig_data[arm].keys())
+    signals = sorted(all_signals)
+    n_sigs = len(signals)
+    if n_sigs == 0:
+        return
+
+    fig, axes = plt.subplots(1, n_arms, figsize=(5 * n_arms, 5), sharey=True,
+                             squeeze=False)
+    axes = axes.ravel()
+    x = np.arange(n_sigs)
+    width = 0.35
+    for ax, arm in zip(axes, arm_list):
+        g_vals = [fig_data[arm].get(s, {}).get("global", 0) for s in signals]
+        w_vals = [fig_data[arm].get(s, {}).get("within_avg", 0) for s in signals]
+        ax.bar(x - width / 2, g_vals, width, label="Global ρ",
+               color="#4472C4", edgecolor="white", linewidth=0.5)
+        ax.bar(x + width / 2, w_vals, width, label="Within-stratum ρ",
+               color="#ED7D31", edgecolor="white", linewidth=0.5)
+        ax.axhline(y=0, color="gray", linewidth=0.8)
+        ax.set_xticks(x)
+        ax.set_xticklabels([s[:12] for s in signals], rotation=30, ha="right", fontsize=8)
+        ax.set_title(arm, fontsize=10)
+        ax.legend(fontsize=8)
+        for i, s in enumerate(signals):
+            r = fig_data[arm].get(s, {}).get("reduction", 0)
+            color = "green" if r > 0 else "red"
+            ax.text(i, max(g_vals[i], w_vals[i]) + 0.02, f"{r:.0f}%",
+                    ha="center", fontsize=7, color=color, fontweight="bold")
+    for j in range(len(arm_list), len(axes)):
+        axes[j].set_visible(False)
+
+    fig.suptitle("Global vs Within-Stratum ρ (quality vs length)",
+                 fontsize=12, fontweight="bold", y=1.02)
+    fig.tight_layout()
+    save_fig(fig, out_dir, "fig_within_stratum_rho.png")
+
+
+# ── quality signal histograms ────────────────────────────────────
+
+
+def _fig_quality_hist(per_arm, quality_cols, out_dir):
+    signal_keys = list(quality_cols or [])
+    for a in per_arm:
+        if "quality_rank" in per_arm[a] and "quality_rank" not in signal_keys:
+            signal_keys.append("quality_rank")
+            break
+    for sk in signal_keys:
+        arms_with = {l: a for l, a in per_arm.items() if sk in a and len(a[sk])}
+        if not arms_with:
+            continue
+        pooled = np.concatenate([a[sk] for a in arms_with.values()])
+        if pooled.size == 0:
+            continue
+        lo, hi = np.percentile(pooled, [1, 99])
+        bins = np.linspace(lo, hi, 50)
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+        for i, (label, arm) in enumerate(arms_with.items()):
+            v = arm[sk]
+            v = v[(v >= lo) & (v <= hi)]
+            if v.size == 0:
+                continue
+            ax.hist(v, bins=bins, density=True, histtype="step", lw=1.6,
+                    label=f"{label} (n={len(arm[sk]):,})",
+                    color=_COLORS[i % len(_COLORS)])
+        ax.set_xlabel(sk)
+        ax.set_ylabel("density")
+        ax.set_title(sk)
+        ax.legend(fontsize=9)
+        save_fig(fig, out_dir, f"fig_arm_{sk}.png")
+
+
+# ── duplicate detection (report only, no dedup) ───────────────────
+
+
+def _dup_report_lines(label, method, identifiers, lengths, dom_labels):
+    """Generate report lines for one duplicate-detection method."""
+    n_total = len(identifiers)
+    counts = Counter(identifiers)
+    n_unique = len(counts)
+    n_dup_docs = n_total - n_unique
+    dup_mult = Counter(counts.values())
+    lines = [f"[{label}]  ({method}) total={n_total:,}  unique={n_unique:,}  "
+             f"dup_docs={n_dup_docs:,} ({n_dup_docs / max(1, n_total) * 100:.1f}%)"]
+    for mult, cnt in sorted(dup_mult.items()):
+        if mult > 1:
+            lines.append(f"  {mult}x: {cnt:,} docs "
+                         f"({cnt * mult:,} rows, {cnt * (mult - 1):,} extra)")
+    if len(lengths) == n_total:
+        id_to_len = {}
+        for i, idf in enumerate(identifiers):
+            id_to_len.setdefault(idf, []).append(int(lengths[i]))
+        dup_chars = sum(lens[0] * (len(lens) - 1)
+                        for lens in id_to_len.values() if len(lens) > 1)
+        total_chars = int(lengths.sum())
+        if total_chars > 0:
+            lines.append(f"  Duplicate char fraction: {dup_chars / total_chars * 100:.1f}%")
+    if dom_labels is not None and len(dom_labels) == n_total and len(lengths) == n_total:
+        lines.append("  Per-domain duplicate docs:")
+        domains = sorted(set(str(d) for d in dom_labels))
+        for d in domains:
+            d_mask = np.array([str(dl) == d for dl in dom_labels])
+            d_ids = [identifiers[i] for i in range(n_total) if d_mask[i]]
+            d_counts = Counter(d_ids)
+            d_dup = sum(1 for v in d_counts.values() if v > 1)
+            d_total = len(d_ids)
+            if d_total > 0:
+                lines.append(f"    {d:>12s}: {d_dup:,}/{d_total:,} "
+                             f"({d_dup / d_total * 100:.1f}% unique-doc dup)")
+    return lines
+
+
+def _fig_duplicates(per_arm, out_dir):
+    """Bar chart: dup rate and multiplicity distribution across arms."""
+    dup_colors = ["#2ca02c", "#ff7f0e", "#d62728", "#9467bd", "#8c564b"]
+    mult_labels = ["1× (unique)", "2×", "3×", "4×", "5×+"]
+
+    stats = {}
+    for label, a in per_arm.items():
+        methods = {}
+        hashes = a.get("text_hashes")
+        doc_ids = a.get("doc_ids")
+        if hashes:
+            counts = Counter(hashes)
+            n_total = len(hashes)
+            n_unique = len(counts)
+            methods["text hash"] = {
+                "dup_rate": (n_total - n_unique) / max(1, n_total) * 100,
+                "mult_dist": Counter(counts.values()),
+                "n_total": n_total,
+            }
+        if doc_ids is not None:
+            doc_list = doc_ids.tolist() if hasattr(doc_ids, "tolist") else list(doc_ids)
+            counts = Counter(doc_list)
+            n_total = len(doc_list)
+            n_unique = len(counts)
+            methods["doc_id"] = {
+                "dup_rate": (n_total - n_unique) / max(1, n_total) * 100,
+                "mult_dist": Counter(counts.values()),
+                "n_total": n_total,
+            }
+        if methods:
+            stats[label] = methods
+
+    if not stats:
+        print("  [skip] fig_duplicates: no duplicate data available")
+        return
+
+    all_methods = sorted({m for ms in stats.values() for m in ms})
+    arms = list(stats.keys())
+    n_arms = len(arms)
+    n_methods = len(all_methods)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    x = np.arange(n_arms)
+    width = 0.8 / max(1, n_methods)
+    for j, method in enumerate(all_methods):
+        rates = []
+        for arm in arms:
+            ms = stats[arm].get(method)
+            rates.append(ms["dup_rate"] if ms else 0.0)
+        bars = ax1.bar(
+            x + (j - (n_methods - 1) / 2) * width, rates, width,
+            label=method, color=_COLORS[j % len(_COLORS)],
+        )
+        for i, (bar, rate) in enumerate(zip(bars, rates)):
+            if rate > 0:
+                ax1.text(
+                    bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                    f"{rate:.1f}%", ha="center", va="bottom", fontsize=8,
+                )
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(arms, rotation=30, ha="right")
+    ax1.set_ylabel("duplicate rate (%)")
+    ax1.set_title("Duplicate rate by arm")
+    ax1.legend(fontsize=9)
+    ax1.grid(axis="y", alpha=0.3, linestyle="--")
+    ax1.set_axisbelow(True)
+
+    y = np.arange(n_arms)
+    left = np.zeros(n_arms)
+    for cat_idx, mult in enumerate([1, 2, 3, 4, 999]):
+        fracs = []
+        for arm in arms:
+            ms = stats[arm].get("doc_id") or stats[arm].get("text hash")
+            if not ms:
+                fracs.append(0.0)
+                continue
+            md = ms["mult_dist"]
+            n_total = ms["n_total"]
+            if mult == 999:
+                cnt = sum(c for m, c in md.items() if m >= 5)
+            else:
+                cnt = md.get(mult, 0)
+            fracs.append(cnt / max(1, n_total) * 100)
+        ax2.barh(y, fracs, left=left, label=mult_labels[cat_idx],
+                 color=dup_colors[cat_idx])
+        left += np.array(fracs)
+    ax2.set_yticks(y)
+    ax2.set_yticklabels(arms)
+    ax2.set_xlabel("fraction of rows (%)")
+    ax2.set_title("Document multiplicity distribution")
+    ax2.legend(fontsize=8, loc="lower right")
+    ax2.grid(axis="x", alpha=0.3, linestyle="--")
+    ax2.set_axisbelow(True)
+
+    fig.suptitle("Duplicate Detection", fontsize=13)
+    save_fig(fig, out_dir, "fig_duplicates.png")
+
+
+def _detect_duplicates(per_arm, domain_names, out_dir):
+    lines = ["=== Duplicate Detection (report only) ===", ""]
+    for label, a in per_arm.items():
+        hashes = a.get("text_hashes")
+        doc_ids = a.get("doc_ids")
+        lengths = a.get("len", np.array([]))
+        dom_labels = a.get("dom_labels")
+        reported = False
+        if hashes:
+            lines.extend(_dup_report_lines(
+                label, "by text hash", hashes, lengths, dom_labels))
+            reported = True
+        if doc_ids is not None:
+            doc_list = doc_ids.tolist()
+            lines.extend(_dup_report_lines(
+                label, "by doc_id (source corpus index)", doc_list, lengths, dom_labels))
+            reported = True
+        if not reported:
+            lines.append(f"[{label}] no text hashes or doc_ids available")
+        lines.append("")
+    path = os.path.join(out_dir, "duplicate_report.txt")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"  [Text] Saved: {path}")
+    _fig_duplicates(per_arm, out_dir)
+
+
+# ── training loss curves ─────────────────────────────────────────
+
+_STEP_RE = re.compile(
+    r"step\s+(\d+)/(\d+)\s+\(.*?\)\s+\|\s+loss:\s+([\d.]+)"
+)
+
+_LOG_LABEL_MAP = {
+    "quadmix": "QuadMix",
+    "random": "Random",
+    "manual_ratio": "Manual Ratio",
+}
+
+
+def _parse_loss_curve(log_path):
+    """Parse a mid_train log and return (steps, losses) arrays."""
+    if not log_path or not os.path.isfile(log_path):
+        return None
+    steps, losses = [], []
+    with open(log_path, errors="replace") as f:
+        for line in f:
+            m = _STEP_RE.search(line)
+            if m:
+                steps.append(int(m.group(1)))
+                losses.append(float(m.group(3)))
+    if not steps:
+        return None
+    return np.array(steps), np.array(losses)
+
+
+def _find_train_logs(log_dir):
+    """Find mid_train_*.log files and map arm key → path."""
+    if not log_dir or not os.path.isdir(log_dir):
+        return {}
+    out = {}
+    for name in os.listdir(log_dir):
+        if not name.startswith("mid_train_") or not name.endswith(".log"):
+            continue
+        arm = name[len("mid_train_"):-len(".log")]
+        out[arm] = os.path.join(log_dir, name)
+    return out
+
+
+def _fig_loss_curves(log_dir, out_dir):
+    """Plot overlaid training-loss curves for all arms that have logs."""
+    log_map = _find_train_logs(log_dir)
+    if not log_map:
+        print("  [skip] fig_loss_curves: no mid_train_*.log files found")
+        return
+    curves = {}
+    for arm, path in sorted(log_map.items()):
+        c = _parse_loss_curve(path)
+        if c is not None:
+            curves[arm] = c
+    if not curves:
+        print("  [skip] fig_loss_curves: no step/loss data parsed from logs")
+        return
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for i, (arm, (steps, losses)) in enumerate(sorted(curves.items())):
+        label = _LOG_LABEL_MAP.get(arm, arm)
+        ax.plot(steps, losses, label=label, color=_COLORS[i % len(_COLORS)],
+                linewidth=1.5)
+    ax.set_xlabel("Training step")
+    ax.set_ylabel("Training loss")
+    ax.set_title("Training loss curves by arm")
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3)
+    save_fig(fig, out_dir, "fig_loss_curves.png")
+    return curves
+
+
+def _write_loss_summary(curves, out_dir):
+    """Write loss-curve summary: initial loss, convergence step, final loss."""
+    lines = ["=== Training Loss Curve Summary ===", ""]
+    for arm, (steps, losses) in sorted(curves.items()):
+        label = _LOG_LABEL_MAP.get(arm, arm)
+        lines.append(f"[{label}]")
+        lines.append(f"  total_steps  : {len(steps)}")
+        n_init = min(3, len(losses))
+        init_loss = float(losses[:n_init].mean())
+        lines.append(f"  initial_loss : {init_loss:.4f}  (avg of first {n_init} steps)")
+        conv_idx = np.argmax(losses < 1.0) if np.any(losses < 1.0) else -1
+        if conv_idx >= 0:
+            lines.append(f"  conv_step    : {int(steps[conv_idx])}  (first step loss<1.0)")
+        else:
+            lines.append(f"  conv_step    : N/A  (loss never dropped below 1.0)")
+        lines.append(f"  final_loss   : {float(losses[-1]):.4f}")
+        lines.append("")
+    path = os.path.join(out_dir, "loss_curve_summary.txt")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"  [Text] Saved: {path}")
+
+
+# ── text summary ─────────────────────────────────────────────────
+
+
+_STATS_KEY = {
+    "quadmix_train": "quadmix",
+    "quadmix": "_sampled_parquet",
+}
+
+
+def _write_txt(per_arm, stats, seq_len, out_dir):
+    lines = ["=== Arm Data Comparison ===", ""]
+    for label, a in per_arm.items():
+        st = stats.get(_STATS_KEY.get(label, label), {})
+        lines.append(
+            f"[{label}]  train_docs={st.get('train_docs', '?')}  "
+            f"tokens={st.get('tokens', '?')}  shards={st.get('shards', '?')}"
+        )
+        for key, name in [
+            ("len", "length(chars)"),
+            ("ent", "entropy_bits"),
+            ("rep", "repetition"),
+            ("div", "diversity"),
+        ]:
+            v = a[key]
+            if len(v) == 0:
+                continue
+            lines.append(
+                f"  {name:14s} mean={v.mean():.4f}  median={np.median(v):.4f}  "
+                f"p25={np.percentile(v, 25):.4f}  p75={np.percentile(v, 75):.4f}  "
+                f"p90={np.percentile(v, 90):.4f}"
+            )
+        tl = a.get("tok_len")
+        if tl is not None and len(tl):
+            over = float(np.mean(tl > seq_len) * 100)
+            lines.append(
+                f"  {'tok_len':14s} mean={tl.mean():.1f}  median={np.median(tl):.1f}  "
+                f"p25={np.percentile(tl, 25):.1f}  p75={np.percentile(tl, 75):.1f}  "
+                f"%>{seq_len}={over:.1f}"
+            )
+        bd = a.get("boundaries")
+        if bd is not None and len(bd):
+            lines.append(
+                f"  {'bnd/row':14s} mean={bd.mean():.3f}  median={np.median(bd):.0f}  "
+                f"%0bnd(rows=1doc)={float(np.mean(bd == 0) * 100):.1f}  "
+                f"%<=1bnd={float(np.mean(bd <= 1) * 100):.1f}"
+            )
+        if a["has_domain"] and a["domain"]:
+            total = sum(a["domain"].values()) or 1
+            top = a["domain"].most_common(10)
+            lines.append(
+                "  domain top: "
+                + ", ".join(f"{d}={c / total:.1%}" for d, c in top)
+            )
+        dom_labels = a.get("dom_labels")
+        if dom_labels is not None and len(dom_labels) and len(a["len"]):
+            all_doms = sorted(set(str(d) for d in dom_labels))
+            for key, name, fmt in [
+                ("len", "length(chars)", "0f"),
+                ("ent", "entropy(bits)", ".4f"),
+                ("rep", "repetition", ".4f"),
+                ("div", "diversity", ".4f"),
+            ]:
+                vals = a.get(key)
+                if vals is None or not len(vals):
+                    continue
+                lines.append(f"  per-domain {name}:")
+                for d in all_doms:
+                    mask = np.array([str(dl) == d for dl in dom_labels])
+                    dv = vals[mask]
+                    if len(dv):
+                        lines.append(
+                            f"    {d:>12s}  n={len(dv):>8,}  "
+                            f"mean={dv.mean():>8{fmt}}  "
+                            f"median={np.median(dv):>8{fmt}}  "
+                            f"p25={np.percentile(dv, 25):>8{fmt}}  "
+                            f"p75={np.percentile(dv, 75):>8{fmt}}"
+                        )
+        for qk in ("char_count", "token_count"):
+            qv = a.get(qk)
+            if qv is not None and len(qv):
+                lines.append(
+                    f"  {qk:14s} mean={qv.mean():.1f}  median={np.median(qv):.1f}  "
+                    f"p25={np.percentile(qv, 25):.1f}  p75={np.percentile(qv, 75):.1f}"
+                )
+        lines.append("")
+    path = os.path.join(out_dir, "arm_data_comparison.txt")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"  [Text] Saved: {path}")
+
+
+# ── main ─────────────────────────────────────────────────────────
+
+
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Compare per-arm training-data distributions across downstream A/B arms."
+    )
+    p.add_argument(
+        "--result-dir", required=True,
+        help="results_stem/<ts> dir containing data/<arm>_data/ + dataset_stats.json",
+    )
+    p.add_argument(
+        "--sampled-parquet", default=None,
+        help="path to a QuadMix sampled_dataset directory (or legacy .parquet); scanned "
+             "as an extra 'quadmix' arm. It is the only arm carrying the merged "
+             "quality_rank (0=best) that prepare_data drops, so it enables the "
+             "quality_rank<->length Spearman in the quality-length table.",
+    )
+    p.add_argument("--output-dir", default=None, help="Where to write outputs (default: --result-dir)")
+    p.add_argument(
+        "--log-dir", default=None,
+        help="dir containing mid_train_*.log files (default: --result-dir). "
+             "When present, parses step-by-step loss and generates fig_loss_curves.png "
+             "+ loss_curve_summary.txt",
+    )
+    p.add_argument("--num-workers", type=int, default=None, help="multiprocessing workers")
+    p.add_argument(
+        "--tokenizer", default=None,
+        help="nanochat tokenizer.pkl or its dir (enables token-length & boundary slices; "
+             "default: $NANOCHAT_MODEL_DIR/tokenizer)",
+    )
+    p.add_argument("--seq-len", type=int, default=2048, help="training context length (tokens)")
+    p.add_argument("--tokenizer-threads", type=int, default=1, help="threads per tokenizing worker")
+    p.add_argument("--pack-buffer", type=int, default=2000, help="dataloader packing buffer size")
+    p.add_argument("--max-pack-docs", type=int, default=20000, help="docs sampled for boundary sim")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    result_dir = Path(args.result_dir)
+    out_dir = args.output_dir or str(result_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    num_workers = args.num_workers or min(32, os.cpu_count() or 1)
+    tokenizer_path = args.tokenizer
+    if tokenizer_path is None:
+        model_dir = os.environ.get(
+            "NANOCHAT_MODEL_DIR", "/home/ma-user/work/nanochat_model_dir")
+        default_tok = os.path.join(model_dir, "tokenizer")
+        default_pkl = os.path.join(default_tok, "tokenizer.pkl")
+        if os.path.isfile(default_pkl):
+            tokenizer_path = default_tok
+            print(f"  [info] tokenizer auto-detected: {default_pkl}")
+    do_tok = bool(tokenizer_path)
+
+    data_root = result_dir / "data"
+    if not data_root.is_dir():
+        sys.exit(f"error: {data_root} not found (need data/<arm>_data/ subdirs)")
+
+    stats_path = data_root / "dataset_stats.json"
+    if not stats_path.is_file():
+        stats_path = result_dir / "dataset_stats.json"
+    stats = json.load(open(stats_path)) if stats_path.is_file() else {}
+    domain_names = (stats.get("config") or {}).get("domain_names")
+    quality_cols = (stats.get("config") or {}).get("quality_cols", [])
+
+    arms = {}
+    for p in sorted(data_root.glob("*_data")):
+        if not p.is_dir():
+            continue
+        label = p.name.removesuffix("_data")
+        shards = sorted(p.glob("shard_*.parquet"))
+        train = shards[:-1] if shards else []
+        if not train:
+            print(f"  [skip] {label}: no train shards")
+            continue
+        has_domain = "domain" in pq.read_schema(str(train[0])).names
+        arms[label] = {"dir": p, "shards": train, "has_domain": has_domain}
+        print(f"  arm '{label}': {len(train)} train shards, domain_col={has_domain}, tokenize={do_tok}")
+
+    if not arms:
+        sys.exit(f"error: no arms discovered under {data_root}")
+
+    from multiprocessing import Pool
+    from tqdm import tqdm
+
+    per_arm = {}
+    for label, info in arms.items():
+        tasks = [(i, str(s), info["has_domain"], do_tok, quality_cols)
+                 for i, s in enumerate(info["shards"])]
+        L, E, R, D, TOK = [], [], [], [], []
+        dom = Counter()
+        dom_labels_all = []
+        text_hashes_all = []
+        doc_ids_all = []
+        extra_arrays = {}
+        with Pool(num_workers, initializer=init_tok_worker,
+                  initargs=(tokenizer_path, args.tokenizer_threads)) as pool:
+            for result in tqdm(
+                pool.imap_unordered(_scan_shard, tasks, chunksize=1),
+                total=len(tasks), desc=f"  {label}", leave=False,
+            ):
+                L.append(result["lens"]); E.append(result["ents"])
+                R.append(result["reps"]); D.append(result["divs"])
+                if result["tok_lens"] is not None:
+                    TOK.append(result["tok_lens"])
+                if result["dom"]:
+                    dom.update(result["dom"])
+                if result["dom_labels"] is not None:
+                    dom_labels_all.extend(result["dom_labels"])
+                if result["text_hashes"]:
+                    text_hashes_all.extend(result["text_hashes"])
+                if result.get("doc_id") is not None:
+                    doc_ids_all.append(result["doc_id"])
+                for key, val in result.items():
+                    if key in ("lens", "ents", "reps", "divs", "dom", "tok_lens",
+                               "dom_labels", "text_hashes", "doc_id"):
+                        continue
+                    if isinstance(val, np.ndarray):
+                        extra_arrays.setdefault(key, []).append(val)
+        if domain_names:
+            dom = _normalize_domain(dom, domain_names)
+            _dmap = {i: n for i, n in enumerate(domain_names)}
+            dom_labels_all = [
+                _dmap.get(int(d), str(d)) if isinstance(d, (int, np.integer)) and not isinstance(d, bool) else d
+                for d in dom_labels_all
+            ]
+        pa = {
+            "len": np.concatenate(L) if L else np.array([], dtype=np.int64),
+            "ent": np.concatenate(E) if E else np.array([], dtype=np.float32),
+            "rep": np.concatenate(R) if R else np.array([], dtype=np.float32),
+            "div": np.concatenate(D) if D else np.array([], dtype=np.float32),
+            "domain": dom,
+            "has_domain": info["has_domain"],
+            "dom_labels": np.array(dom_labels_all) if dom_labels_all else None,
+            "text_hashes": text_hashes_all,
+            "doc_ids": np.concatenate(doc_ids_all) if doc_ids_all else None,
+        }
+        if TOK:
+            tl_all = np.concatenate(TOK)
+            pa["tok_len"] = tl_all
+            pa["boundaries"] = _packing_boundary_dist(
+                tl_all, args.seq_len, args.pack_buffer, args.max_pack_docs
+            )
+        else:
+            pa["tok_len"] = None
+            pa["boundaries"] = None
+        for key, arrs in extra_arrays.items():
+            if arrs:
+                pa[key] = np.concatenate(arrs)
+        per_arm[label] = pa
+
+    if "quadmix" in per_arm:
+        per_arm["quadmix_train"] = per_arm.pop("quadmix")
+
+    if args.sampled_parquet:
+        sp = args.sampled_parquet
+        if os.path.isfile(sp) or os.path.isdir(sp):
+            print(f"\n  arm 'quadmix': scanning {sp}")
+            per_arm["quadmix"] = _scan_sampled_arm(
+                sp, quality_cols, domain_names, do_tok=do_tok,
+                num_workers=num_workers, tokenizer_path=tokenizer_path,
+                tok_threads=args.tokenizer_threads)
+            print(f"    n_docs={len(per_arm['quadmix']['len']):,}  "
+                  f"has quality_rank={'quality_rank' in per_arm['quadmix']}")
+        else:
+            print(f"  [warn] --sampled-parquet not found: {sp}")
+
+    print("\n=== Generating figures ===")
+    setup_style()
+    _fig_hist(per_arm, "len", "Document length (chars)", "fig_arm_length.png", out_dir, logx=True)
+    _fig_hist(per_arm, "ent", "Char entropy (bits)", "fig_arm_entropy.png", out_dir)
+    _fig_hist(per_arm, "rep", "Single-char repetition fraction", "fig_arm_repetition.png", out_dir)
+    _fig_hist(per_arm, "div", "Lexical diversity (type/token)", "fig_arm_diversity.png", out_dir)
+    # token-level slices (need tokenizer)
+    if do_tok and any(per_arm[a].get("tok_len") is not None for a in per_arm):
+        _fig_hist(per_arm, "tok_len", "Document length (tokens)", "fig_arm_token_length.png",
+                  out_dir, logx=True, vline=args.seq_len)
+        # boundary histogram: cap x-axis at a sensible max
+        bmax = max((int(per_arm[a]["boundaries"].max()) for a in per_arm
+                    if per_arm[a].get("boundaries") is not None and len(per_arm[a]["boundaries"])),
+                   default=5)
+        _fig_int_hist(per_arm, "boundaries", "Doc boundaries per 2k row",
+                      "fig_arm_boundaries.png", out_dir, xmax=min(bmax, 8))
+        _fig_length_by_domain(per_arm, domain_names, out_dir,
+                              field="tok_len", y_label="log10(token length)",
+                              filename="fig_token_length_by_domain.png",
+                              ref_line=args.seq_len)
+    else:
+        print("  [skip] fig_arm_token_length & fig_arm_boundaries & "
+              "fig_token_length_by_domain: pass --tokenizer to enable")
+    _fig_domain(per_arm, out_dir)
+    _fig_length_by_domain(per_arm, domain_names, out_dir)
+    _fig_length_by_domain(per_arm, domain_names, out_dir, field="ent",
+                          y_label="entropy (bits)",
+                          filename="fig_entropy_by_domain.png", log_scale=False)
+    _fig_length_by_domain(per_arm, domain_names, out_dir, field="rep",
+                          y_label="repetition fraction",
+                          filename="fig_repetition_by_domain.png", log_scale=False)
+    _fig_length_by_domain(per_arm, domain_names, out_dir, field="div",
+                          y_label="lexical diversity (type/token)",
+                          filename="fig_diversity_by_domain.png", log_scale=False)
+    _quality_length_correlation(per_arm, quality_cols, out_dir)
+    _within_stratum_quality_length_correlation(per_arm, quality_cols, out_dir)
+    _fig_quality_hist(per_arm, quality_cols, out_dir)
+    _detect_duplicates(per_arm, domain_names, out_dir)
+    _write_txt(per_arm, stats, args.seq_len, out_dir)
+    log_dir = args.log_dir or str(result_dir)
+    curves = _fig_loss_curves(log_dir, out_dir)
+    if curves:
+        _write_loss_summary(curves, out_dir)
+    print("\nDone.")
+
+
+if __name__ == "__main__":
+    main()
