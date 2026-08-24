@@ -200,7 +200,7 @@ class JsonShardMetadataTests(unittest.TestCase):
             for warning in report["warnings"]
         ))
 
-    def test_structurally_invalid_shard_still_reports_missing_columns(self) -> None:
+    def test_rejected_invalid_records_do_not_fail_when_accepted_records_remain(self) -> None:
         invalid = _source_record()
         invalid.pop("stem_quality_eval")
         with tempfile.TemporaryDirectory() as directory:
@@ -220,9 +220,30 @@ class JsonShardMetadataTests(unittest.TestCase):
                 "sample_size": 2,
             })
 
+        self.assertTrue(report["valid"], report["errors"])
+        self.assertTrue(any(
+            "part-00490" in warning and "missing_stem_quality_eval" in warning
+            for warning in report["warnings"]
+        ))
+
+    def test_validation_fails_when_all_sampled_records_are_filtered(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for shard_name in ("part-00490", "part-00491"):
+                (root / shard_name).write_text(
+                    json.dumps(_source_record(relevance=2), ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+            report = PlatformService(ROOT).inspect_dataset({
+                "dataset_uri": directory,
+                "schema_uri": str(ROOT / "configs" / "schema_stem_sample_json.yaml"),
+                "dataset_id": "quadmix",
+                "sample_size": 2,
+            })
+
         self.assertFalse(report["valid"])
         self.assertTrue(any(
-            "part-00490" in error and "缺少" in error
+            "过滤" in error or "filters" in error
             for error in report["errors"]
         ))
 

@@ -88,22 +88,15 @@ def _adapt_sample(
     rows: list[dict[str, Any]], schema: DatasetSchema
 ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, Any]]:
     accepted: list[dict[str, Any]] = []
-    compatible: list[dict[str, Any]] = []
     reasons: Counter[str] = Counter()
     for position, source_record in enumerate(rows):
         record, local_reasons = adapt_record(source_record, schema, position)
-        if record is not None:
-            # A record may be structurally compatible with the schema while
-            # still failing a configured quality gate.  Keep it for schema
-            # and dtype inference so a fully filtered shard is not reported
-            # as having zero columns.
-            compatible.append(record)
         if record is None or local_reasons:
             reasons.update(local_reasons or ["adapter_rejected"])
         else:
             accepted.append(record)
-    columns = sorted({key for row in compatible for key in row})
-    return accepted, _infer_types(compatible, columns), {
+    columns = sorted({key for row in accepted for key in row})
+    return accepted, _infer_types(accepted, columns), {
         "scanned": len(rows),
         "accepted": len(accepted),
         "rejected": len(rows) - len(accepted),
@@ -152,10 +145,14 @@ def inspect_dataset(dataset_path: str, schema_path: str, sample_size: int = 100)
                 f"{source.name}: sample filter accepted {filter_report['accepted']}/"
                 f"{filter_report['scanned']}; reasons={filter_report['reasons']}"
             )
-        try:
-            schema._validate(list(dtypes), dtypes)
-        except ValueError as exc:
-            errors.append(f"{source.name}: {exc}")
+        # Validate only records that remain after adaptation and filtering.
+        # A shard with zero accepted sample rows is represented by its filter
+        # report and must not be mistaken for a zero-column source file.
+        if file_rows:
+            try:
+                schema._validate(list(dtypes), dtypes)
+            except ValueError as exc:
+                errors.append(f"{source.name}: {exc}")
     rows = rows[:limit]
     merged_dtypes: dict[str, str] = {}
     for report in dtype_reports:
@@ -170,7 +167,7 @@ def inspect_dataset(dataset_path: str, schema_path: str, sample_size: int = 100)
     ) else None
 
     if not rows:
-        errors.append("dataset sample is empty")
+        errors.append("no sampled records remain after applying dataset filters")
     else:
         text_values = [row.get(schema.text_col) for row in rows]
         empty_text = sum(not isinstance(value, str) or not value.strip() for value in text_values)

@@ -141,7 +141,7 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
         if not rows:
             return {
                 "valid": False,
-                "errors": ["数据集样本为空，无法校验格式"],
+                "errors": ["应用数据过滤规则后没有剩余样本，无法满足 QuadMix 输入要求"],
                 "warnings": warnings,
                 "details": details,
             }
@@ -151,6 +151,8 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
         if schema.char_count_col is not None:
             required.append(schema.char_count_col)
         for source_name, dtypes in file_dtypes.items():
+            if not dtypes:
+                continue
             missing_cols = [col for col in required if col not in dtypes]
             if missing_cols:
                 errors.append(f"{Path(source_name).name}: 缺少 QuadMix 必需列: {missing_cols}")
@@ -159,6 +161,8 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
         if options.get("check_column_types", True):
             type_reports: dict[str, Any] = {}
             for source_name, dtypes in file_dtypes.items():
+                if not dtypes:
+                    continue
                 local_errors: list[str] = []
                 local_warnings: list[str] = []
                 local_details: dict[str, Any] = {}
