@@ -7,6 +7,12 @@ Auto-Mixture-Tool 只提供两个执行后端：本地八卡开发环境使用 `
 配置文件使用 `examples/configs/demo_pipeline.yaml`：
 
 ```yaml
+dataset_id: stem-json-parquet
+dataset_config:
+  output_schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_quadmix_parquet.yaml
+  rows_per_group: 10000
+  compression: zstd
+
 executor_id: local
 
 algorithm_config:
@@ -41,7 +47,7 @@ pip install -e .
 auto-mixture run examples/configs/demo_pipeline.yaml
 ```
 
-`local` 按顺序同步运行数据配比和训练/评测阶段。任一阶段返回非零退出码，任务立即变为 `FAILED`。可用 `executor_config.timeout_seconds` 限制每个阶段的最长时间；默认不限制。
+`local` 按顺序同步运行过滤转 Parquet、转换后校验、数据配比和训练/评测阶段。任一阶段返回非零退出码，任务立即变为 `FAILED`。可用 `executor_config.timeout_seconds` 限制每个阶段的最长时间；默认不限制。
 
 ## 2. 通过 API 提交到高性能计算平台
 

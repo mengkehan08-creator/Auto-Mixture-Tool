@@ -21,7 +21,7 @@
 
 | 模块 | 配置字段 | 当前 `id` |
 |------|------|------|
-| 数据集校验与标准化 | `dataset_id` | `quadmix` |
+| 数据集校验与标准化 | `dataset_id` | `stem-json-parquet`（STEM JSON 过滤转 Parquet）/ `quadmix`（原生直读） |
 | 配比算法 | `algorithm_id` | `quadmix` |
 | 训练框架 | `trainer_id` | `nanochat` |
 | 评测集/评测方法 | `evaluator_id` | `stem` |
@@ -39,7 +39,7 @@ auto-mixture run examples/configs/demo_pipeline.yaml
 auto-mixture serve --host 127.0.0.1 --port 8080
 ```
 
-当前生产数据可直接使用 JSON、JSONL 或 Parquet 文件目录，不执行 Parquet 转换。目录数据会检查全部分片，不再只抽查第一个文件；QuadMix 的元数据加载和按需文本读取已原生支持 JSON。
+当前 STEM 生产数据使用 `stem-json-parquet` 插件：源 JSON/JSONL 先按算法规则过滤并提取 `domain` 与五个质量分，再写入 Parquet 并二次校验。源文件不覆盖。已经满足算法契约的数据仍可用 `dataset_id=quadmix` 原生直读。
 
 完整使用说明见 [`docs/USAGE.md`](docs/USAGE.md)；本地八卡与 HPC API 运行见 [`docs/RUN_MODES.md`](docs/RUN_MODES.md)；模块切换见 [`docs/SWITCHING_COMPONENTS.md`](docs/SWITCHING_COMPONENTS.md)；当前 STEM JSON 的字段映射、全量审查和过滤规则见 [`docs/DATASET_AUDIT.md`](docs/DATASET_AUDIT.md)。`CanonicalPipeline` 仍保留为 Python 契约与离线参照测试，不是第二套用户入口。
 

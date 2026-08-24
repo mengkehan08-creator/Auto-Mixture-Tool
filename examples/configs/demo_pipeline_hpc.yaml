@@ -3,9 +3,14 @@
 
 dataset_uri: /home/ma-user/work/STEM_sample_100B_only_数理化生_json
 schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml
-dataset_id: quadmix
+dataset_id: stem-json-parquet
 output_uri: /home/ma-user/work/Auto-Mixture-Tool/result/demo_run
 full_scan: false
+
+dataset_config:
+  output_schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_quadmix_parquet.yaml
+  rows_per_group: 10000
+  compression: zstd
 
 algorithm_id: quadmix
 trainer_id: nanochat

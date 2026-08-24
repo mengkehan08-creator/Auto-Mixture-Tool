@@ -111,7 +111,11 @@ if [ ! -d "$STEM_DATA_DIR" ]; then
     exit 1
 fi
 
-SCHEMA_PATH="$QUADMIX_DIR/$SCHEMA_CONFIG"
+if [[ "$SCHEMA_CONFIG" = /* ]]; then
+    SCHEMA_PATH="$SCHEMA_CONFIG"
+else
+    SCHEMA_PATH="$QUADMIX_DIR/$SCHEMA_CONFIG"
+fi
 if [ ! -f "$SCHEMA_PATH" ]; then
     echo "ERROR: Schema config not found: $SCHEMA_PATH"
     exit 1

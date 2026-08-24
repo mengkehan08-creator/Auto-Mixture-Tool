@@ -63,6 +63,7 @@ class PipelineConfig:
     def to_job_request(self) -> dict[str, Any]:
         """Convert this config into the JSON shape accepted by the API/CLI."""
         sections = {
+            "dataset_config": self._data.get("dataset_config", {}),
             "algorithm_config": self._data.get("algorithm_config", {}),
             "trainer_config": self._data.get("trainer_config", {}),
             "evaluator_config": self._data.get(

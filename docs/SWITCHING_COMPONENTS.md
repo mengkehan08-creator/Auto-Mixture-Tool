@@ -6,7 +6,7 @@
 
 | 模块 | 配置字段 | 当前 ID | 实现位置 |
 |---|---|---|---|
-| 数据集契约与校验 | `dataset_id` | `quadmix` | `plugins/format_validators/quadmix.py` |
+| 数据集准备与校验 | `dataset_id` | `stem-json-parquet`、`quadmix` | `plugins/format_validators/` |
 | 配比算法 | `algorithm_id` | `quadmix` | `plugins/algorithms/quadmix.py` |
 | 训练框架 | `trainer_id` | `nanochat` | `plugins/trainers/nanochat.py` |
 | 评测集/评测方法 | `evaluator_id` | `stem` | `plugins/validators/stem.py` |
@@ -19,8 +19,13 @@
 ```yaml
 dataset_uri: /home/ma-user/work/STEM_sample_100B_only_数理化生_json
 schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml
-dataset_id: quadmix
+dataset_id: stem-json-parquet
 output_uri: ./result/run_01
+
+dataset_config:
+  output_schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_quadmix_parquet.yaml
+  rows_per_group: 10000
+  compression: zstd
 
 algorithm_id: quadmix
 trainer_id: nanochat
@@ -58,29 +63,33 @@ executor_config:
 ```yaml
 dataset_uri: /home/ma-user/work/STEM_sample_100B_only_数理化生_json
 schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml
-dataset_id: quadmix
+dataset_id: stem-json-parquet
 ```
 
-当前 `quadmix` 数据集插件执行两件事：
+当前 `stem-json-parquet` 数据集插件执行四件事：
 
-1. 检查全部分片的必需字段、类型、域标签、质量分、空文本、编码和重复文件。
-2. 将原始 JSON、JSONL 或 Parquet 目录直接交给 QuadMix，不执行格式转换。
+1. 按 `schema_stem_sample_json.yaml` 过滤源 JSON 记录。
+2. 取第一个领域并输出为 `domain`，将五个嵌套质量分提取为顶层数值列。
+3. 流式写入分片 Parquet，不修改源数据。
+4. 按 `schema_stem_quadmix_parquet.yaml` 再次校验，失败时报“数据格式不符合算法要求”。
 
 JSON 支持对象数组、单对象，以及 `samples`、`data`、`records`、`examples`、`items` 包裹数组。
+
+如果输入已经符合 QuadMix 字段契约，可切换为 `dataset_id: quadmix`，跳过转换并直接读取。
 
 切换前建议先调用：
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/v1/datasets/inspect \
   -H "Content-Type: application/json" \
-  -d '{"dataset_uri":"/home/ma-user/work/STEM_sample_100B_only_数理化生_json","schema_uri":"/home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml","dataset_id":"quadmix"}'
+  -d '{"dataset_uri":"/home/ma-user/work/STEM_sample_100B_only_数理化生_json","schema_uri":"/home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml","dataset_id":"stem-json-parquet"}'
 ```
 
 只有 `valid=true` 才允许提交任务。
 
 ### 新增另一种数据集契约
 
-1. 实现 `FormatValidatorAdapter.validate(request)`；当前约定不在平台内转换数据格式。
+1. 实现 `FormatValidatorAdapter.validate(request)`；需要转换时同时实现 `prepare()` 和 `prepared_schema_uri()`。
 2. 在 `PlatformService.__init__` 中注册一次：
 
 ```python
@@ -88,9 +97,9 @@ self.datasets.register(MyDatasetAdapter())
 ```
 
 3. YAML 改为 `dataset_id: my-dataset`。
-4. 增加合法数据、缺列、错误标签、多分片和格式转换测试。
+4. 增加合法数据、过滤为空、缺列、错误标签、多分片和转换后校验测试。
 
-后续算法和训练器直接接收配置中的原始数据 URI。若新增数据格式，应扩展原生读取适配器，而不是增加全量转换阶段。
+后续算法和训练器接收数据插件返回的准备后 URI 与 Schema，不依赖原始字段结构。
 
 ## 4. 切换配比算法
 

@@ -4,7 +4,7 @@ Auto-Mixture-Tool 将当前 QuaDMix、NanoChat 和 STEM 实验链路整理为可
 
 ```text
 API / YAML
-  -> 数据集校验与原生读取
+  -> 数据过滤、Parquet 标准化与转换后校验
   -> 数据配比算法
   -> 训练框架
   -> 评测集/评测方法
@@ -31,7 +31,7 @@ API / YAML
 | 2 编排 | `PipelineManager`、`PlatformService` | 统一注册和装配 |
 | 3 数据检查 | `validate_dataset`、数据插件 | 全分片检查 |
 | 4 配置 | `PipelineConfig` | 统一 `*_id` / `*_config` |
-| 5 统一数据读取 | `dataset_id=quadmix` | 原生 JSON/JSONL/Parquet 分片读取 |
+| 5 统一数据读取 | `dataset_id=stem-json-parquet` / `quadmix` | STEM JSON 转换或标准数据原生读取 |
 | 6 配比算法 | `algorithm_id=quadmix` | 可扩展 Adapter |
 | 7 训练 | `trainer_id=nanochat` | 与评测器解耦 |
 | 7b 评测 | `evaluator_id=stem` | 可切任务和验证数据 |
@@ -57,7 +57,7 @@ class PlatformService:
 
 1. `dataset_id` 选择数据契约。
 2. 基础检查和数据插件共同验证 schema、类型、标签、质量、文本和分片。
-3. JSON、JSONL 或 Parquet 分片目录直接进入 QuaDMix，不生成转换副本。
+3. STEM JSON 经质量门禁过滤、字段扁平化和 Parquet 二次校验后进入 QuaDMix；标准数据可直接读取。
 4. 可选 `record_adapter` 将嵌套源字段映射到统一域/质量字段，并按 Schema 中的过滤规则拒绝不合格记录。
 5. QuadMix 流式读取元数据，并按选中记录的物理行号回读文本。
 6. 抽样校验返回 `filter_preview`；`full_scan=true` 返回全量兼容性报告；完整过滤统计写入 `pipeline_summary.json`。

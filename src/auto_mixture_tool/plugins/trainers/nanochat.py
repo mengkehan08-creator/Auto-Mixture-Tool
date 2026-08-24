@@ -39,6 +39,7 @@ class NanoChatTrainer(TrainerAdapter):
         env = {
             "QUADMIX_SAMPLED_DATA": sampled,
             "PREPROCESSED_DATA_DIR": request["dataset_uri"],
+            "SCHEMA_CONFIG": request["schema_uri"],
             "NUM_NPU": str(npu_devices),
             "TARGET_PARAM_DATA_RATIO": str(target_ratio),
         }

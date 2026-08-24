@@ -8,6 +8,9 @@ from typing import Any
 
 from auto_mixture_tool.plugins.algorithms.quadmix import QuadMixAlgorithm
 from auto_mixture_tool.plugins.format_validators.quadmix import QuadMixFormatValidator
+from auto_mixture_tool.plugins.format_validators.stem_json_parquet import (
+    StemJsonParquetDataset,
+)
 from auto_mixture_tool.plugins.trainers.nanochat import NanoChatTrainer
 from auto_mixture_tool.plugins.validators.stem import StemValidator
 from auto_mixture_tool.data.validator import audit_dataset, validate_dataset
@@ -29,6 +32,7 @@ class PlatformService:
 
         # One registration point for every user-switchable component family.
         self.datasets.register(QuadMixFormatValidator())
+        self.datasets.register(StemJsonParquetDataset())
         self.algorithms.register(QuadMixAlgorithm())
         self.trainers.register(NanoChatTrainer())
         self.evaluators.register(StemValidator())
@@ -89,7 +93,9 @@ class PlatformService:
         request["executor_id"] = str(payload.get("executor_id") or "local")
         request.pop("format_validator_id", None)
         request.pop("validator_id", None)
-        for name in ("algorithm_config", "trainer_config", "executor_config"):
+        for name in (
+            "dataset_config", "algorithm_config", "trainer_config", "executor_config"
+        ):
             value = request.get(name, {})
             if not isinstance(value, dict):
                 raise ValueError(f"{name} must be an object")
@@ -117,6 +123,9 @@ class PlatformService:
         prepared_uri, dataset_stages = dataset.prepare(request, self.workspace)
         build_request = dict(request)
         build_request["dataset_uri"] = prepared_uri
+        build_request["schema_uri"] = dataset.prepared_schema_uri(
+            request, self.workspace
+        )
         build_request["_evaluator_env"] = evaluator.environment(
             request["evaluator_config"]
         )

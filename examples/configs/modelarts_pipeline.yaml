@@ -3,9 +3,14 @@
 
 dataset_uri: /home/ma-user/modelarts/inputs/data-url_0
 schema_uri: /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml
-dataset_id: quadmix
+dataset_id: stem-json-parquet
 output_uri: /home/ma-user/modelarts/outputs/train_url_0/auto_mixture
 full_scan: false
+
+dataset_config:
+  output_schema_uri: /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool/configs/schema_stem_quadmix_parquet.yaml
+  rows_per_group: 10000
+  compression: zstd
 
 algorithm_id: quadmix
 trainer_id: nanochat

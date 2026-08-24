@@ -1,0 +1,21 @@
+# Normalized Parquet contract produced by dataset_id=stem-json-parquet.
+domain_col: domain
+domain_names: [数学, 化学, 生物学, 物理]
+
+quality_cols:
+  - stem_relevance
+  - knowledge_value
+  - notation_fidelity
+  - rigor_coherence
+  - noise_level
+
+quality_names:
+  - stem_relevance
+  - knowledge_value
+  - notation_fidelity
+  - rigor_coherence
+  - noise_level
+
+text_col: text
+char_count_col: char_count
+row_in_shard_col: source_record_idx

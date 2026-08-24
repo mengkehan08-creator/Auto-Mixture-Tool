@@ -10,5 +10,8 @@ via ``PlatformService`` registration — see docs/AUTO_MIXTURE_TOOL.md.
 from __future__ import annotations
 
 from auto_mixture_tool.plugins.format_validators.quadmix import QuadMixFormatValidator
+from auto_mixture_tool.plugins.format_validators.stem_json_parquet import (
+    StemJsonParquetDataset,
+)
 
-__all__ = ["QuadMixFormatValidator"]
+__all__ = ["QuadMixFormatValidator", "StemJsonParquetDataset"]

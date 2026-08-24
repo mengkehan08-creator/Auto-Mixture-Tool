@@ -121,7 +121,8 @@ components:
         - type: object
           properties:
             output_uri: {type: string}
-            dataset_id: {type: string, example: quadmix}
+            dataset_id: {type: string, example: stem-json-parquet}
+            dataset_config: {type: object, additionalProperties: true}
             algorithm_id: {type: string, example: quadmix}
             trainer_id: {type: string, example: nanochat}
             evaluator_id: {type: string, example: stem}

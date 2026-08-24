@@ -83,7 +83,10 @@ class ServiceTests(unittest.TestCase):
 
     def test_catalog_exposes_switchable_components(self) -> None:
         catalog = self.service.catalog()
-        self.assertEqual({item["id"] for item in catalog["datasets"]}, {"quadmix"})
+        self.assertEqual(
+            {item["id"] for item in catalog["datasets"]},
+            {"quadmix", "stem-json-parquet"},
+        )
         self.assertEqual({item["id"] for item in catalog["algorithms"]}, {"quadmix"})
         self.assertEqual({item["id"] for item in catalog["trainers"]}, {"nanochat"})
         self.assertEqual({item["id"] for item in catalog["evaluators"]}, {"stem"})
@@ -110,6 +113,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(
             trainer_stage["env"]["STEM_DATA_DIR"], job["request"]["dataset_uri"]
         )
+        self.assertEqual(trainer_stage["env"]["SCHEMA_CONFIG"], str(SCHEMA))
         self.assertEqual(trainer_stage["executable"], "python")
         self.assertTrue(trainer_stage["args"][0].endswith("run_nanochat_validation.py"))
 

@@ -36,6 +36,7 @@ class JobRequest(BaseModel):
     trainer_id: str = "nanochat"
     evaluator_id: str = "stem"
     executor_id: str = "local"
+    dataset_config: dict[str, Any] = Field(default_factory=dict)
     algorithm_config: dict[str, Any] = Field(default_factory=dict)
     trainer_config: dict[str, Any] = Field(default_factory=dict)
     evaluator_config: dict[str, Any] = Field(default_factory=dict)

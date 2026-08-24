@@ -70,6 +70,14 @@ class FormatValidatorAdapter(ABC):
         """
         return str(request["dataset_uri"]), []
 
+    def prepared_schema_uri(self, request: dict[str, Any], workspace: Path) -> str:
+        """Return the schema consumed by downstream algorithm stages.
+
+        Conversion plugins override this when their normalized output uses a
+        different schema from the source dataset.
+        """
+        return str(request["schema_uri"])
+
 
 class ExecutorAdapter(ABC):
     id: str

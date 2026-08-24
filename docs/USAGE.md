@@ -8,7 +8,7 @@ Auto-Mixture-Tool 把数据校验、QuadMix 配比、NanoChat 训练、STEM 评�
 
 ```text
 YAML / HTTP API
-  -> dataset_id=quadmix：原地校验并直接读取全部 JSON/JSONL/Parquet 分片
+  -> dataset_id=stem-json-parquet：过滤嵌套 STEM JSON，转成扁平 Parquet 并再次校验
   -> algorithm_id=quadmix：生成配比训练数据
   -> trainer_id=nanochat：训练模型
   -> evaluator_id=stem：配置 STEM 任务与验证数据
@@ -40,7 +40,7 @@ auto-mixture run examples/configs/demo_pipeline.yaml
 |---|---|---|
 | `dataset_uri` | 原始文件或数据目录 | 用户提供 |
 | `schema_uri` | 数据列与域定义 | 用户提供 |
-| `dataset_id` | 数据集契约、校验和原生读取插件 | `quadmix` |
+| `dataset_id` | 数据过滤、转换与校验插件 | `stem-json-parquet` |
 | `algorithm_id` | 配比算法 | `quadmix` |
 | `trainer_id` | 训练框架 | `nanochat` |
 | `evaluator_id` | 评测集/评测方法 | `stem` |
@@ -79,7 +79,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/jobs \
 
 任务记录保存在 `<workspace>/result/.jobs/`。本地执行器同步执行阶段；HPC 执行器返回集群提交状态和外部任务 ID。
 
-## 5. 数据集检查和原生读取
+## 5. 数据过滤、Parquet 转换和校验
 
 当前数据插件接受：
 
@@ -96,21 +96,26 @@ dataset_uri: /home/ma-user/work/STEM_sample_100B_only_数理化生_json
 schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml
 ```
 
-平台不会生成转换副本或 `dataset-normalization` 阶段。QuadMix 会原地流式扫描 JSON/JSONL 元数据，并在实验与最终采样时按需读取文本。对于大规模数据，推荐每行一个对象的 JSONL/NDJSON；JSON 数组也支持流式读取。
+当前 STEM 配置使用 `dataset_id: stem-json-parquet`。流水线先按源 Schema 的过滤规则处理 JSON，再提取第一个领域为顶层 `domain`，提取五个质量分并写入分片 Parquet。转换完成后使用 `schema_stem_quadmix_parquet.yaml` 二次校验；没有合格记录或字段、类型、领域不符合要求时，以“数据格式不符合算法要求”终止。源 JSON 保持不变。
+
+转换产物位于 `<output_uri>/prepared_parquet_<job_id>/`，过滤数量、拒绝原因、领域分布、输出列和二次校验结果写入 `<output_uri>/conversion_report_<job_id>.json`。
+
+需要跳过转换、直接读取已经符合算法契约的 JSON/JSONL/Parquet 时，可改用 `dataset_id: quadmix`。
 
 实际 `part-*` 分片没有扩展名，平台会将其识别为逐行 JSON。`schema_stem_sample_json.yaml` 将嵌套质检字段映射为 QuadMix 的域和质量分，并按配置过滤。API 使用 `full_scan: true` 可获得全量过滤统计和算法兼容性报告。
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/v1/datasets/inspect \
   -H "Content-Type: application/json" \
-  -d '{"dataset_uri":"data.json","schema_uri":"schema.yaml","dataset_id":"quadmix"}'
+  -d '{"dataset_uri":"data.json","schema_uri":"schema.yaml","dataset_id":"stem-json-parquet"}'
 ```
 
 ## 6. 当前组件
 
 | 家族 | ID | 作用 |
 |---|---|---|
-| dataset | `quadmix` | 数据校验与 QuadMix 原生输入读取 |
+| dataset | `stem-json-parquet` | STEM JSON 过滤、字段提取、Parquet 转换和二次校验 |
+| dataset | `quadmix` | 已标准化数据的原生校验与直接读取 |
 | algorithm | `quadmix` | QuaDMix 配比算法 |
 | trainer | `nanochat` | NanoChat mid-training |
 | evaluator | `stem` | STEM 任务/验证集配置 |

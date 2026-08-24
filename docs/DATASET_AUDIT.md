@@ -6,7 +6,7 @@
 /home/ma-user/work/STEM_sample_100B_only_数理化生_json/part-*
 ```
 
-分片是无扩展名的逐行 JSON。平台将 `part-*` 原生识别为 JSON，不转换、不覆盖源文件。
+分片是无扩展名的逐行 JSON。平台将 `part-*` 识别为 JSON；`stem-json-parquet` 会生成过滤后的 Parquet 副本，但不覆盖源文件。
 
 ## 1. 字段映射
 
@@ -58,7 +58,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/datasets/inspect \
   -d '{
     "dataset_uri": "/home/ma-user/work/STEM_sample_100B_only_数理化生_json",
     "schema_uri": "/home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml",
-    "dataset_id": "quadmix",
+    "dataset_id": "stem-json-parquet",
     "sample_size": 1000,
     "full_scan": false
   }'
@@ -76,7 +76,7 @@ curl -X POST http://127.0.0.1:8080/api/v1/datasets/inspect \
   -d '{
     "dataset_uri": "/home/ma-user/work/STEM_sample_100B_only_数理化生_json",
     "schema_uri": "/home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml",
-    "dataset_id": "quadmix",
+    "dataset_id": "stem-json-parquet",
     "full_scan": true
   }'
 ```
