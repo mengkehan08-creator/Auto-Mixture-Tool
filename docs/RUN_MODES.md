@@ -15,6 +15,8 @@ algorithm_config:
 
 trainer_config:
   npu_devices: 8
+  nanochat_repo: /home/ma-user/nanochat-npu
+  model_dir: /home/ma-user/nanochat_model_dir
 
 executor_config:
   device_type: npu

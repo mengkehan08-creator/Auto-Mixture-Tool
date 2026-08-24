@@ -23,8 +23,8 @@ algorithm_config:
 trainer_config:
   npu_devices: 8              # → NUM_NPU env，run_experiment.sh 据此设 ASCEND_VISIBLE_DEVICES/RANK_SIZE
   target_param_data_ratio: 0.5
-  nanochat_repo: /opt/nanochat
-  model_dir: /models/nanochat
+  nanochat_repo: /home/ma-user/nanochat-npu
+  model_dir: /home/ma-user/nanochat_model_dir
   base_model_tag: d24
 
 evaluator_config:
