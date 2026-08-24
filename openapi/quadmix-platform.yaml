@@ -129,7 +129,10 @@ components:
             algorithm_config: {type: object, additionalProperties: true}
             trainer_config: {type: object, additionalProperties: true}
             evaluator_config: {type: object, additionalProperties: true}
-            executor_config: {type: object, additionalProperties: true}
+            executor_config:
+              oneOf:
+                - $ref: '#/components/schemas/LocalExecutorConfig'
+                - $ref: '#/components/schemas/HpcExecutorConfig'
     CommandSpec:
       type: object
       required: [name, executable, args, env]
@@ -139,6 +142,32 @@ components:
         args: {type: array, items: {type: string}}
         env: {type: object, additionalProperties: {type: string}}
         cwd: {type: string, nullable: true}
+    LocalExecutorConfig:
+      type: object
+      properties:
+        device_type: {type: string, enum: [cpu, cuda, npu]}
+        device_count: {type: integer, minimum: 1}
+        timeout_seconds: {type: number, exclusiveMinimum: 0}
+    HpcExecutorConfig:
+      type: object
+      required: [endpoint]
+      properties:
+        endpoint: {type: string, format: uri}
+        status_endpoint: {type: string, description: "URL template containing {job_id}"}
+        token_env: {type: string, default: AMT_CLUSTER_TOKEN}
+        timeout_seconds: {type: number, exclusiveMinimum: 0, default: 30}
+        queue: {type: string}
+        image: {type: string}
+        working_dir: {type: string}
+        resources: {type: object, additionalProperties: true}
+        mounts: {type: array, items: {type: object, additionalProperties: true}}
+        labels: {type: object, additionalProperties: {type: string}}
+        environment: {type: object, additionalProperties: {type: string}}
+        headers: {type: object, additionalProperties: {type: string}}
+        header_env: {type: object, additionalProperties: {type: string}}
+        job_id_field: {type: string, default: id}
+        status_field: {type: string, default: status}
+        status_map: {type: object, additionalProperties: {type: string}}
     Job:
       type: object
       properties:

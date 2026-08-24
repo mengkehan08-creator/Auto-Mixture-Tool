@@ -41,7 +41,9 @@ auto-mixture serve --host 127.0.0.1 --port 8080
 
 当前生产数据可直接使用 JSON、JSONL 或 Parquet 文件目录，不执行 Parquet 转换。目录数据会检查全部分片，不再只抽查第一个文件；QuadMix 的元数据加载和按需文本读取已原生支持 JSON。
 
-完整使用说明见 [`docs/USAGE.md`](docs/USAGE.md)；模块切换见 [`docs/SWITCHING_COMPONENTS.md`](docs/SWITCHING_COMPONENTS.md)；当前 STEM JSON 的字段映射、全量审查和过滤规则见 [`docs/DATASET_AUDIT.md`](docs/DATASET_AUDIT.md)。`CanonicalPipeline` 仍保留为 Python 契约与离线参照测试，不是第二套用户入口。
+完整使用说明见 [`docs/USAGE.md`](docs/USAGE.md)；本地八卡与 HPC API 运行见 [`docs/RUN_MODES.md`](docs/RUN_MODES.md)；模块切换见 [`docs/SWITCHING_COMPONENTS.md`](docs/SWITCHING_COMPONENTS.md)；当前 STEM JSON 的字段映射、全量审查和过滤规则见 [`docs/DATASET_AUDIT.md`](docs/DATASET_AUDIT.md)。`CanonicalPipeline` 仍保留为 Python 契约与离线参照测试，不是第二套用户入口。
+
+ModelArts 完整流程任务使用仓库根目录的 `modelarts_training_job.py`；实际 Authorization 和资源参数放在被 Git 忽略的 `.env.modelarts` 中。
 
 ---
 

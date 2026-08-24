@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from quadmix import DatasetSchema
 from quadmix_platform.dataset_inspector import inspect_dataset
 from quadmix_platform.service import PlatformService
+from quadmix_platform.components import HpcClusterExecutor, LocalExecutor
+from quadmix_platform.models import CommandSpec, JobRecord
 from auto_mixture_tool.config.pipeline_config import PipelineConfig
 
 
@@ -162,5 +166,78 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(config["evaluator_id"], "stem")
         self.assertEqual(config["evaluator_config"], {"tasks": ["gsm8k"]})
         self.assertNotIn("validator_id", config)
+
+
+class ExecutorTests(unittest.TestCase):
+    def _job(self, executor: str, executor_config: dict | None = None) -> JobRecord:
+        return JobRecord(
+            id="0123456789ab",
+            status="VALIDATED",
+            request={
+                "dataset_id": "quadmix",
+                "algorithm_id": "quadmix",
+                "trainer_id": "nanochat",
+                "evaluator_id": "stem",
+                "algorithm_config": {"device_type": "npu", "npu_devices": 8},
+                "trainer_config": {"npu_devices": 8},
+                "executor_config": executor_config or {},
+            },
+            stages=[CommandSpec("stage", "python", ["run.py"])],
+            executor=executor,
+        )
+
+    @mock.patch("quadmix_platform.components.subprocess.run")
+    def test_local_executor_injects_eight_npu_environment(self, run: mock.Mock) -> None:
+        run.return_value.returncode = 0
+        job = self._job("local", {"device_type": "npu", "device_count": 8})
+
+        status, external_id, _ = LocalExecutor().submit(job)
+
+        self.assertEqual(status, "SUCCEEDED")
+        self.assertEqual(external_id, "local:0123456789ab")
+        environment = run.call_args.kwargs["env"]
+        self.assertEqual(environment["NUM_NPU"], "8")
+        self.assertEqual(environment["RANK_SIZE"], "8")
+        self.assertEqual(environment["ASCEND_VISIBLE_DEVICES"], "0,1,2,3,4,5,6,7")
+
+    def test_local_executor_rejects_inconsistent_device_counts(self) -> None:
+        job = self._job("local", {"device_type": "npu", "device_count": 4})
+        with self.assertRaisesRegex(ValueError, "must match"):
+            LocalExecutor().submit(job)
+
+    @mock.patch.dict("os.environ", {"TEST_HPC_TOKEN": "secret"})
+    @mock.patch("quadmix_platform.components.urllib.request.urlopen")
+    def test_hpc_executor_submits_resources_and_refreshes_status(self, urlopen: mock.Mock) -> None:
+        submit_response = io.BytesIO(json.dumps({"jobId": "hpc-42", "state": "queued"}).encode())
+        status_response = io.BytesIO(json.dumps({"state": "completed"}).encode())
+        urlopen.side_effect = [submit_response, status_response]
+        config = {
+            "endpoint": "https://hpc.example/api/jobs",
+            "status_endpoint": "https://hpc.example/api/jobs/{job_id}",
+            "token_env": "TEST_HPC_TOKEN",
+            "job_id_field": "jobId",
+            "status_field": "state",
+            "status_map": {"queued": "SUBMITTED", "completed": "SUCCEEDED"},
+            "queue": "npu-dev",
+            "image": "amt:test",
+            "resources": {"nodes": 1, "npu": 8},
+        }
+        job = self._job("hpc-cluster", config)
+        executor = HpcClusterExecutor()
+
+        status, external_id, _ = executor.submit(job)
+        job.status, job.external_id = status, external_id
+        refreshed = executor.refresh(job)
+
+        self.assertEqual((status, external_id), ("SUBMITTED", "hpc-42"))
+        self.assertEqual(refreshed, ("SUCCEEDED", "Refreshed from HPC cluster API."))
+        submit_request = urlopen.call_args_list[0].args[0]
+        payload = json.loads(submit_request.data)
+        self.assertEqual(payload["resources"], {"nodes": 1, "npu": 8})
+        self.assertEqual(payload["queue"], "npu-dev")
+        self.assertEqual(submit_request.get_header("Authorization"), "Bearer secret")
+        status_request = urlopen.call_args_list[1].args[0]
+        self.assertEqual(status_request.full_url, "https://hpc.example/api/jobs/hpc-42")
+        self.assertEqual(status_request.get_method(), "GET")
 if __name__ == "__main__":
     unittest.main()

@@ -102,6 +102,8 @@ def get_job(job_id: str) -> dict[str, Any]:
         return _manager().get_job(job_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 def main() -> None:

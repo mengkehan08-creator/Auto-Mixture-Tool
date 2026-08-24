@@ -34,4 +34,7 @@ evaluator_config:
     - mmlu_stem
     - arc_easy
 
-executor_config: {}          # dev（local）留空；hpc-cluster 时填 endpoint / token_env
+executor_config:
+  device_type: npu          # local 统一设置八卡可见设备环境
+  device_count: 8           # 必须与 algorithm/trainer 的 npu_devices 一致
+  # timeout_seconds: 86400  # 可选：每个阶段的最长运行时间

@@ -1,0 +1,39 @@
+# Runs inside one ModelArts training container. ModelArts is the outer
+# scheduler, so the in-container executor must be local (never hpc-cluster).
+
+dataset_uri: /home/ma-user/modelarts/inputs/data-url_0
+schema_uri: /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml
+dataset_id: quadmix
+output_uri: /home/ma-user/modelarts/outputs/train_url_0/auto_mixture
+full_scan: false
+
+algorithm_id: quadmix
+trainer_id: nanochat
+evaluator_id: stem
+executor_id: local
+
+algorithm_config:
+  num_experiments: 8
+  num_search: 1000
+  device_type: npu
+  npu_devices: 8
+  proxy_validation_set: stem_v2
+
+trainer_config:
+  npu_devices: 8
+  target_param_data_ratio: 0.5
+  nanochat_repo: /home/ma-user/modelarts/inputs/nanochat-repo_1
+  model_dir: /home/ma-user/modelarts/inputs/nanochat-model_2
+  result_dir: /home/ma-user/modelarts/outputs/train_url_0/nanochat_results
+  base_model_tag: d24
+
+evaluator_config:
+  benchmarks: stem
+  tasks:
+    - gsm8k
+    - mmlu_stem
+    - arc_easy
+
+executor_config:
+  device_type: npu
+  device_count: 8

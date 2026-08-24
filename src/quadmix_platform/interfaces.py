@@ -79,6 +79,14 @@ class ExecutorAdapter(ABC):
     def submit(self, job: JobRecord) -> tuple[str, str, str]:
         """Return (status, external_id, message)."""
 
+    def refresh(self, job: JobRecord) -> tuple[str, str] | None:
+        """Return an updated ``(status, message)`` when supported.
+
+        Synchronous executors do not need to implement this hook. Remote
+        executors can use it to refresh a persisted job from their API.
+        """
+        return None
+
 
 # ============================================================================
 # Phase 1 canonical interfaces (per the 9-layer reconstruction spec)

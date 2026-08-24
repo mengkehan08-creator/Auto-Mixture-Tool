@@ -12,7 +12,7 @@ from auto_mixture_tool.plugins.trainers.nanochat import NanoChatTrainer
 from auto_mixture_tool.plugins.validators.stem import StemValidator
 from auto_mixture_tool.data.validator import audit_dataset, validate_dataset
 from .components import HpcClusterExecutor, LocalExecutor
-from .models import JobRecord
+from .models import CommandSpec, JobRecord
 from .registry import ComponentRegistry
 
 
@@ -144,9 +144,25 @@ class PlatformService:
         if job_id not in self.jobs:
             path = self.job_dir / f"{job_id}.json"
             if path.exists():
-                return json.loads(path.read_text(encoding="utf-8"))
-            raise ValueError(f"job not found: {job_id}")
-        return self.jobs[job_id].to_dict()
+                value = json.loads(path.read_text(encoding="utf-8"))
+                self.jobs[job_id] = JobRecord(
+                    id=value["id"],
+                    status=value["status"],
+                    request=value["request"],
+                    stages=[CommandSpec(**stage) for stage in value["stages"]],
+                    executor=value["executor"],
+                    external_id=value.get("external_id"),
+                    message=value.get("message", ""),
+                )
+            else:
+                raise ValueError(f"job not found: {job_id}")
+        job = self.jobs[job_id]
+        if job.status not in {"SUCCEEDED", "FAILED", "CANCELLED"}:
+            refreshed = self.executors.get(job.executor).refresh(job)
+            if refreshed is not None:
+                job.status, job.message = refreshed
+                self._save_job(job)
+        return job.to_dict()
 
     def _save_job(self, job: JobRecord) -> None:
         self.job_dir.mkdir(parents=True, exist_ok=True)

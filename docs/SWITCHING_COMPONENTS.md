@@ -44,7 +44,9 @@ evaluator_config:
   benchmarks: stem
   tasks: [gsm8k, mmlu_stem, arc_easy]
 
-executor_config: {}
+executor_config:
+  device_type: npu
+  device_count: 8
 ```
 
 旧字段 `format_validator_id`、`validator_id`、`validator_config` 暂时兼容读取；新配置只应使用 `dataset_id`、`evaluator_id`、`evaluator_config`。
@@ -182,3 +184,5 @@ python tests/test_p2_e2e.py
 ```
 
 真实 QuadMix、NanoChat 和 STEM 仍需在安装 PyArrow、Torch、torch-npu 且具备数据与模型的 NPU 环境验证。
+
+本地八卡运行和 HPC API 提交的完整配置、环境变量、资源载荷及状态查询见 `docs/RUN_MODES.md`。

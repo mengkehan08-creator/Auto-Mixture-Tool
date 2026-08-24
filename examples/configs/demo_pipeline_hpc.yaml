@@ -35,4 +35,25 @@ evaluator_config:
 
 executor_config:
   endpoint: https://hpc-cluster.example.com/api/v1/jobs   # 必填：集群任务提交 API
+  status_endpoint: https://hpc-cluster.example.com/api/v1/jobs/{job_id}
   token_env: AMT_CLUSTER_TOKEN                            # 可选：承载令牌的环境变量名
+  timeout_seconds: 30
+  queue: npu-production
+  image: registry.example.com/auto-mixture-tool:latest
+  working_dir: /home/ma-user/work/Auto-Mixture-Tool
+  resources:
+    nodes: 1
+    npu: 8
+    cpu: 64
+    memory_gb: 512
+  mounts:
+    - source: /home/ma-user/work
+      target: /home/ma-user/work
+  # 若平台不用 id/status 字段，可在这里改字段名或做状态映射：
+  job_id_field: id
+  status_field: status
+  status_map:
+    queued: SUBMITTED
+    running: RUNNING
+    completed: SUCCEEDED
+    failed: FAILED
