@@ -36,8 +36,8 @@ algorithm_config:
 
 trainer_config:
   npu_devices: 8
-  nanochat_repo: /home/ma-user/nanochat-npu
-  model_dir: /home/ma-user/nanochat_model_dir
+  nanochat_repo: /home/ma-user/work/nanochat-npu
+  model_dir: /home/ma-user/work/nanochat_model_dir
   base_model_tag: d24
 
 evaluator_config:
