@@ -17,48 +17,31 @@
 
 ## 工具化平台：快速使用
 
-本层把 QuadMix / NanoChat / STEM 等真实逻辑抽进统一的**规范契约**（`MixingAlgorithm` / `Trainer` / `Evaluator`），并通过**统一注册表**（按 `id` 装配）与 **`CanonicalPipeline`** 端到端编排。当前已落地的组件：
+平台通过一个运行时注册中心按 ID 装配数据集、算法、训练框架、评测集和执行后端。当前正式开放的组件：
 
-| 组件 | `id` | 说明 |
+| 模块 | 配置字段 | 当前 `id` |
 |------|------|------|
-| 配比算法 `MixingAlgorithm` | `quadmix-core` | 抽入真实 `src/quadmix` 的 `QuaDMixPipeline`（precomputed 模式） |
-| | `manual-core` | 按固定比例在进程内选子集（纯标准库，可离线跑） |
-| | `random-core` | 参照实现 |
-| | `CommandDriven*` | 桥接原命令式 `AlgorithmAdapter`（外部脚本执行策略） |
-| 训练器 `Trainer` | `nanochat-core` | 抽入 `nanochat_mid_compare` 训练（`dry_run` 可离线验命令） |
-| | `none-core` | 参照实现（NoOp） |
-| 验证器 `Evaluator` | `stem-core` | 抽入 STEM 评估（`dry_run` 可离线验命令） |
-| | `stub-core` | 参照实现 |
+| 数据集校验与标准化 | `dataset_id` | `quadmix` |
+| 配比算法 | `algorithm_id` | `quadmix` |
+| 训练框架 | `trainer_id` | `nanochat` |
+| 评测集/评测方法 | `evaluator_id` | `stem` |
+| 执行后端 | `executor_id` | `local` / `hpc-cluster` |
 
 安装与两条入口（API + YAML 配置文件运行）：
 
 ```bash
-pip install -e .                 # 安装后提供两个 CLI：auto-mixture / quadmix-platform
+pip install -e .                 # auto-mixture；quadmix-platform 是兼容别名
 
 # 1) 用 YAML 配置跑一条完整实验（校验→配比→训练→验证→分析）
 auto-mixture run examples/configs/demo_pipeline.yaml
 
-# 2) 启动 HTTP API（组件目录/数据集校验/任务提交/查询；不在本地起 NPU）
+# 2) 启动 HTTP API（组件目录/数据集校验/任务提交/查询）
 auto-mixture serve --host 127.0.0.1 --port 8080
-#   或沿用原平台抽象层入口：
-quadmix-platform serve --host 127.0.0.1 --port 8080
 ```
 
-在 Python 中直接以规范契约跑端到端（无需集群即可跑通参照路径）：
+当前生产数据可直接使用 JSON、JSONL 或 Parquet 文件目录，不执行 Parquet 转换。目录数据会检查全部分片，不再只抽查第一个文件；QuadMix 的元数据加载和按需文本读取已原生支持 JSON。
 
-```python
-from auto_mixture_tool.core import CanonicalPipeline, ManualRatioMixingAlgorithm, NoOpTrainer, StubEvaluator
-
-pipeline = CanonicalPipeline(
-    algorithm=ManualRatioMixingAlgorithm(domain_ratios={"web": 0.5, "science": 0.25, "code": 0.25}, seed=7),
-    trainer=NoOpTrainer(),
-    evaluator=StubEvaluator(),
-)
-result = pipeline.run(dataset_uri="examples/platform/sample_dataset.csv", output_dir="out", job_id="demo")
-print(result["status"])  # COMPLETED
-```
-
-> QuadMix / NanoChat / STEM 的真实执行依赖 numpy / pandas / pyarrow / lightgbm / torch + NPU + 代理运行器，需在集群 `pip install -e .` 后验证；平台层与规范契约链路本身可在纯标准库下离线导入并单测（见 `tests/`）。
+完整使用说明见 [`docs/USAGE.md`](docs/USAGE.md)；模块切换见 [`docs/SWITCHING_COMPONENTS.md`](docs/SWITCHING_COMPONENTS.md)；当前 STEM JSON 的字段映射、全量审查和过滤规则见 [`docs/DATASET_AUDIT.md`](docs/DATASET_AUDIT.md)。`CanonicalPipeline` 仍保留为 Python 契约与离线参照测试，不是第二套用户入口。
 
 ---
 
@@ -100,7 +83,7 @@ Auto-Mixture-Tool/
 │   │   ├── data/                      # DatasetSchema（YAML 列映射）、多格式适配器
 │   │   └── npu/                       # DeviceManager（CPU/CUDA/NPU）
 │   ├── auto_mixture_tool/         # ★ 工具化平台层（新增）
-│   │   ├── cli.py                      # 命令行入口（serve / run --config）
+│   │   ├── cli.py                      # 命令行入口（serve / run <yaml>）
 │   │   ├── api/server.py              # FastAPI 服务
 │   │   ├── pipeline.py                # PipelineManager 编排器
 │   │   ├── config/                    # YAML 配置加载
@@ -119,7 +102,7 @@ Auto-Mixture-Tool/
 │   │   └── plugins/                   # 命令式 Adapter 插件（算法/训练/验证/执行/格式校验）
 │   └── quadmix_platform/          # 原平台抽象层
 │       ├── interfaces.py              # 四个核心接口 + 四个 Adapter + FormatValidatorAdapter
-│       ├── components.py              # 内置组件
+│       ├── components.py              # local / hpc-cluster 执行器
 │       ├── service.py                 # 注册中心
 │       ├── registry.py                # ComponentRegistry
 │       └── api.py / cli.py            # 原入口（仍可用）

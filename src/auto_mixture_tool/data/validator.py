@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from statistics import median, pstdev
 from typing import Any
-
-import numpy as np
 
 from quadmix.data.dataset_schema import DatasetSchema
 from quadmix_platform.dataset_inspector import inspect_dataset as _base_inspect
@@ -32,16 +31,17 @@ class ValidationStatistics:
 
 
 def _character_length_stats(texts: list[str]) -> dict[str, Any]:
+    if not texts:
+        return {"mean": 0.0, "std": 0.0, "min": 0, "max": 0, "median": 0.0, "p95": 0.0, "empty": 0}
     lengths = [len(t) for t in texts]
-    arr = np.array(lengths, dtype=np.float64)
     return {
-        "mean": round(float(arr.mean()), 2),
-        "std": round(float(arr.std()), 2),
-        "min": int(arr.min()),
-        "max": int(arr.max()),
-        "median": round(float(np.median(arr)), 2),
-        "p95": round(float(np.percentile(arr, 95)), 2),
-        "empty": int((arr == 0).sum()),
+        "mean": round(sum(lengths) / len(lengths), 2),
+        "std": round(pstdev(lengths), 2),
+        "min": min(lengths),
+        "max": max(lengths),
+        "median": round(float(median(lengths)), 2),
+        "p95": round(_percentile(lengths, 0.95), 2),
+        "empty": lengths.count(0),
     }
 
 
@@ -66,15 +66,24 @@ def _quality_stats(rows: list[dict[str, Any]], quality_cols: list[str]) -> dict[
                 continue
         if not values:
             continue
-        arr = np.array(values, dtype=np.float64)
         result[col] = {
-            "mean": round(float(arr.mean()), 4),
-            "std": round(float(arr.std()), 4),
-            "min": round(float(arr.min()), 4),
-            "max": round(float(arr.max()), 4),
+            "mean": round(sum(values) / len(values), 4),
+            "std": round(pstdev(values), 4),
+            "min": round(min(values), 4),
+            "max": round(max(values), 4),
             "missing": sum(row.get(col) in (None, "") for row in rows),
         }
     return result
+
+
+def _percentile(values: list[int | float], fraction: float) -> float:
+    """Return a linearly interpolated percentile without a NumPy dependency."""
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * fraction
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return float(ordered[lower] * (1 - weight) + ordered[upper] * weight)
 
 
 def _domain_distribution(rows: list[dict[str, Any]], domain_col: str) -> dict[str, int]:
@@ -90,7 +99,7 @@ def validate_dataset(
     dataset_path: str,
     schema_path: str,
     sample_size: int = 1000,
-    format_validator_id: str = "quadmix",
+    format_validator: Any | None = None,
 ) -> dict[str, Any]:
     """Run the base inspector plus extended statistics and a format check.
 
@@ -106,9 +115,16 @@ def validate_dataset(
     schema = DatasetSchema.from_yaml(str(Path(schema_path).expanduser().resolve()))
 
     # Re-read the sample as plain rows for extended stats.
-    from quadmix_platform.dataset_inspector import _first_data_file, _read_sample
-    source = _first_data_file(Path(dataset_path).expanduser().resolve())
-    rows, _, _ = _read_sample(source, max(1, min(sample_size, 10000)))
+    from quadmix_platform.dataset_inspector import _adapt_sample, _data_files, _read_sample
+    sources = _data_files(Path(dataset_path).expanduser().resolve())
+    limit = max(1, min(sample_size, 10000))
+    per_file_limit = max(1, (limit + len(sources) - 1) // len(sources))
+    rows: list[dict[str, Any]] = []
+    for source in sources:
+        file_rows, _, _ = _read_sample(source, per_file_limit)
+        file_rows, _, _ = _adapt_sample(file_rows, schema)
+        rows.extend(file_rows)
+    rows = rows[:limit]
 
     stats = ValidationStatistics(
         num_rows_sampled=len(rows),
@@ -128,7 +144,7 @@ def validate_dataset(
         )
     if stats.duplicate_rate and stats.duplicate_rate > 0.1:
         base["warnings"].append(
-            f"near-duplicate rate is {stats.duplicate_rate:.1%}; consider deduplication"
+            f"exact duplicate rate is {stats.duplicate_rate:.1%}; consider deduplication"
         )
     if len(stats.domain_distribution) == 1:
         base["warnings"].append(
@@ -136,16 +152,18 @@ def validate_dataset(
         )
 
     # Swappable data-format conformance check.
-    from auto_mixture_tool.plugins.format_validators import get_format_validator
+    if format_validator is None:
+        from auto_mixture_tool.plugins.format_validators.quadmix import QuadMixFormatValidator
+
+        format_validator = QuadMixFormatValidator()
     try:
-        format_validator = get_format_validator(format_validator_id)
         format_check = format_validator.validate(
             {"dataset_uri": dataset_path, "schema_uri": schema_path, "sample_size": sample_size}
         )
     except Exception as exc:  # noqa: BLE001 - never let format check crash validation
         format_check = {
             "valid": False,
-            "errors": [f"format validator '{format_validator_id}' 执行失败: {exc}"],
+            "errors": [f"dataset validator '{getattr(format_validator, 'id', 'unknown')}' 执行失败: {exc}"],
             "warnings": [],
             "details": {},
         }
@@ -168,4 +186,72 @@ def validate_dataset(
         "base": base,
         "statistics": stats.to_dict(),
         "format_check": format_check,
+    }
+
+
+def audit_dataset(dataset_path: str, schema_path: str) -> dict[str, Any]:
+    """Scan every native shard and report algorithm compatibility/filtering.
+
+    Unlike the sample-based preflight validator, this function reads every
+    record. It does not rewrite source data or create a converted copy.
+    """
+    from quadmix.data.shard_io import is_json_shard, read_shard_metadata
+    from quadmix_platform.dataset_inspector import _data_files
+
+    schema = DatasetSchema.from_yaml(str(Path(schema_path).expanduser().resolve()))
+    sources = _data_files(Path(dataset_path).expanduser().resolve())
+    scanned = accepted = rejected = 0
+    reasons: dict[str, int] = {}
+    errors: list[str] = []
+    per_file: dict[str, Any] = {}
+    domain_counts = [0] * len(schema.domain_names or [])
+
+    for source in sources:
+        if source.suffix.lower() != ".parquet" and not is_json_shard(str(source)):
+            errors.append(f"{source}: unsupported native QuadMix input")
+            continue
+        try:
+            result = read_shard_metadata(str(source), schema)
+        except Exception as exc:  # noqa: BLE001 - retain errors for all shards
+            errors.append(f"{source}: {exc}")
+            continue
+        report = result.get("filter_report", {
+            "scanned": result["num_docs"],
+            "accepted": result["num_docs"],
+            "rejected": 0,
+            "reasons": {},
+        })
+        per_file[str(source)] = report
+        scanned += int(report["scanned"])
+        accepted += int(report["accepted"])
+        rejected += int(report["rejected"])
+        for reason, count in report.get("reasons", {}).items():
+            reasons[reason] = reasons.get(reason, 0) + int(count)
+        if domain_counts:
+            for value in result["domain"].tolist():
+                if 0 <= int(value) < len(domain_counts):
+                    domain_counts[int(value)] += 1
+
+    named_domain_counts = {
+        name: domain_counts[index]
+        for index, name in enumerate(schema.domain_names or [])
+    }
+    missing_domains = [name for name, count in named_domain_counts.items() if count == 0]
+    if accepted == 0:
+        errors.append("no records remain after applying dataset filters")
+    if missing_domains:
+        errors.append(f"required domains have no accepted records: {missing_domains}")
+    return {
+        "valid": not errors,
+        "algorithm_compatible": not errors,
+        "scanned": scanned,
+        "accepted": accepted,
+        "rejected": rejected,
+        "acceptance_rate": accepted / max(1, scanned),
+        "rejection_reasons": dict(sorted(reasons.items())),
+        "domain_distribution": named_domain_counts,
+        "missing_domains": missing_domains,
+        "errors": errors,
+        "per_file": per_file,
+        "source_unchanged": True,
     }

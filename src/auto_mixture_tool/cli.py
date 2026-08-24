@@ -3,7 +3,7 @@
 Layer 1 exposes exactly two ways to run the platform:
 
 * ``serve``  -- launch the HTTP API (FastAPI).
-* ``run --config <yaml>`` -- execute a pipeline from a YAML config file.
+* ``run <yaml>`` -- execute a pipeline from a YAML config file.
 
 Dataset inspection, JSON job submission, and component catalog are exposed
 only through the HTTP API (see ``auto_mixture_tool.api.server``).

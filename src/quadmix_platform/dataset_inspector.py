@@ -1,25 +1,43 @@
 from __future__ import annotations
 
 import csv
-import json
+import math
+from collections import Counter
+from itertools import islice
 from pathlib import Path
 from typing import Any, Iterable
 
 from quadmix.data.dataset_schema import DatasetSchema
+from quadmix.data.shard_io import is_json_shard, iter_json_records
+from quadmix.data.record_adapter import adapt_record
 
 
-SUPPORTED_SUFFIXES = {".parquet", ".csv", ".jsonl", ".json", ".txt"}
+SUPPORTED_SUFFIXES = {
+    ".parquet", ".csv", ".json", ".jsonl", ".jsonlines", ".ndjson", ".txt"
+}
+CONTROL_FILENAMES = {"manifest.json", "shard_index.json", "metadata_shard_info.json"}
+
+
+def _data_files(path: Path) -> list[Path]:
+    if path.is_file():
+        if path.suffix.lower() not in SUPPORTED_SUFFIXES and not is_json_shard(str(path)):
+            raise ValueError(f"unsupported dataset file: {path}")
+        return [path]
+    if not path.is_dir():
+        raise ValueError(f"dataset path does not exist: {path}")
+    files = sorted(
+        p for p in path.rglob("*")
+        if p.is_file() and (p.suffix.lower() in SUPPORTED_SUFFIXES or is_json_shard(str(p)))
+        and p.name not in CONTROL_FILENAMES
+    )
+    if not files:
+        raise ValueError(f"no supported data files found under: {path}")
+    return files
 
 
 def _first_data_file(path: Path) -> Path:
-    if path.is_file():
-        return path
-    if not path.is_dir():
-        raise ValueError(f"dataset path does not exist: {path}")
-    files = sorted(p for p in path.rglob("*") if p.suffix.lower() in SUPPORTED_SUFFIXES)
-    if not files:
-        raise ValueError(f"no supported data files found under: {path}")
-    return files[0]
+    """Compatibility helper; new validation checks every returned data file."""
+    return _data_files(path)[0]
 
 
 def _read_sample(path: Path, limit: int) -> tuple[list[dict[str, Any]], dict[str, str], int | None]:
@@ -38,21 +56,15 @@ def _read_sample(path: Path, limit: int) -> tuple[list[dict[str, Any]], dict[str
             rows = [row for _, row in zip(range(limit), reader)]
             columns = reader.fieldnames or []
         return rows, _infer_types(rows, columns), None
-    if suffix in {".jsonl", ".json"}:
-        with path.open("r", encoding="utf-8") as handle:
-            if suffix == ".json":
-                value = json.load(handle)
-                values = value if isinstance(value, list) else value.get("data", [])
-                rows = [row for row in values[:limit] if isinstance(row, dict)]
-            else:
-                rows = []
-                for _, line in zip(range(limit), handle):
-                    value = json.loads(line)
-                    if isinstance(value, dict):
-                        rows.append(value)
+    if suffix in {".json", ".jsonl", ".jsonlines", ".ndjson"} or is_json_shard(str(path)):
+        rows = list(islice(iter_json_records(str(path)), limit))
         columns = sorted({key for row in rows for key in row})
         return rows, _infer_types(rows, columns), None
-    rows = [{"text": line.rstrip("\n")} for _, line in zip(range(limit), path.open("r", encoding="utf-8"))]
+    with path.open("r", encoding="utf-8") as handle:
+        rows = [
+            {"text": line.rstrip("\n")}
+            for _, line in zip(range(limit), handle)
+        ]
     return rows, {"text": "string"}, None
 
 
@@ -72,6 +84,27 @@ def _infer_types(rows: list[dict[str, Any]], columns: Iterable[str]) -> dict[str
     return result
 
 
+def _adapt_sample(
+    rows: list[dict[str, Any]], schema: DatasetSchema
+) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, Any]]:
+    accepted: list[dict[str, Any]] = []
+    reasons: Counter[str] = Counter()
+    for position, source_record in enumerate(rows):
+        record, local_reasons = adapt_record(source_record, schema, position)
+        if record is None or local_reasons:
+            reasons.update(local_reasons or ["adapter_rejected"])
+        else:
+            accepted.append(record)
+    columns = sorted({key for row in accepted for key in row})
+    return accepted, _infer_types(accepted, columns), {
+        "scanned": len(rows),
+        "accepted": len(accepted),
+        "rejected": len(rows) - len(accepted),
+        "acceptance_rate": len(accepted) / max(1, len(rows)),
+        "reasons": dict(sorted(reasons.items())),
+    }
+
+
 def _is_int(value: Any) -> bool:
     try:
         int(value)
@@ -89,17 +122,45 @@ def _is_float(value: Any) -> bool:
 
 
 def inspect_dataset(dataset_path: str, schema_path: str, sample_size: int = 100) -> dict[str, Any]:
-    source = _first_data_file(Path(dataset_path).expanduser().resolve())
+    sources = _data_files(Path(dataset_path).expanduser().resolve())
     schema_file = Path(schema_path).expanduser().resolve()
     schema = DatasetSchema.from_yaml(str(schema_file))
-    rows, dtypes, total_rows = _read_sample(source, max(1, min(sample_size, 1000)))
-    columns = list(dtypes)
+    limit = max(1, min(sample_size, 10000))
+    per_file_limit = max(1, math.ceil(limit / len(sources)))
+    rows: list[dict[str, Any]] = []
+    dtype_reports: list[dict[str, str]] = []
+    totals: list[int | None] = []
     errors: list[str] = []
     warnings: list[str] = []
-    try:
-        schema._validate(columns, dtypes)
-    except ValueError as exc:
-        errors.append(str(exc))
+    filter_reports: dict[str, dict[str, Any]] = {}
+    for source in sources:
+        file_rows, _, total_rows = _read_sample(source, per_file_limit)
+        file_rows, dtypes, filter_report = _adapt_sample(file_rows, schema)
+        rows.extend(file_rows)
+        dtype_reports.append(dtypes)
+        totals.append(total_rows)
+        filter_reports[str(source)] = filter_report
+        if filter_report["rejected"]:
+            warnings.append(
+                f"{source.name}: sample filter accepted {filter_report['accepted']}/"
+                f"{filter_report['scanned']}; reasons={filter_report['reasons']}"
+            )
+        try:
+            schema._validate(list(dtypes), dtypes)
+        except ValueError as exc:
+            errors.append(f"{source.name}: {exc}")
+    rows = rows[:limit]
+    merged_dtypes: dict[str, str] = {}
+    for report in dtype_reports:
+        for column, dtype in report.items():
+            previous = merged_dtypes.get(column)
+            if previous is None:
+                merged_dtypes[column] = dtype
+            elif previous != dtype:
+                merged_dtypes[column] = f"mixed({previous},{dtype})"
+    total_rows = sum(value for value in totals if value is not None) if all(
+        value is not None for value in totals
+    ) else None
 
     if not rows:
         errors.append("dataset sample is empty")
@@ -125,12 +186,17 @@ def inspect_dataset(dataset_path: str, schema_path: str, sample_size: int = 100)
     return {
         "valid": not errors,
         "dataset_path": str(Path(dataset_path).resolve()),
-        "inspected_file": str(source),
+        "inspected_file": str(sources[0]),
+        "inspected_files": [str(source) for source in sources],
         "schema_path": str(schema_file),
-        "format": source.suffix.lower().lstrip("."),
+        "format": (
+            "json" if is_json_shard(str(sources[0]))
+            else sources[0].suffix.lower().lstrip(".")
+        ),
         "sampled_rows": len(rows),
         "total_rows": total_rows,
-        "columns": dtypes,
+        "columns": merged_dtypes,
+        "filter_preview": filter_reports,
         "errors": errors,
         "warnings": warnings,
     }

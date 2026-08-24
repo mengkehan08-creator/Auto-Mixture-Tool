@@ -1,0 +1,41 @@
+# Native schema for /home/ma-user/work/STEM_sample_100B_only_数理化生_json/
+# Source records remain unchanged. The record adapter derives the flat fields
+# consumed by QuadMix and rejects records that fail the configured quality gate.
+
+record_adapter: stem-sample-json-v1
+
+domain_col: category_name
+domain_names: [数学, 化学, 生物学, 物理]
+
+quality_cols:
+  - stem_relevance
+  - knowledge_value
+  - notation_fidelity
+  - rigor_coherence
+  - noise_level
+
+quality_names:
+  - stem_relevance
+  - knowledge_value
+  - notation_fidelity
+  - rigor_coherence
+  - noise_level
+
+text_col: text
+char_count_col: char_count_col
+row_in_shard_col: source_record_idx
+
+filter:
+  required_status: SUCCESS
+  required_verdict: accept
+  required_correctness: Y
+  required_duplication_suspect: N
+  min_primary_domain_score: 0.4
+  min_token_num: 64
+  max_token_num: 16384
+  min_quality:
+    stem_relevance: 4
+    knowledge_value: 3
+    notation_fidelity: 3
+    rigor_coherence: 3
+    noise_level: 3

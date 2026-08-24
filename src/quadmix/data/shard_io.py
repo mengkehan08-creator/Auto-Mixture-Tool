@@ -1,17 +1,21 @@
-"""Shard-level I/O workers for parquet metadata and text reading.
+"""Shard-level I/O workers for Parquet/JSON metadata and text reading.
 
 Standalone functions designed for multiprocessing (spawn-safe, no `self`).
 Moved from metadata_manager.py to isolate the I/O concern.
 """
 
+import json
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from itertools import chain
+from collections import Counter
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import numpy.typing as npt
 
 from quadmix.data.dataset_schema import DatasetSchema
+from quadmix.data.record_adapter import adapt_record
 
 
 def _parse_shard_idx(basename: str) -> Optional[int]:
@@ -19,6 +23,242 @@ def _parse_shard_idx(basename: str) -> Optional[int]:
     if m:
         return int(m.group(1))
     return None
+
+
+_JSON_SUFFIXES = {".json", ".jsonl", ".jsonlines", ".ndjson"}
+_JSON_WRAPPER_KEYS = ("samples", "data", "records", "examples", "items")
+
+
+def is_json_shard(path: str) -> bool:
+    suffix = os.path.splitext(path)[1].lower()
+    return suffix in _JSON_SUFFIXES or (not suffix and os.path.basename(path).startswith("part-"))
+
+
+def _iter_json_array(handle, chunk_size: int = 1024 * 1024) -> Iterator[Any]:
+    """Stream a top-level JSON array without loading the complete shard."""
+    decoder = json.JSONDecoder()
+    buffer = ""
+    position = 0
+    started = False
+    eof = False
+    while True:
+        if position >= len(buffer) and not eof:
+            buffer = handle.read(chunk_size)
+            position = 0
+            eof = not buffer
+        while position < len(buffer) and buffer[position].isspace():
+            position += 1
+        if not started:
+            if position >= len(buffer):
+                if eof:
+                    raise ValueError("empty JSON array shard")
+                continue
+            if buffer[position] != "[":
+                raise ValueError("expected a top-level JSON array")
+            position += 1
+            started = True
+        while position < len(buffer) and (buffer[position].isspace() or buffer[position] == ","):
+            position += 1
+        if position < len(buffer) and buffer[position] == "]":
+            return
+        if position >= len(buffer):
+            if eof:
+                raise ValueError("unterminated JSON array")
+            buffer = ""
+            continue
+        try:
+            value, end = decoder.raw_decode(buffer, position)
+        except json.JSONDecodeError:
+            if eof:
+                raise
+            more = handle.read(chunk_size)
+            buffer = buffer[position:] + more
+            position = 0
+            eof = not more
+            continue
+        yield value
+        position = end
+        if position > chunk_size:
+            buffer = buffer[position:]
+            position = 0
+
+
+def iter_json_records(path: str) -> Iterator[dict[str, Any]]:
+    """Yield records from JSONL, a JSON array, object, or wrapped array."""
+    with open(path, "r", encoding="utf-8-sig") as handle:
+        first = ""
+        while True:
+            char = handle.read(1)
+            if not char:
+                raise ValueError(f"empty JSON shard: {path}")
+            if not char.isspace():
+                first = char
+                break
+        handle.seek(0)
+        if first == "[":
+            values = _iter_json_array(handle)
+            for row_number, value in enumerate(values, 1):
+                if not isinstance(value, dict):
+                    raise ValueError(f"{path}:{row_number}: JSON record must be an object")
+                yield value
+            return
+
+        first_line = ""
+        first_line_number = 0
+        for first_line_number, line in enumerate(handle, 1):
+            if line.strip():
+                first_line = line
+                break
+        try:
+            first_value = json.loads(first_line)
+        except json.JSONDecodeError:
+            # Pretty-printed single object/wrapped array. This representation is
+            # supported for compatibility, but line-delimited JSON is preferred
+            # for very large shards.
+            handle.seek(0)
+            value = json.load(handle)
+            values = _unwrap_json_value(value, path)
+            yield from values
+            return
+
+        next_line = ""
+        next_line_number = first_line_number
+        for next_line_number, line in enumerate(handle, first_line_number + 1):
+            if line.strip():
+                next_line = line
+                break
+        if next_line:
+            if not isinstance(first_value, dict):
+                raise ValueError(
+                    f"{path}:{first_line_number}: JSONL record must be an object"
+                )
+            yield first_value
+            lines = chain(
+                [(next_line_number, next_line)],
+                enumerate(handle, next_line_number + 1),
+            )
+            for line_number, line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"{path}:{line_number}: invalid JSON record") from exc
+                if not isinstance(value, dict):
+                    raise ValueError(f"{path}:{line_number}: JSONL record must be an object")
+                yield value
+            return
+
+        yield from _unwrap_json_value(first_value, path)
+
+
+def _unwrap_json_value(value: Any, path: str) -> Iterator[dict[str, Any]]:
+    if isinstance(value, dict):
+        for key in _JSON_WRAPPER_KEYS:
+            if isinstance(value.get(key), list):
+                value = value[key]
+                break
+        else:
+            yield value
+            return
+    if not isinstance(value, list):
+        raise ValueError(f"{path}: expected a JSON object or array of objects")
+    for row_number, row in enumerate(value, 1):
+        if not isinstance(row, dict):
+            raise ValueError(f"{path}:{row_number}: JSON record must be an object")
+        yield row
+
+
+def _read_shard_metadata_json(shard_path: str, schema: DatasetSchema) -> dict:
+    """Read only schema-selected metadata from a JSON/JSONL shard."""
+    basename = os.path.basename(shard_path)
+    domain_values: List[Any] = []
+    quality_values: List[List[float]] = []
+    char_counts: List[int] = []
+    row_values: List[int] = []
+    rejection_counts: Counter[str] = Counter()
+    scanned_records = 0
+    computed_char_count = schema.needs_text_for_char_count()
+    for position, source_record in enumerate(iter_json_records(shard_path)):
+        scanned_records += 1
+        record, reasons = adapt_record(source_record, schema, position)
+        if record is None or reasons:
+            rejection_counts.update(reasons or ["adapter_rejected"])
+            continue
+        try:
+            text = record[schema.text_col]
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError(f"column {schema.text_col!r} must be a non-empty string")
+            domain_values.append(record[schema.domain_col])
+            quality_values.append([float(record[column]) for column in schema.quality_cols])
+            if schema.char_count_col is None:
+                char_counts.append(len(text))
+            else:
+                char_counts.append(int(record[schema.char_count_col]))
+            row_values.append(
+                int(record.get(schema.row_in_shard_col, position))
+                if schema.row_in_shard_col is not None else position
+            )
+        except KeyError as exc:
+            raise ValueError(f"{shard_path}:{position + 1}: missing column {exc.args[0]!r}") from exc
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{shard_path}:{position + 1}: invalid metadata value: {exc}") from exc
+
+    domain_cat_map = None
+    if any(isinstance(value, str) for value in domain_values):
+        if schema.domain_names is None:
+            raise ValueError(
+                f"domain_col '{schema.domain_col}' contains strings but schema.domain_names is missing"
+            )
+        domain_cat_map = {name: index for index, name in enumerate(schema.domain_names)}
+        unknown_domains = sorted(
+            {str(value) for value in domain_values if str(value) not in domain_cat_map}
+        )
+        if unknown_domains:
+            raise ValueError(
+                f"{shard_path}: domain values are not declared in schema.domain_names: "
+                f"{unknown_domains[:10]}"
+            )
+        domain_arr = np.array(
+            [domain_cat_map.get(str(value), -1) for value in domain_values],
+            dtype=np.int64,
+        )
+    else:
+        domain_arr = np.asarray(domain_values, dtype=np.int64)
+
+    quality_arr = (
+        np.asarray(quality_values, dtype=np.float64)
+        if quality_values else np.empty((0, len(schema.quality_cols)), dtype=np.float64)
+    )
+    nan_count = int(np.isnan(quality_arr).sum())
+    if nan_count:
+        print(
+            f"[ShardMetadataManager] WARNING: {basename} has {nan_count} NaN quality values; filling with 0.0"
+        )
+        quality_arr = np.nan_to_num(quality_arr, nan=0.0)
+    return {
+        "shard_idx": _parse_shard_idx(basename),
+        "path": shard_path,
+        "num_docs": len(domain_values),
+        "domain": domain_arr,
+        "quality": quality_arr,
+        "char_count": np.asarray(char_counts, dtype=np.int64),
+        "row_in_shard_col": np.asarray(row_values, dtype=np.int64),
+        "domain_cat_map": domain_cat_map,
+        "computed_char_count": computed_char_count,
+        "filter_report": {
+            "scanned": scanned_records,
+            "accepted": len(domain_values),
+            "rejected": scanned_records - len(domain_values),
+            "reasons": dict(sorted(rejection_counts.items())),
+        },
+    }
+
+
+def read_shard_metadata(shard_path: str, schema: DatasetSchema) -> dict:
+    if is_json_shard(shard_path):
+        return _read_shard_metadata_json(shard_path, schema)
+    return _read_shard_metadata_pyarrow(shard_path, schema)
 
 
 def _read_shard_metadata_pyarrow(shard_path: str, schema: DatasetSchema) -> dict:
@@ -219,6 +459,24 @@ def read_one_shard_texts(
     When row_col is present: delegates to read_one_shard_texts_with_rows,
     discarding parsed_rows (the caller already has local_rows for mapping).
     """
+    if is_json_shard(shard_path):
+        requested = row_col_values if row_col is not None else local_rows
+        pending = {int(value) for value in requested}
+        found: Dict[int, str] = {}
+        for position, record in enumerate(iter_json_records(shard_path)):
+            key = int(record.get(row_col, position)) if row_col is not None else position
+            if key in pending:
+                value = record.get(text_col, "")
+                found[key] = str(value) if value is not None else ""
+                pending.remove(key)
+                if not pending:
+                    break
+        if pending:
+            raise IndexError(
+                f"{shard_path}: requested JSON row ids were not found: {sorted(pending)[:10]}"
+            )
+        return [found[int(value)] for value in requested]
+
     if row_col is None:
         import pyarrow.parquet as pq
         n_requested = len(local_rows)

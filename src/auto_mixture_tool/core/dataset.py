@@ -40,8 +40,10 @@ class CsvJsonlDataset(UnifiedDataset):
             rows = self._read_jsonl()
         elif suffix == ".json":
             rows = self._read_json_array()
-        else:  # default to CSV
+        elif suffix == ".csv":
             rows = self._read_csv()
+        else:
+            raise ValueError(f"unsupported dataset file type: {self.path.suffix or '<none>'}")
         self._samples = [self._to_sample(i, row) for i, row in enumerate(rows)]
 
     def _read_csv(self) -> list[dict[str, Any]]:
@@ -51,10 +53,15 @@ class CsvJsonlDataset(UnifiedDataset):
     def _read_jsonl(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         with open(self.path, encoding="utf-8") as f:
-            for line in f:
+            for line_number, line in enumerate(f, 1):
                 line = line.strip()
                 if line:
-                    out.append(json.loads(line))
+                    value = json.loads(line)
+                    if not isinstance(value, dict):
+                        raise ValueError(
+                            f"{self.path.name}:{line_number}: JSONL record must be an object"
+                        )
+                    out.append(value)
         return out
 
     def _read_json_array(self) -> list[dict[str, Any]]:
@@ -73,6 +80,8 @@ class CsvJsonlDataset(UnifiedDataset):
                 f"{self.path.name}: expected a JSON array of records, "
                 f"got {type(data).__name__}"
             )
+        if not all(isinstance(row, dict) for row in data):
+            raise ValueError(f"{self.path.name}: every JSON record must be an object")
         return data
 
     def _to_sample(self, idx: int, row: dict[str, str]) -> Sample:
@@ -100,10 +109,13 @@ class CsvJsonlDataset(UnifiedDataset):
         return len(self._samples)
 
     def subset(self, indices: list[int]) -> "CsvJsonlDataset":
+        invalid = [index for index in indices if not 0 <= index < len(self._samples)]
+        if invalid:
+            raise IndexError(f"dataset subset indices out of range: {invalid[:10]}")
         clone = CsvJsonlDataset.__new__(CsvJsonlDataset)
         clone.path = self.path
         clone.schema = self.schema
-        clone._samples = [self._samples[i] for i in indices if 0 <= i < len(self._samples)]
+        clone._samples = [self._samples[i] for i in indices]
         return clone
 
 
@@ -220,6 +232,7 @@ def write_samples(samples: Iterable[Sample], uri: str | Path, fmt: str = "json")
     Returns the written file URI.
     """
     uri = str(uri)
+    Path(uri).parent.mkdir(parents=True, exist_ok=True)
     if fmt == "json":
         with open(uri, "w", encoding="utf-8") as f:
             json.dump(

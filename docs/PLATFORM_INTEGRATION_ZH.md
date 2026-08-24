@@ -1,4 +1,7 @@
-# QuaDMix 计算平台集成说明
+# QuaDMix 计算平台集成说明（历史设计稿）
+
+> 当前运行时字段、组件 ID 和扩展步骤以 `docs/USAGE.md` 与
+> `docs/SWITCHING_COMPONENTS.md` 为准。本文件保留早期集成背景，不应用作现行配置模板。
 
 本文描述 `quadmix_platform` 虚拟平台、QuaDMix 数据选择模块、NanoChat 训练验证模块和可切换 STEM 验证配置的边界与 API。平台层不复制 QuaDMix 算法；它把仓库已有入口包装成可替换的作业阶段。
 

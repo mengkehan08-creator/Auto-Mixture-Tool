@@ -22,5 +22,9 @@ class StemValidator(ValidatorAdapter):
             env["STEM_VALIDATION_DATA"] = str(config["validation_data_uri"])
         if config.get("tasks"):
             tasks = config["tasks"]
+            if isinstance(tasks, list) and not all(
+                isinstance(task, str) and task.strip() for task in tasks
+            ):
+                raise ValueError("stem tasks must be non-empty strings")
             env["STEM_TASKS"] = ",".join(tasks) if isinstance(tasks, list) else str(tasks)
         return env

@@ -9,11 +9,16 @@ lazy heavy-import boundary (not at import or contract-check time).
 
 from __future__ import annotations
 
+import json
+import tempfile
+from pathlib import Path
+
 from quadmix_platform.interfaces import MixingAlgorithm
 from auto_mixture_tool.core import (
     QuadMixMixingAlgorithm,
     build_canonical_registry,
     get_algorithm,
+    Sample,
 )
 
 
@@ -63,8 +68,19 @@ def test_quadmix_fit_requires_heavy_deps_or_proxy() -> None:
     print("[PASS] quadmix_fit_requires_heavy_deps (lazy import boundary)")
 
 
+def test_quadmix_export_honors_pipeline_output_format() -> None:
+    algo = QuadMixMixingAlgorithm()
+    algo._selected_indices = [0]
+    algo._samples = [Sample(id="0", text="hello", domain="web", metadata={"q": 0.5})]
+    with tempfile.TemporaryDirectory() as raw:
+        uri = algo.export(Path(raw), fmt="json")
+        rows = json.loads(Path(uri).read_text(encoding="utf-8"))
+    assert rows == [{"id": "0", "text": "hello", "domain": "web", "q": 0.5}]
+
+
 if __name__ == "__main__":
     test_quadmix_algorithm_contract()
     test_quadmix_registered()
     test_quadmix_fit_requires_heavy_deps_or_proxy()
+    test_quadmix_export_honors_pipeline_output_format()
     print("ALL PHASE-2-2 SMOKE TESTS PASSED")

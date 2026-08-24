@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: QuaDMix Platform API
+  title: Auto-Mixture-Tool API
   version: 0.1.0
 servers:
   - url: http://127.0.0.1:8080/api/v1
@@ -26,8 +26,9 @@ paths:
                 type: object
                 properties:
                   algorithms: {type: array, items: {$ref: '#/components/schemas/Component'}}
+                  datasets: {type: array, items: {$ref: '#/components/schemas/Component'}}
                   trainers: {type: array, items: {$ref: '#/components/schemas/Component'}}
-                  validators: {type: array, items: {$ref: '#/components/schemas/Component'}}
+                  evaluators: {type: array, items: {$ref: '#/components/schemas/Component'}}
                   executors: {type: array, items: {$ref: '#/components/schemas/Component'}}
   /datasets/inspect:
     post:
@@ -63,7 +64,7 @@ paths:
           description: Cluster submission failure
   /jobs/{jobId}:
     get:
-      summary: Get an in-memory demo job
+      summary: Get a persisted job record
       parameters:
         - in: path
           name: jobId
@@ -99,7 +100,9 @@ components:
       properties:
         dataset_uri: {type: string}
         schema_uri: {type: string}
-        sample_size: {type: integer, minimum: 1, maximum: 1000, default: 100}
+        sample_size: {type: integer, minimum: 1, maximum: 10000, default: 1000}
+        dataset_id: {type: string, default: quadmix}
+        full_scan: {type: boolean, default: false, description: Scan every record and report filtering/algorithm compatibility}
     InspectionResult:
       type: object
       required: [valid, errors, warnings, columns]
@@ -116,16 +119,16 @@ components:
       allOf:
         - $ref: '#/components/schemas/InspectionRequest'
         - type: object
-          required: [algorithm_id, trainer_id, validator_id, executor_id]
           properties:
             output_uri: {type: string}
+            dataset_id: {type: string, example: quadmix}
             algorithm_id: {type: string, example: quadmix}
-            trainer_id: {type: string, example: nanochat-stem}
-            validator_id: {type: string, example: stem}
-            executor_id: {type: string, enum: [mock, cluster-rest]}
+            trainer_id: {type: string, example: nanochat}
+            evaluator_id: {type: string, example: stem}
+            executor_id: {type: string, enum: [local, hpc-cluster]}
             algorithm_config: {type: object, additionalProperties: true}
             trainer_config: {type: object, additionalProperties: true}
-            validator_config: {type: object, additionalProperties: true}
+            evaluator_config: {type: object, additionalProperties: true}
             executor_config: {type: object, additionalProperties: true}
     CommandSpec:
       type: object

@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from quadmix_platform.interfaces import MixingAlgorithm, UnifiedDataset
+from auto_mixture_tool.core.dataset import write_samples
 
 
 class QuadMixMixingAlgorithm(MixingAlgorithm):
@@ -182,18 +183,18 @@ class QuadMixMixingAlgorithm(MixingAlgorithm):
         return dataset.subset(self._selected_indices)
 
     # ------------------------------------------------------------------ #
-    def export(self, output_dir: str | Path) -> str:
+    def export(self, output_dir: str | Path, fmt: str = "json") -> str:
         if self._selected_indices is None or self._samples is None:
             raise RuntimeError("quadmix-core.export() called before fit()")
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
-        uri = str(out / "quadmix_mixed.jsonl")
-        with open(uri, "w", encoding="utf-8") as f:
-            for idx in self._selected_indices:
-                s = self._samples[idx]
-                row = {"id": s.id, "text": s.text, "domain": s.domain}
-                row.update(s.metadata)
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        ext = "jsonl" if fmt == "jsonl" else "json"
+        uri = str(out / f"quadmix_mixed.{ext}")
+        write_samples(
+            (self._samples[idx] for idx in self._selected_indices),
+            uri,
+            fmt=fmt,
+        )
 
         # Companion summary drawn from the pipeline's structured output.
         summary = {

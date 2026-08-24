@@ -60,6 +60,16 @@ class FormatValidatorAdapter(ABC):
     @abstractmethod
     def validate(self, request: dict[str, Any]) -> dict[str, Any]: ...
 
+    def prepare(
+        self, request: dict[str, Any], workspace: Path
+    ) -> tuple[str, list[CommandSpec]]:
+        """Return ``(prepared_dataset_uri, preparation_stages)``.
+
+        Dataset plugins that already receive their native format can keep the
+        default no-op behavior. Other plugins may compile conversion stages.
+        """
+        return str(request["dataset_uri"]), []
+
 
 class ExecutorAdapter(ABC):
     id: str
@@ -155,7 +165,7 @@ class MixingAlgorithm(ABC):
         """Return the selected / re-weighted subset of ``dataset``."""
 
     @abstractmethod
-    def export(self, output_dir: str | Path) -> str:
+    def export(self, output_dir: str | Path, fmt: str = "json") -> str:
         """Persist the mixed dataset; return its URI."""
 
 

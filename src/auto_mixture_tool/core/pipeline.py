@@ -52,6 +52,10 @@ class CanonicalPipeline:
         mode: str = "inprocess",
         output_format: str = "json",
     ) -> None:
+        if mode not in {"inprocess", "command"}:
+            raise ValueError("mode must be 'inprocess' or 'command'")
+        if output_format not in {"json", "jsonl"}:
+            raise ValueError("output_format must be 'json' or 'jsonl'")
         self.algorithm = algorithm
         self.trainer = trainer
         self.evaluator = evaluator
@@ -184,7 +188,11 @@ class CanonicalPipeline:
         result["stages"]["evaluation"] = metrics
 
         # --- Layer 8/9: result analysis ----------------------------------- #
-        result["status"] = "COMPLETED"
+        result["status"] = (
+            "PLANNED"
+            if self.mode == "command" or ckpt.get("status") == "planned"
+            else "COMPLETED"
+        )
         result["metrics"] = metrics
         self._write_summary(output_dir, result, started)
         return result

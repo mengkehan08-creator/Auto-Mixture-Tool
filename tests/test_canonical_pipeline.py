@@ -96,7 +96,7 @@ def test_command_bridge_captures_plans():
         pipe = CanonicalPipeline(algo, trainer, evaluator, mode="command")
 
         result = pipe.run(dataset_uri=str(csv_path), output_dir=td / "out", job_id="cmd")
-        assert result["status"] == "COMPLETED", result
+        assert result["status"] == "PLANNED", result
         # mixed_uri points at the serialized command plan, not real data
         assert Path(result["stages"]["mixing"]["mixed_uri"]).exists()
         assert result["stages"]["training"].get("status") == "planned"

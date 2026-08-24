@@ -717,6 +717,11 @@ class QuaDMixPipeline:
                 "sampling_ratio": len(selected_indices) / n_docs_save,
                 "domain_distribution_change": domain_dist_change,
             },
+            "data_filter": (
+                self._metadata_manager.filter_report
+                if text_source == "sharded" and self._metadata_manager is not None
+                else None
+            ),
             "dataset_size_prediction": getattr(self, "_dataset_size_prediction", None),
             "per_task_analysis": self._optimizer.per_task_analysis,
             "elapsed_seconds": elapsed,

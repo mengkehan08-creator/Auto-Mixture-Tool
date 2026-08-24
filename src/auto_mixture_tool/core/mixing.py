@@ -12,6 +12,7 @@ selection happens when an ``ExecutorAdapter`` runs that plan on the cluster.
 from __future__ import annotations
 
 import json
+import math
 import random
 from pathlib import Path
 from typing import Any
@@ -29,18 +30,21 @@ class RandomMixingAlgorithm(MixingAlgorithm):
     display_name = "Random uniform mixing (reference)"
 
     def __init__(self, seed: int = 0, fraction: float = 1.0) -> None:
+        if not 0.0 <= fraction <= 1.0:
+            raise ValueError("random-core fraction must be between 0 and 1")
         self.seed = seed
         self.fraction = fraction
+        self._rng = random.Random(seed)
         self._selected: UnifiedDataset | None = None
         self._uri: str | None = None
 
     def fit(self, dataset: UnifiedDataset) -> None:
-        random.seed(self.seed)
+        self._rng = random.Random(self.seed)
 
     def select(self, dataset: UnifiedDataset) -> UnifiedDataset:
         n = dataset.size
         k = max(0, int(n * self.fraction))
-        indices = random.sample(range(n), k) if k < n else list(range(n))
+        indices = self._rng.sample(range(n), k) if k < n else list(range(n))
         self._selected = dataset.subset(indices)
         return self._selected
 
@@ -80,6 +84,14 @@ class ManualRatioMixingAlgorithm(MixingAlgorithm):
     def fit(self, dataset: UnifiedDataset) -> None:
         if not self.domain_ratios:
             raise ValueError("manual-core requires non-empty domain_ratios")
+        invalid = {
+            domain: ratio for domain, ratio in self.domain_ratios.items()
+            if not isinstance(ratio, (int, float)) or not math.isfinite(ratio) or ratio < 0
+        }
+        if invalid or sum(self.domain_ratios.values()) <= 0:
+            raise ValueError(
+                "manual-core domain_ratios must be finite, non-negative, and sum to > 0"
+            )
         present = set(dataset.domains())
         unknown = [d for d in self.domain_ratios if d not in present]
         if unknown:

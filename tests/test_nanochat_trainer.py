@@ -7,6 +7,9 @@ registration -- proving the canonical ``Trainer`` integration point is wired.
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
 from quadmix_platform.interfaces import Trainer, UnifiedDataset
 from auto_mixture_tool.core import (
     NanoChatTrainer,
@@ -42,7 +45,8 @@ def test_nanochat_trainer_contract() -> None:
 
 def test_nanochat_dry_run_command() -> None:
     t = NanoChatTrainer(use_stem=True, dry_run=True, base_model_tag="d28")
-    result = t.train(_dummy_dataset(), "/tmp/nanochat_out_dry")
+    with tempfile.TemporaryDirectory() as raw:
+        result = t.train(_dummy_dataset(), Path(raw) / "nanochat_out_dry")
     assert result["status"] == "planned"
     assert result["command"][0] == "bash"
     assert result["command"][1].endswith("run_stem_experiment.sh")

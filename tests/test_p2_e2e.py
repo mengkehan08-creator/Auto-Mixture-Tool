@@ -64,7 +64,7 @@ def test_p2_e2e_manual_nanochat_stem() -> None:
             job_id="p2-e2e",
         )
 
-        assert result["status"] == "COMPLETED", result
+        assert result["status"] == "PLANNED", result
         assert result["components"]["algorithm"] == "manual-core"
         assert result["components"]["trainer"] == "nanochat-core"
         assert result["components"]["evaluator"] == "stem-core"

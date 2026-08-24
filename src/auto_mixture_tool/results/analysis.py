@@ -37,12 +37,27 @@ class ResultAnalyzer:
             })
         return runs
 
-    def compare_runs(self) -> dict[str, Any]:
-        """Build a comparison table across all discovered runs."""
+    def compare_runs(self, run_ids: list[str] | None = None) -> dict[str, Any]:
+        """Build a comparison table across all or selected discovered runs."""
         rows = []
         for run in self.list_runs():
+            if run_ids is not None and run["run_id"] not in run_ids:
+                continue
             summary = run["summary"]
             sampling = summary.get("sampling", {})
+            stages = summary.get("stages", {})
+            if not sampling and stages:
+                unify = stages.get("unify", {})
+                mixing = stages.get("mixing", {})
+                original = unify.get("size")
+                selected = mixing.get("selected_size")
+                sampling = {
+                    "num_original_docs": original,
+                    "num_selected_docs": selected,
+                    "sampling_ratio": (
+                        selected / original if original and selected is not None else None
+                    ),
+                }
             metrics = summary.get("metrics", {})
             rows.append({
                 "run_id": run["run_id"],

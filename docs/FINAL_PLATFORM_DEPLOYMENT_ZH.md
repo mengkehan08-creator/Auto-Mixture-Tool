@@ -1,4 +1,7 @@
-# QuaDMix 平台化最终部署手册
+# QuaDMix 平台化最终部署手册（历史设计稿）
+
+> 当前运行时字段、组件 ID 和扩展步骤以 `docs/USAGE.md` 与
+> `docs/SWITCHING_COMPONENTS.md` 为准。本文件中的旧组件 ID 仅用于追溯早期方案。
 
 > 适用仓库：`liujin99/quadmix` 的 `refactor/structure` 分支及本仓库新增的平台适配代码  
 > 文档用途：交付平台前端、平台后端、数据平台、集群调度、算法和运维团队共同实施  

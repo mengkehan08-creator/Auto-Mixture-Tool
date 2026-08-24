@@ -2,7 +2,7 @@
 # ──────────────────────────────────────────────────────────────
 # Demo: QuaDMix STEM — 数学/化学/生物学/物理 四域数据集
 # ──────────────────────────────────────────────────────────────
-# STEM parquet 已包含 domain/quality/text 列，无需预处理
+# STEM JSON 已包含 domain/quality/text 字段，无需预处理或格式转换
 # schema: configs/schema_stem.yaml
 #
 # 需要 GPU/NPU（CPU 不可行）
@@ -40,22 +40,22 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-}"
 # Temp/cache dir: override via QUADMIX_TEMP_DIR env var
 export QUADMIX_TEMP_DIR="${QUADMIX_TEMP_DIR:-$HOME/.cache/QuaDMix/temp}"
 
-STEM_SCHEMA="$QUADMIX_DIR/configs/schema_stem.yaml"
+STEM_SCHEMA="$QUADMIX_DIR/configs/schema_stem_sample_json.yaml"
 
 # ── STEM 数据路径（需要用户指定）───────────────────────────
 # 默认路径，可通过环境变量 STEM_DATA_DIR 覆盖
-STEM_DATA_DIR="${STEM_DATA_DIR:-/home/ma-user/work/100B_stem_parquet_filtered}"
+STEM_DATA_DIR="${STEM_DATA_DIR:-/home/ma-user/work/STEM_sample_100B_only_数理化生_json}"
 
 if [ ! -d "$STEM_DATA_DIR" ]; then
     echo "ERROR: STEM 数据目录不存在: $STEM_DATA_DIR"
-    echo "请设置 STEM_DATA_DIR 环境变量指向 STEM parquet 文件目录："
-    echo "  STEM_DATA_DIR=/path/to/stem/parquets bash scripts/demo_run_stem.sh"
+    echo "请设置 STEM_DATA_DIR 环境变量指向 STEM JSON 文件目录："
+    echo "  STEM_DATA_DIR=/path/to/stem/json bash scripts/demo_run_stem.sh"
     exit 1
 fi
 
-NUM_SHARDS=$(ls "$STEM_DATA_DIR"/*.parquet 2>/dev/null | wc -l || echo 0)
+NUM_SHARDS=$(find "$STEM_DATA_DIR" -type f \( -name 'part-*' -o -name '*.json' -o -name '*.jsonl' -o -name '*.jsonlines' -o -name '*.ndjson' \) | wc -l)
 if [ "$NUM_SHARDS" -eq 0 ]; then
-    echo "ERROR: STEM 数据目录中没有 .parquet 文件: $STEM_DATA_DIR"
+    echo "ERROR: STEM 数据目录中没有 JSON/JSONL 文件: $STEM_DATA_DIR"
     exit 1
 fi
 echo "  [配置] 发现 $NUM_SHARDS shards in $STEM_DATA_DIR"
@@ -148,7 +148,7 @@ if [ -n "$QUADMIX_SEED" ]; then
     SEED_ARG="--seed $QUADMIX_SEED"
 fi
 
-# ── STEM 数据不需要预处理，直接用原始 parquet ──────────────
+# ── STEM 数据不需要预处理，直接读取原始 JSON ───────────────
 # metadata_manager 会根据 schema 自动读取 domain/quality/text 列
 
 python3 "$QUADMIX_DIR/scripts/runners/run_essential_web_v1.py" \

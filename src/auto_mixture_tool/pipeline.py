@@ -10,9 +10,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from auto_mixture_tool.data.validator import validate_dataset
-
-
 class PipelineManager:
     """High-level pipeline orchestrator.
 
@@ -39,14 +36,20 @@ class PipelineManager:
         dataset_uri: str,
         schema_uri: str,
         sample_size: int = 1000,
-        format_validator_id: str = "quadmix",
+        dataset_id: str = "quadmix",
+        full_scan: bool = False,
     ) -> dict[str, Any]:
         """Validate a dataset against a schema with extended statistics.
 
-        ``format_validator_id`` selects the swappable data-format conformance
-        checker (default ``quadmix``).
+        ``dataset_id`` selects the swappable dataset contract and validator.
         """
-        return validate_dataset(dataset_uri, schema_uri, sample_size, format_validator_id)
+        return self.service.inspect_dataset({
+            "dataset_uri": dataset_uri,
+            "schema_uri": schema_uri,
+            "sample_size": sample_size,
+            "dataset_id": dataset_id,
+            "full_scan": full_scan,
+        })
 
     def submit(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Validate data and submit a pipeline job."""

@@ -1,8 +1,7 @@
-"""Executor plugins for running jobs on a cluster.
+"""Executor plugin namespace.
 
-Only the HPC cluster API backend is registered (see
-``quadmix_platform.components.HpcClusterExecutor``); local mock and Slurm
-``sbatch`` backends are intentionally not supported.
+The built-in ``local`` and ``hpc-cluster`` implementations live in
+``quadmix_platform.components`` and share the main service registry.
 """
 
 __all__: list[str] = []

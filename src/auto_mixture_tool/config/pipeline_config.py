@@ -14,7 +14,7 @@ import yaml
 
 
 class PipelineConfig:
-    """Experiment configuration with four plugin-specific sections."""
+    """Normalized experiment configuration for all switchable components."""
 
     def __init__(self, data: dict[str, Any]) -> None:
         self._data = data
@@ -45,33 +45,46 @@ class PipelineConfig:
 
     @property
     def trainer_id(self) -> str:
-        return str(self._data.get("trainer_id", "none"))
+        value = str(self._data.get("trainer_id", "nanochat"))
+        return "nanochat" if value == "nanochat-stem" else value
 
     @property
-    def validator_id(self) -> str:
-        return str(self._data.get("validator_id", "core"))
+    def evaluator_id(self) -> str:
+        return str(self._data.get("evaluator_id") or self._data.get("validator_id", "stem"))
 
     @property
     def executor_id(self) -> str:
         return str(self._data.get("executor_id", "local"))
 
     @property
-    def format_validator_id(self) -> str:
-        return str(self._data.get("format_validator_id", "quadmix"))
+    def dataset_id(self) -> str:
+        return str(self._data.get("dataset_id") or self._data.get("format_validator_id", "quadmix"))
 
     def to_job_request(self) -> dict[str, Any]:
         """Convert this config into the JSON shape accepted by the API/CLI."""
+        sections = {
+            "algorithm_config": self._data.get("algorithm_config", {}),
+            "trainer_config": self._data.get("trainer_config", {}),
+            "evaluator_config": self._data.get(
+                "evaluator_config", self._data.get("validator_config", {})
+            ),
+            "executor_config": self._data.get("executor_config", {}),
+        }
+        invalid = [name for name, value in sections.items() if not isinstance(value, dict)]
+        if invalid:
+            raise ValueError(f"pipeline config sections must be mappings: {', '.join(invalid)}")
+        full_scan = self._data.get("full_scan", False)
+        if not isinstance(full_scan, bool):
+            raise ValueError("full_scan must be a boolean")
         return {
             "dataset_uri": self.dataset_uri,
             "schema_uri": self.schema_uri,
+            "dataset_id": self.dataset_id,
             "output_uri": self.output_uri,
             "algorithm_id": self.algorithm_id,
             "trainer_id": self.trainer_id,
-            "validator_id": self.validator_id,
+            "evaluator_id": self.evaluator_id,
             "executor_id": self.executor_id,
-            "format_validator_id": self.format_validator_id,
-            "algorithm_config": self._data.get("algorithm_config", {}),
-            "trainer_config": self._data.get("trainer_config", {}),
-            "validator_config": self._data.get("validator_config", {}),
-            "executor_config": self._data.get("executor_config", {}),
+            "full_scan": full_scan,
+            **sections,
         }

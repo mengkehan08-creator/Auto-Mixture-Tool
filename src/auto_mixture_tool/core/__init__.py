@@ -16,6 +16,7 @@ from auto_mixture_tool.core.dataset import (
     Sample,
     UnifiedDataset,
     load_dataset,
+    write_samples,
 )
 from auto_mixture_tool.core.evaluation import (
     CommandDrivenEvaluator,
@@ -50,6 +51,7 @@ __all__ = [
     "CsvJsonlDataset",
     "PlanDataset",
     "load_dataset",
+    "write_samples",
     "MixingAlgorithm",
     "RandomMixingAlgorithm",
     "ManualRatioMixingAlgorithm",

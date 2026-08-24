@@ -1,12 +1,14 @@
 {
-  "dataset_uri": "examples/platform/sample_dataset.csv",
-  "schema_uri": "examples/platform/sample_schema.yaml",
+  "dataset_uri": "/home/ma-user/work/STEM_sample_100B_only_数理化生_json",
+  "schema_uri": "/home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml",
+  "output_uri": "/home/ma-user/work/Auto-Mixture-Tool/result/platform_demo",
+  "dataset_id": "quadmix",
   "algorithm_id": "quadmix",
-  "trainer_id": "nanochat-stem",
-  "validator_id": "stem",
+  "trainer_id": "nanochat",
+  "evaluator_id": "stem",
   "executor_id": "local",
-  "algorithm_config": {"num_experiments": 8, "num_search": 1000, "device_type": "npu", "npu_devices": 8},
+  "algorithm_config": {"num_experiments": 8, "num_search": 1000, "device_type": "npu", "npu_devices": 8, "proxy_validation_set": "stem_v2"},
   "trainer_config": {"npu_devices": 8},
-  "validator_config": {"tasks": ["gsm8k", "mmlu_stem", "arc_easy"]},
+  "evaluator_config": {"tasks": ["gsm8k", "mmlu_stem", "arc_easy"]},
   "executor_config": {}
 }

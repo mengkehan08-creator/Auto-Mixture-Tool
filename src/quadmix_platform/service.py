@@ -1,19 +1,17 @@
 from __future__ import annotations
 
+import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any
 
-from auto_mixture_tool.plugins.algorithms.manual import ManualRatioAlgorithm
 from auto_mixture_tool.plugins.algorithms.quadmix import QuadMixAlgorithm
-from auto_mixture_tool.plugins.algorithms.random import RandomAlgorithm
 from auto_mixture_tool.plugins.format_validators.quadmix import QuadMixFormatValidator
-from auto_mixture_tool.plugins.validators.custom import CustomValidator
-from .components import (
-    HpcClusterExecutor, LocalExecutor, NanoChatCoreValidator, NanoChatTrainer, NoTrainer,
-    StemValidator,
-)
-from .dataset_inspector import inspect_dataset
+from auto_mixture_tool.plugins.trainers.nanochat import NanoChatTrainer
+from auto_mixture_tool.plugins.validators.stem import StemValidator
+from auto_mixture_tool.data.validator import audit_dataset, validate_dataset
+from .components import HpcClusterExecutor, LocalExecutor
 from .models import JobRecord
 from .registry import ComponentRegistry
 
@@ -21,94 +19,147 @@ from .registry import ComponentRegistry
 class PlatformService:
     def __init__(self, workspace: str | Path | None = None) -> None:
         self.workspace = Path(workspace or Path(__file__).resolve().parents[2]).resolve()
+        self.job_dir = self.workspace / "result" / ".jobs"
         self.algorithms = ComponentRegistry()
-        self.validators = ComponentRegistry()
         self.trainers = ComponentRegistry()
+        self.evaluators = ComponentRegistry()
         self.executors = ComponentRegistry()
-        self.format_validators = ComponentRegistry()
+        self.datasets = ComponentRegistry()
         self.jobs: dict[str, JobRecord] = {}
 
-        # Algorithm plugins: QuadMix plus swappable baselines.
+        # One registration point for every user-switchable component family.
+        self.datasets.register(QuadMixFormatValidator())
         self.algorithms.register(QuadMixAlgorithm())
-        self.algorithms.register(RandomAlgorithm())
-        self.algorithms.register(ManualRatioAlgorithm())
-
-        # Validator plugins: CORE / STEM / custom.
-        core = NanoChatCoreValidator()
-        stem = StemValidator()
-        custom = CustomValidator()
-        self.validators.register(core)
-        self.validators.register(stem)
-        self.validators.register(custom)
-
-        # Trainer plugins. Reusing NanoChat for multiple validator combinations.
-        self.trainers.register(NoTrainer())
-        self.trainers.register(NanoChatTrainer(core))
-        stem_trainer = NanoChatTrainer(stem)
-        stem_trainer.id = "nanochat-stem"
-        stem_trainer.display_name = "NanoChat mid-training + STEM"
-        self.trainers.register(stem_trainer)
-        custom_trainer = NanoChatTrainer(custom)
-        custom_trainer.id = "nanochat-custom"
-        custom_trainer.display_name = "NanoChat mid-training + custom eval"
-        self.trainers.register(custom_trainer)
-
-        # Executor plugins: local subprocess (dev) + HPC cluster API (production).
+        self.trainers.register(NanoChatTrainer())
+        self.evaluators.register(StemValidator())
         self.executors.register(LocalExecutor())
         self.executors.register(HpcClusterExecutor())
 
-        # Format validator plugins: check dataset matches a format standard.
-        self.format_validators.register(QuadMixFormatValidator())
-
     def catalog(self) -> dict[str, Any]:
         return {
+            "datasets": self.datasets.catalog(),
             "algorithms": self.algorithms.catalog(),
             "trainers": self.trainers.catalog(),
-            "validators": self.validators.catalog(),
+            "evaluators": self.evaluators.catalog(),
             "executors": self.executors.catalog(),
-            "format_validators": self.format_validators.catalog(),
         }
 
     def inspect_dataset(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return inspect_dataset(payload["dataset_uri"], payload["schema_uri"], int(payload.get("sample_size", 100)))
+        dataset_id = str(
+            payload.get("dataset_id") or payload.get("format_validator_id") or "quadmix"
+        )
+        dataset = self.datasets.get(dataset_id)
+        report = validate_dataset(
+            self._resolve_local_path(payload["dataset_uri"]),
+            self._resolve_local_path(payload["schema_uri"]),
+            int(payload.get("sample_size", 1000)),
+            format_validator=dataset,
+        )
+        if payload.get("full_scan"):
+            report["full_audit"] = audit_dataset(
+                self._resolve_local_path(payload["dataset_uri"]),
+                self._resolve_local_path(payload["schema_uri"]),
+            )
+            report["valid"] = report["valid"] and report["full_audit"]["valid"]
+            report["errors"] = sorted(
+                set(report["errors"]) | set(report["full_audit"]["errors"])
+            )
+        return report
 
     def create_job(self, payload: dict[str, Any]) -> dict[str, Any]:
-        required = ["dataset_uri", "schema_uri", "algorithm_id", "trainer_id", "validator_id", "executor_id"]
+        required = ["dataset_uri", "schema_uri"]
         missing = [name for name in required if not payload.get(name)]
         if missing:
             raise ValueError(f"missing required fields: {', '.join(missing)}")
 
-        # Gate 1: structural / statistical validation.
-        inspection = self.inspect_dataset(payload)
+        request = dict(payload)
+        request["dataset_uri"] = self._resolve_local_path(payload["dataset_uri"])
+        request["schema_uri"] = self._resolve_local_path(payload["schema_uri"])
+        if request.get("output_uri"):
+            request["output_uri"] = self._resolve_local_path(request["output_uri"])
+        request["dataset_id"] = str(
+            payload.get("dataset_id") or payload.get("format_validator_id") or "quadmix"
+        )
+        request["algorithm_id"] = str(payload.get("algorithm_id") or "quadmix")
+        trainer_id = str(payload.get("trainer_id") or "nanochat")
+        request["trainer_id"] = "nanochat" if trainer_id == "nanochat-stem" else trainer_id
+        request["evaluator_id"] = str(
+            payload.get("evaluator_id") or payload.get("validator_id") or "stem"
+        )
+        request["executor_id"] = str(payload.get("executor_id") or "local")
+        request.pop("format_validator_id", None)
+        request.pop("validator_id", None)
+        for name in ("algorithm_config", "trainer_config", "executor_config"):
+            value = request.get(name, {})
+            if not isinstance(value, dict):
+                raise ValueError(f"{name} must be an object")
+            request[name] = value
+        evaluator_config = request.get("evaluator_config") or request.get("validator_config") or {}
+        if not isinstance(evaluator_config, dict):
+            raise ValueError("evaluator_config must be an object")
+        request["evaluator_config"] = evaluator_config
+        request.pop("validator_config", None)
+
+        # Resolve every selected component before doing the potentially expensive
+        # dataset scan, so configuration errors fail fast and consistently.
+        dataset = self.datasets.get(request["dataset_id"])
+        algorithm = self.algorithms.get(request["algorithm_id"])
+        trainer = self.trainers.get(request["trainer_id"])
+        evaluator = self.evaluators.get(request["evaluator_id"])
+        executor = self.executors.get(request["executor_id"])
+
+        inspection = self.inspect_dataset(request)
         if not inspection["valid"]:
             raise ValueError("dataset validation failed: " + "; ".join(inspection["errors"]))
 
-        # Gate 2: swappable data-format conformance check.
-        format_validator_id = str(payload.get("format_validator_id", "quadmix"))
-        format_check = self.format_validators.get(format_validator_id).validate(payload)
-        if not format_check["valid"]:
-            raise ValueError("dataset format check failed: " + "; ".join(format_check["errors"]))
-
         job_id = uuid.uuid4().hex[:12]
-        request = dict(payload)
         request["job_id"] = job_id
-        algorithm = self.algorithms.get(request["algorithm_id"])
-        validator = self.validators.get(request["validator_id"])
-        trainer = self.trainers.get(request["trainer_id"])
-        if isinstance(trainer, NanoChatTrainer) and trainer.validator.id != validator.id:
-            trainer = NanoChatTrainer(validator)
-        stages = algorithm.build(request, self.workspace) + trainer.build(request, self.workspace)
+        prepared_uri, dataset_stages = dataset.prepare(request, self.workspace)
+        build_request = dict(request)
+        build_request["dataset_uri"] = prepared_uri
+        build_request["_evaluator_env"] = evaluator.environment(
+            request["evaluator_config"]
+        )
+        stages = (
+            dataset_stages
+            + algorithm.build(build_request, self.workspace)
+            + trainer.build(build_request, self.workspace)
+        )
         job = JobRecord(job_id, "VALIDATED", request, stages, request["executor_id"])
         self.jobs[job_id] = job
+        self._save_job(job)
         try:
-            status, external_id, message = self.executors.get(job.executor).submit(job)
+            status, external_id, message = executor.submit(job)
             job.status, job.external_id, job.message = status, external_id, message
         except Exception as exc:
             job.status, job.message = "FAILED", str(exc)
+            self._save_job(job)
             raise
+        self._save_job(job)
         return job.to_dict()
 
     def get_job(self, job_id: str) -> dict[str, Any]:
+        if not re.fullmatch(r"[0-9a-f]{12}", job_id):
+            raise ValueError(f"invalid job id: {job_id}")
         if job_id not in self.jobs:
+            path = self.job_dir / f"{job_id}.json"
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))
             raise ValueError(f"job not found: {job_id}")
         return self.jobs[job_id].to_dict()
+
+    def _save_job(self, job: JobRecord) -> None:
+        self.job_dir.mkdir(parents=True, exist_ok=True)
+        path = self.job_dir / f"{job.id}.json"
+        temporary = self.job_dir / f".{job.id}.tmp"
+        temporary.write_text(
+            json.dumps(job.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+
+    def _resolve_local_path(self, value: Any) -> str:
+        path = Path(str(value)).expanduser()
+        if not path.is_absolute():
+            path = self.workspace / path
+        return str(path.resolve())

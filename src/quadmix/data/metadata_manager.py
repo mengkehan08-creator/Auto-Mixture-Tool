@@ -1,9 +1,9 @@
 """
 ShardMetadataManager — loads metadata (domain + quality signals) from
-preprocessed multi-shard parquet files into memory, supporting
+multi-shard Parquet or JSON files into memory, supporting
 on-demand text loading for selected documents.
 
-Now accepts a DatasetSchema to support arbitrary parquet schemas
+Accepts a DatasetSchema to support arbitrary dataset schemas
 beyond the hardcoded Essential-Web defaults.
 
 Usage:
@@ -39,8 +39,11 @@ import numpy as np
 import numpy.typing as npt
 
 from quadmix.data.dataset_schema import DatasetSchema
+from quadmix.data.record_adapter import adapt_record
 from quadmix.data.shard_io import (
-    _read_shard_metadata_pyarrow,
+    iter_json_records,
+    is_json_shard,
+    read_shard_metadata,
     read_one_shard_texts,
     assemble_texts_array,
 )
@@ -48,11 +51,31 @@ from quadmix.utils.json_utils import sanitize_for_json
 
 
 _CACHE_FILENAME = "metadata_cache.npz"
+_DATA_SUFFIXES = {".parquet", ".json", ".jsonl", ".jsonlines", ".ndjson"}
+_CONTROL_FILES = {"manifest.json", "shard_index.json", "metadata_shard_info.json"}
+
+
+def _schema_cache_key(schema: DatasetSchema) -> str:
+    return json.dumps(
+        {
+            "domain_col": schema.domain_col,
+            "quality_cols": schema.quality_cols,
+            "text_col": schema.text_col,
+            "char_count_col": schema.char_count_col,
+            "row_in_shard_col": schema.row_in_shard_col,
+            "domain_names": schema.domain_names,
+            "quality_directions": schema.quality_directions,
+            "record_adapter": schema.record_adapter,
+            "filter": schema.filter_config,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
 
 
 class ShardMetadataManager:
     """
-    Manages metadata from a directory of preprocessed parquet shards.
+    Manages metadata from a directory of Parquet or JSON shards.
 
     Lazy loading:
       - __init__ reads **only** metadata columns from all shards
@@ -87,12 +110,16 @@ class ShardMetadataManager:
 
     def _init_paths_and_index(self, index_file: Optional[str]) -> None:
         """Discover shard files and load shard_index.json."""
-        self._shard_files: List[str] = sorted(
-            glob.glob(os.path.join(self._dir, "*.parquet"))
+        self._shard_files = sorted(
+            path for path in glob.glob(os.path.join(self._dir, "**", "*"), recursive=True)
+            if os.path.isfile(path)
+            and (os.path.splitext(path)[1].lower() in _DATA_SUFFIXES or is_json_shard(path))
+            and os.path.basename(path) not in _CONTROL_FILES
         )
         if not self._shard_files:
             raise FileNotFoundError(
-                f"No .parquet files found in {self._dir}"
+                f"No supported data files found in {self._dir}; "
+                f"expected parquet, json, jsonl, jsonlines, or ndjson"
             )
 
         self._shard_index: Optional[dict] = None
@@ -122,7 +149,7 @@ class ShardMetadataManager:
         self._shard_info_path = shard_info_path
 
         current_shard_stats = {
-            os.path.basename(f): {"size": os.path.getsize(f), "mtime": os.path.getmtime(f)}
+            os.path.relpath(f, self._dir): {"size": os.path.getsize(f), "mtime": os.path.getmtime(f)}
             for f in self._shard_files
         }
         current_basenames = sorted(current_shard_stats.keys())
@@ -137,15 +164,7 @@ class ShardMetadataManager:
                 cached_basenames = cached_info.get("shard_basenames", [])
                 cached_stats = cached_info.get("shard_stats", {})
                 cached_schema_key = cached_info.get("schema_key", None)
-                current_schema_key = (
-                    f"{self._schema.domain_col}"
-                    f":{','.join(self._schema.quality_cols)}"
-                    f":{self._schema.text_col}"
-                    f":{self._schema.char_count_col}"
-                    f":{self._schema.row_in_shard_col}"
-                    f":domain_names={','.join(self._schema.domain_names or [])}"
-                    f":quality_directions={','.join(str(d) for d in self._schema.quality_directions)}"
-                )
+                current_schema_key = _schema_cache_key(self._schema)
 
                 if cached_basenames == current_basenames and cached_schema_key == current_schema_key:
                     mismatches = []
@@ -202,6 +221,9 @@ class ShardMetadataManager:
             self._num_domains = len(unique_domains)
         self._num_quality_criteria = len(self._schema.quality_cols)
         self._domain_cat_map = cached_info.get("domain_label_map")
+        self._filter_report = cached_info.get(
+            "filter_report", {"scanned": self._num_docs, "accepted": self._num_docs, "rejected": 0, "reasons": {}}
+        )
         self._detected_domain_names = self._build_domain_names(unique_domains)
         self._detected_quality_names = (
             self._schema.quality_names
@@ -235,27 +257,35 @@ class ShardMetadataManager:
         done = 0
         log_interval = max(1, total_shards // 20)
 
-        ctx = mp.get_context("spawn")
-        with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as pool:
-            future_to_idx = {
-                pool.submit(_read_shard_metadata_pyarrow, sf, self._schema): i
-                for i, sf in enumerate(self._shard_files)
-            }
-            for future in as_completed(future_to_idx):
-                i = future_to_idx[future]
-                result = future.result()
-                shard_data[i] = result
-                if result["computed_char_count"]:
-                    _computed_char_count = True
-                done += 1
-                if done % log_interval == 0 or done == total_shards:
-                    elapsed = time.time() - load_t0
-                    pct = done / total_shards * 100
-                    docs_so_far = sum(r["num_docs"] for r in shard_data if r is not None)
-                    eta = elapsed / done * (total_shards - done)
-                    print(f"[ShardMetadataManager] {done}/{total_shards} "
-                          f"({pct:.0f}%) — {docs_so_far:,} docs, "
-                          f"elapsed {elapsed:.0f}s, ETA {eta:.0f}s")
+        if n_workers <= 1:
+            for i, shard_file in enumerate(self._shard_files):
+                shard_data[i] = read_shard_metadata(shard_file, self._schema)
+        else:
+            ctx = mp.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as pool:
+                future_to_idx = {
+                    pool.submit(read_shard_metadata, sf, self._schema): i
+                    for i, sf in enumerate(self._shard_files)
+                }
+                for future in as_completed(future_to_idx):
+                    i = future_to_idx[future]
+                    result = future.result()
+                    shard_data[i] = result
+                    if result["computed_char_count"]:
+                        _computed_char_count = True
+                    done += 1
+                    if done % log_interval == 0 or done == total_shards:
+                        elapsed = time.time() - load_t0
+                        pct = done / total_shards * 100
+                        docs_so_far = sum(r["num_docs"] for r in shard_data if r is not None)
+                        eta = elapsed / done * (total_shards - done)
+                        print(f"[ShardMetadataManager] {done}/{total_shards} "
+                              f"({pct:.0f}%) — {docs_so_far:,} docs, "
+                              f"elapsed {elapsed:.0f}s, ETA {eta:.0f}s")
+
+        for result in shard_data:
+            if result["computed_char_count"]:
+                _computed_char_count = True
 
         if _computed_char_count:
             total_docs = sum(r["num_docs"] for r in shard_data)
@@ -293,6 +323,26 @@ class ShardMetadataManager:
         self._doc_char_counts = np.concatenate(char_count_list)
         self._num_docs = global_start
         self._num_shards = total_shards
+        reason_counts: Dict[str, int] = {}
+        scanned = 0
+        rejected = 0
+        for data in shard_data:
+            report = data.get("filter_report", {})
+            scanned += int(report.get("scanned", data["num_docs"]))
+            rejected += int(report.get("rejected", 0))
+            for reason, count in report.get("reasons", {}).items():
+                reason_counts[reason] = reason_counts.get(reason, 0) + int(count)
+        self._filter_report = {
+            "scanned": scanned,
+            "accepted": self._num_docs,
+            "rejected": rejected,
+            "acceptance_rate": self._num_docs / max(1, scanned),
+            "reasons": dict(sorted(reason_counts.items())),
+        }
+        if self._num_docs == 0:
+            raise ValueError(
+                f"all {scanned} records were rejected by dataset filters: {reason_counts}"
+            )
 
         self._shard_starts = np.array(
             [s["start_idx"] for s in self._per_shard_info], dtype=np.int64
@@ -358,7 +408,7 @@ class ShardMetadataManager:
 
             row_in_shard_cols_concat = np.concatenate(row_col_list)
             row_in_shard_boundaries = np.array(row_in_shard_boundaries, dtype=np.int64)
-            tmp_npz = self._cache_path + ".tmp"
+            tmp_npz = self._cache_path + ".tmp.npz"
             np.savez(tmp_npz,
                      domain_labels=self._domain_labels,
                      quality_scores=self._quality_scores,
@@ -366,21 +416,13 @@ class ShardMetadataManager:
                      row_in_shard_cols_concat=row_in_shard_cols_concat,
                      row_in_shard_boundaries=row_in_shard_boundaries)
             os.replace(tmp_npz, self._cache_path)
-            schema_key = (
-                f"{self._schema.domain_col}"
-                f":{','.join(self._schema.quality_cols)}"
-                f":{self._schema.text_col}"
-                f":{self._schema.char_count_col}"
-                f":{self._schema.row_in_shard_col}"
-                f":domain_names={','.join(self._schema.domain_names or [])}"
-                f":quality_directions={','.join(str(d) for d in self._schema.quality_directions)}"
-            )
             cache_meta = {
                 "shard_basenames": self._cache_basenames,
                 "shard_stats": self._cache_shard_stats,
                 "per_shard_info": self._per_shard_info,
                 "domain_label_map": self._domain_cat_map,
-                "schema_key": schema_key,
+                "schema_key": _schema_cache_key(self._schema),
+                "filter_report": self._filter_report,
             }
             tmp_json = self._shard_info_path + ".tmp"
             with open(tmp_json, "w") as f:
@@ -396,20 +438,43 @@ class ShardMetadataManager:
 
     def _validate_first_shard(self) -> None:
         """Validate schema against first and last shard's columns and dtypes."""
-        import pyarrow.parquet as pq
         check_indices = [0, len(self._shard_files) - 1]
         for idx in check_indices:
             path = self._shard_files[idx]
-            pf = pq.ParquetFile(path)
-            schema_arrow = pf.schema_arrow
-            columns = [f.name for f in schema_arrow]
-            dtypes = {f.name: str(f.type) for f in schema_arrow}
+            if is_json_shard(path):
+                record = None
+                for position, source_record in enumerate(iter_json_records(path)):
+                    adapted, _ = adapt_record(source_record, self._schema, position)
+                    if adapted is not None:
+                        record = adapted
+                        break
+                if record is None:
+                    raise ValueError(f"JSON shard has no structurally valid records: {path}")
+                columns = list(record)
+                dtypes = {}
+                for column, value in record.items():
+                    if column in self._schema.quality_cols and isinstance(value, (int, float)):
+                        dtypes[column] = "float64"
+                    elif isinstance(value, bool):
+                        dtypes[column] = "bool"
+                    elif isinstance(value, int):
+                        dtypes[column] = "int64"
+                    elif isinstance(value, float):
+                        dtypes[column] = "float64"
+                    else:
+                        dtypes[column] = "string"
+            else:
+                import pyarrow.parquet as pq
+                pf = pq.ParquetFile(path)
+                schema_arrow = pf.schema_arrow
+                columns = [f.name for f in schema_arrow]
+                dtypes = {f.name: str(f.type) for f in schema_arrow}
             self._schema._validate(columns, dtypes)
 
         if self._schema.needs_text_for_char_count() and self._schema.text_col not in columns:
             raise ValueError(
                 f"无法计算文档字符数: char_count_col 未指定且 "
-                f"text_col '{self._schema.text_col}' 不存在于 parquet 中。\n"
+                f"text_col '{self._schema.text_col}' 不存在于数据分片中。\n"
                 f"请在 YAML 中指定 char_count_col 或 text_col。\n"
                 f"可用列: {columns}"
             )
@@ -532,6 +597,10 @@ class ShardMetadataManager:
     def schema(self) -> DatasetSchema:
         return self._schema
 
+    @property
+    def filter_report(self) -> dict:
+        return dict(self._filter_report)
+
     # ── Shared memory factory ──
 
     @classmethod
@@ -581,6 +650,13 @@ class ShardMetadataManager:
             else [f"q{n}" for n in range(mgr._num_quality_criteria)]
         )
         mgr._domain_cat_map = domain_label_map
+        mgr._filter_report = {
+            "scanned": len(domain_labels),
+            "accepted": len(domain_labels),
+            "rejected": 0,
+            "acceptance_rate": 1.0,
+            "reasons": {},
+        }
         valid_labels = domain_labels[domain_labels >= 0]
         mgr._domain_counts = np.bincount(valid_labels, minlength=mgr._num_domains)
         mgr._has_row_in_shard = (schema is not None and schema.row_in_shard_col is not None)

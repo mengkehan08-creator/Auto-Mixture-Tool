@@ -1,5 +1,5 @@
 """
-DatasetSchema — YAML-driven configuration that maps parquet column names
+DatasetSchema — YAML-driven configuration that maps dataset field names
 to algorithm concepts (domain, quality, text, char_count).
 
 Decouples QuaDMix from any specific dataset schema so that arbitrary
@@ -9,7 +9,7 @@ Usage:
     # From YAML file (唯一入口)
     schema = DatasetSchema.from_yaml("configs/schema_essential_web.yaml")
 
-    # Validate against a parquet file
+    # Validate against a data shard
     schema._validate(parquet_columns, parquet_dtypes)
 
     # Access parsed config
@@ -25,7 +25,7 @@ DatasetSchema() 无参构造会报错 — 必须通过 from_yaml() 加载配置�
 
 import yaml
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _parse_quality_cols(raw: list) -> Tuple[List[str], List[bool]]:
@@ -58,6 +58,8 @@ class DatasetSchema:
     row_in_shard_col: Optional[str] = None
     domain_names: Optional[List[str]] = None
     quality_names: Optional[List[str]] = None
+    record_adapter: Optional[str] = None
+    filter_config: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         if self.domain_col is None and self.quality_cols is None and self.text_col is None:
@@ -76,7 +78,7 @@ class DatasetSchema:
     @classmethod
     def from_yaml(cls, path: str) -> "DatasetSchema":
         """Load DatasetSchema from a YAML file."""
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
 
         if data is None:
@@ -94,6 +96,12 @@ class DatasetSchema:
             )
 
         col_names, directions = _parse_quality_cols(raw_quality)
+        filter_config = data.get("filter", {})
+        if not isinstance(filter_config, dict):
+            raise ValueError("YAML filter 字段必须是 mapping/object")
+        record_adapter = data.get("record_adapter")
+        if record_adapter is not None and not isinstance(record_adapter, str):
+            raise ValueError("YAML record_adapter 字段必须是字符串")
 
         return cls(
             domain_col=data.get("domain_col"),
@@ -104,6 +112,8 @@ class DatasetSchema:
             row_in_shard_col=data.get("row_in_shard_col"),
             domain_names=data.get("domain_names"),
             quality_names=data.get("quality_names"),
+            record_adapter=record_adapter,
+            filter_config=filter_config,
         )
 
     def _validate(
@@ -111,7 +121,7 @@ class DatasetSchema:
         parquet_columns: List[str],
         parquet_dtypes: Dict[str, str],
     ) -> None:
-        """Check that all specified columns exist in the parquet with correct dtype.
+        """Check that all specified fields exist with compatible types.
 
         Raises ValueError with available columns if any mismatch.
         """

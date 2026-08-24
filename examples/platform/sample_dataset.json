@@ -1,0 +1,5 @@
+{"text":"Solve the equation x plus two equals five.","domain":"math","relevance":0.94,"noise":0.02,"char_count":38}
+{"text":"Newton's laws describe the motion of bodies.","domain":"physics","relevance":0.88,"noise":0.03,"char_count":45}
+{"text":"Cells use DNA to store genetic information.","domain":"biology","relevance":0.91,"noise":0.01,"char_count":43}
+{"text":"The derivative measures an instantaneous rate of change.","domain":"math","relevance":0.90,"noise":0.04,"char_count":55}
+{"text":"Energy is conserved in an isolated system.","domain":"physics","relevance":0.86,"noise":0.02,"char_count":43}

@@ -25,13 +25,15 @@ rule groups can be disabled per-request via ``request["format_options"]``
 from __future__ import annotations
 
 import hashlib
+import math
 from pathlib import Path
 from typing import Any
 
 from quadmix.data.dataset_schema import DatasetSchema
+from quadmix.data.shard_io import is_json_shard
 from quadmix_platform.dataset_inspector import (
-    SUPPORTED_SUFFIXES,
-    _first_data_file,
+    _data_files,
+    _adapt_sample,
     _read_sample,
 )
 
@@ -46,6 +48,7 @@ _REPLACEMENT_CHAR = "\ufffd"
 # Only hash the first chunk of a shard to catch exact-duplicate ingestion
 # without reading multi-GB parquet files into memory.
 _DUP_HASH_BYTES = 8 * 1024 * 1024
+_NATIVE_SUFFIXES = {".json", ".jsonl", ".jsonlines", ".ndjson", ".parquet"}
 
 
 class QuadMixFormatValidator(FormatValidatorAdapter):
@@ -85,10 +88,25 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
 
         # Read the sample (encoding errors are caught and reported cleanly).
         try:
-            source = _first_data_file(dataset_path)
-            rows, dtypes, total_rows = _read_sample(
-                source, max(1, min(sample_size, 10000))
-            )
+            sources = _data_files(dataset_path)
+            limit = max(1, min(sample_size, 10000))
+            per_file_limit = max(1, math.ceil(limit / len(sources)))
+            rows: list[dict[str, Any]] = []
+            file_dtypes: dict[str, dict[str, str]] = {}
+            totals: list[int | None] = []
+            for source in sources:
+                file_rows, _, total_rows = _read_sample(source, per_file_limit)
+                file_rows, dtypes, filter_report = _adapt_sample(file_rows, schema)
+                rows.extend(file_rows)
+                file_dtypes[str(source)] = dtypes
+                totals.append(total_rows)
+                details.setdefault("filter_preview_by_file", {})[str(source)] = filter_report
+                if filter_report["rejected"]:
+                    warnings.append(
+                        f"{source.name}: 样本过滤通过 {filter_report['accepted']}/"
+                        f"{filter_report['scanned']}，原因={filter_report['reasons']}"
+                    )
+            rows = rows[:limit]
         except UnicodeDecodeError as exc:
             return {
                 "valid": False,
@@ -104,11 +122,21 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
                 "details": details,
             }
 
-        columns = list(dtypes)
-        details["inspected_file"] = str(source)
-        details["total_rows"] = total_rows
+        details["inspected_files"] = [str(source) for source in sources]
+        unsupported = [
+            source.name for source in sources
+            if source.suffix.lower() not in _NATIVE_SUFFIXES and not is_json_shard(str(source))
+        ]
+        if unsupported:
+            errors.append(
+                "当前 QuadMix 原生读取仅支持 JSON/JSONL/Parquet；"
+                f"不支持且不会自动转换: {unsupported[:10]}"
+            )
+        details["total_rows"] = sum(value for value in totals if value is not None) if all(
+            value is not None for value in totals
+        ) else None
         details["sampled_rows"] = len(rows)
-        details["column_dtypes"] = dtypes
+        details["column_dtypes_by_file"] = file_dtypes
 
         if not rows:
             return {
@@ -122,20 +150,26 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
         required = [schema.domain_col] + list(schema.quality_cols) + [schema.text_col]
         if schema.char_count_col is not None:
             required.append(schema.char_count_col)
-        missing_cols = [col for col in required if col not in columns]
-        if missing_cols:
-            errors.append(f"缺少 QuadMix 必需列: {missing_cols}")
-            # Without required columns the remaining checks are meaningless.
-            return {
-                "valid": False,
-                "errors": errors,
-                "warnings": warnings,
-                "details": details,
-            }
+        for source_name, dtypes in file_dtypes.items():
+            missing_cols = [col for col in required if col not in dtypes]
+            if missing_cols:
+                errors.append(f"{Path(source_name).name}: 缺少 QuadMix 必需列: {missing_cols}")
 
         # 2) Column types.
         if options.get("check_column_types", True):
-            self._check_column_types(schema, dtypes, errors, warnings, details)
+            type_reports: dict[str, Any] = {}
+            for source_name, dtypes in file_dtypes.items():
+                local_errors: list[str] = []
+                local_warnings: list[str] = []
+                local_details: dict[str, Any] = {}
+                self._check_column_types(
+                    schema, dtypes, local_errors, local_warnings, local_details
+                )
+                prefix = Path(source_name).name
+                errors.extend(f"{prefix}: {message}" for message in local_errors)
+                warnings.extend(f"{prefix}: {message}" for message in local_warnings)
+                type_reports[source_name] = local_details.get("column_types", {})
+            details["column_types_by_file"] = type_reports
 
         # 3) Domain labels: present and are the expected labels.
         self._check_domain_labels(schema, rows, errors, warnings, details)
@@ -321,10 +355,7 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
             details["duplicate_files"] = {"is_directory": False}
             return
 
-        files = sorted(
-            p for p in dataset_path.rglob("*")
-            if p.suffix.lower() in SUPPORTED_SUFFIXES and p.is_file()
-        )
+        files = _data_files(dataset_path)
         by_name: dict[str, list[str]] = {}
         for f in files:
             by_name.setdefault(f.name, []).append(str(f))
