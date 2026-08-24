@@ -88,15 +88,22 @@ def _adapt_sample(
     rows: list[dict[str, Any]], schema: DatasetSchema
 ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, Any]]:
     accepted: list[dict[str, Any]] = []
+    compatible: list[dict[str, Any]] = []
     reasons: Counter[str] = Counter()
     for position, source_record in enumerate(rows):
         record, local_reasons = adapt_record(source_record, schema, position)
+        if record is not None:
+            # A record may be structurally compatible with the schema while
+            # still failing a configured quality gate.  Keep it for schema
+            # and dtype inference so a fully filtered shard is not reported
+            # as having zero columns.
+            compatible.append(record)
         if record is None or local_reasons:
             reasons.update(local_reasons or ["adapter_rejected"])
         else:
             accepted.append(record)
-    columns = sorted({key for row in accepted for key in row})
-    return accepted, _infer_types(accepted, columns), {
+    columns = sorted({key for row in compatible for key in row})
+    return accepted, _infer_types(compatible, columns), {
         "scanned": len(rows),
         "accepted": len(accepted),
         "rejected": len(rows) - len(accepted),

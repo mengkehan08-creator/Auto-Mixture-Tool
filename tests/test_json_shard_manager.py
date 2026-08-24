@@ -175,6 +175,57 @@ class JsonShardMetadataTests(unittest.TestCase):
             "数学": 1, "化学": 1, "生物学": 1, "物理": 1,
         })
 
+    def test_fully_filtered_shard_does_not_report_missing_schema_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "part-00490").write_text(
+                json.dumps(_source_record(relevance=2), ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (root / "part-00491").write_text(
+                json.dumps(_source_record(), ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            report = PlatformService(ROOT).inspect_dataset({
+                "dataset_uri": directory,
+                "schema_uri": str(ROOT / "configs" / "schema_stem_sample_json.yaml"),
+                "dataset_id": "quadmix",
+                "sample_size": 2,
+            })
+
+        self.assertTrue(report["valid"], report["errors"])
+        self.assertFalse(any("缺少" in error for error in report["errors"]))
+        self.assertTrue(any(
+            "part-00490" in warning and "stem_relevance_below_min" in warning
+            for warning in report["warnings"]
+        ))
+
+    def test_structurally_invalid_shard_still_reports_missing_columns(self) -> None:
+        invalid = _source_record()
+        invalid.pop("stem_quality_eval")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "part-00490").write_text(
+                json.dumps(invalid, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (root / "part-00491").write_text(
+                json.dumps(_source_record(), ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            report = PlatformService(ROOT).inspect_dataset({
+                "dataset_uri": directory,
+                "schema_uri": str(ROOT / "configs" / "schema_stem_sample_json.yaml"),
+                "dataset_id": "quadmix",
+                "sample_size": 2,
+            })
+
+        self.assertFalse(report["valid"])
+        self.assertTrue(any(
+            "part-00490" in error and "缺少" in error
+            for error in report["errors"]
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()
