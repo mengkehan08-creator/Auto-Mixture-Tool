@@ -76,12 +76,13 @@ class StemJsonParquetTests(unittest.TestCase):
                 json.dumps(_source_record(), ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
+            (root / "part-00200").write_text("not-json\n", encoding="utf-8")
             service = PlatformService(ROOT)
             service.executors.get("local").submit = lambda job: (
                 "SUCCEEDED", f"stub-{job.id}", "stubbed submission",
             )
             job = service.create_job({
-                "dataset_uri": str(dataset),
+                "dataset_uri": str(root),
                 "schema_uri": str(SOURCE_SCHEMA_PATH),
                 "dataset_id": "stem-json-parquet",
                 "output_uri": str(root / "result"),
@@ -89,7 +90,12 @@ class StemJsonParquetTests(unittest.TestCase):
                 "trainer_id": "nanochat",
                 "evaluator_id": "stem",
                 "executor_id": "local",
-                "dataset_config": {"rows_per_group": 128, "compression": "zstd"},
+                "dataset_config": {
+                    "shard_start": 0,
+                    "shard_end": 199,
+                    "rows_per_group": 128,
+                    "compression": "zstd",
+                },
                 "algorithm_config": {"device_type": "cpu", "npu_devices": 1},
                 "trainer_config": {"npu_devices": 1},
                 "executor_config": {"device_type": "cpu", "device_count": 1},
@@ -114,6 +120,9 @@ class StemJsonParquetTests(unittest.TestCase):
             Path(job["stages"][2]["env"]["SCHEMA_CONFIG"]),
             OUTPUT_SCHEMA_PATH,
         )
+        conversion_args = job["stages"][0]["args"]
+        self.assertEqual(conversion_args[conversion_args.index("--shard-start") + 1], "0")
+        self.assertEqual(conversion_args[conversion_args.index("--shard-end") + 1], "199")
 
     def test_plugin_rejects_source_schema_without_stem_adapter(self) -> None:
         plugin = StemJsonParquetDataset()

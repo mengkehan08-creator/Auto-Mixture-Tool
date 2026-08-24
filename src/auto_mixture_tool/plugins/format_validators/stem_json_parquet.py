@@ -30,7 +30,11 @@ class StemJsonParquetDataset(QuadMixFormatValidator):
                 )
             unsupported = [
                 source.name
-                for source in _data_files(Path(str(request["dataset_uri"])).resolve())
+                for source in _data_files(
+                    Path(str(request["dataset_uri"])).resolve(),
+                    request.get("dataset_config", {}).get("shard_start"),
+                    request.get("dataset_config", {}).get("shard_end"),
+                )
                 if not is_json_shard(str(source))
             ]
             if unsupported:
@@ -54,6 +58,8 @@ class StemJsonParquetDataset(QuadMixFormatValidator):
         compression = str(config.get("compression", "zstd")).lower()
         if compression not in {"zstd", "snappy", "gzip", "brotli", "lz4", "none"}:
             raise ValueError("unsupported dataset_config.compression")
+        shard_start = config.get("shard_start")
+        shard_end = config.get("shard_end")
 
         output_root = Path(
             request.get("output_uri")
@@ -72,6 +78,10 @@ class StemJsonParquetDataset(QuadMixFormatValidator):
             "--rows-per-group", str(rows_per_group),
             "--compression", compression,
         ]
+        if shard_start is not None:
+            args.extend(["--shard-start", str(int(shard_start))])
+        if shard_end is not None:
+            args.extend(["--shard-end", str(int(shard_end))])
         stage = CommandSpec(
             "dataset-filter-convert-parquet",
             "python",

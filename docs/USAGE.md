@@ -100,6 +100,16 @@ schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json
 
 转换产物位于 `<output_uri>/prepared_parquet_<job_id>/`，过滤数量、拒绝原因、领域分布、输出列和二次校验结果写入 `<output_uri>/conversion_report_<job_id>.json`。
 
+分片范围通过数字后缀配置，首尾均包含：
+
+```yaml
+dataset_config:
+  shard_start: 0
+  shard_end: 199   # part-00000 到 part-00199，共 200 份；后续改为 1000
+```
+
+编号按数值解析，不依赖补零宽度。源数据抽样校验、完整审查和 Parquet 转换使用同一范围。
+
 需要跳过转换、直接读取已经符合算法契约的 JSON/JSONL/Parquet 时，可改用 `dataset_id: quadmix`。
 
 实际 `part-*` 分片没有扩展名，平台会将其识别为逐行 JSON。`schema_stem_sample_json.yaml` 将嵌套质检字段映射为 QuadMix 的域和质量分，并按配置过滤。API 使用 `full_scan: true` 可获得全量过滤统计和算法兼容性报告。

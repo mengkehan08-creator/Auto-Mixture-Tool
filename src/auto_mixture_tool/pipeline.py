@@ -38,6 +38,7 @@ class PipelineManager:
         sample_size: int = 1000,
         dataset_id: str = "quadmix",
         full_scan: bool = False,
+        dataset_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Validate a dataset against a schema with extended statistics.
 
@@ -49,6 +50,7 @@ class PipelineManager:
             "sample_size": sample_size,
             "dataset_id": dataset_id,
             "full_scan": full_scan,
+            "dataset_config": dataset_config or {},
         })
 
     def submit(self, payload: dict[str, Any]) -> dict[str, Any]:

@@ -66,6 +66,8 @@ def convert_dataset(
     report_uri: str,
     rows_per_group: int = 10_000,
     compression: str = "zstd",
+    shard_start: int | None = None,
+    shard_end: int | None = None,
 ) -> dict[str, Any]:
     try:
         import pyarrow as pa
@@ -75,7 +77,9 @@ def convert_dataset(
 
     source_schema = DatasetSchema.from_yaml(source_schema_uri)
     output_schema = DatasetSchema.from_yaml(output_schema_uri)
-    sources = _data_files(Path(input_uri).expanduser().resolve())
+    sources = _data_files(
+        Path(input_uri).expanduser().resolve(), shard_start, shard_end
+    )
     unsupported = [str(source) for source in sources if not is_json_shard(str(source))]
     if unsupported:
         raise RuntimeError(
@@ -138,6 +142,7 @@ def convert_dataset(
     report: dict[str, Any] = {
         "source_unchanged": True,
         "source_files": len(sources),
+        "shard_range": {"start": shard_start, "end": shard_end},
         "output_files": output_files,
         "scanned": scanned,
         "accepted": accepted,
@@ -180,6 +185,8 @@ def main() -> None:
     parser.add_argument("--report", required=True)
     parser.add_argument("--rows-per-group", type=int, default=10_000)
     parser.add_argument("--compression", default="zstd")
+    parser.add_argument("--shard-start", type=int)
+    parser.add_argument("--shard-end", type=int)
     args = parser.parse_args()
     try:
         report = convert_dataset(
@@ -190,6 +197,8 @@ def main() -> None:
             args.report,
             args.rows_per_group,
             args.compression,
+            args.shard_start,
+            args.shard_end,
         )
     except Exception as exc:  # noqa: BLE001 - command boundary
         message = str(exc)

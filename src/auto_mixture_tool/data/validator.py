@@ -100,6 +100,7 @@ def validate_dataset(
     schema_path: str,
     sample_size: int = 1000,
     format_validator: Any | None = None,
+    dataset_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the base inspector plus extended statistics and a format check.
 
@@ -111,12 +112,19 @@ def validate_dataset(
     Returns a dict with ``valid``, ``errors``, ``warnings``, ``base`` (the
     original inspector output), ``statistics``, and ``format_check``.
     """
-    base = _base_inspect(dataset_path, schema_path, sample_size)
+    dataset_config = dataset_config or {}
+    shard_start = dataset_config.get("shard_start")
+    shard_end = dataset_config.get("shard_end")
+    base = _base_inspect(
+        dataset_path, schema_path, sample_size, shard_start, shard_end
+    )
     schema = DatasetSchema.from_yaml(str(Path(schema_path).expanduser().resolve()))
 
     # Re-read the sample as plain rows for extended stats.
     from quadmix_platform.dataset_inspector import _adapt_sample, _data_files, _read_sample
-    sources = _data_files(Path(dataset_path).expanduser().resolve())
+    sources = _data_files(
+        Path(dataset_path).expanduser().resolve(), shard_start, shard_end
+    )
     limit = max(1, min(sample_size, 10000))
     per_file_limit = max(1, (limit + len(sources) - 1) // len(sources))
     rows: list[dict[str, Any]] = []
@@ -158,7 +166,12 @@ def validate_dataset(
         format_validator = QuadMixFormatValidator()
     try:
         format_check = format_validator.validate(
-            {"dataset_uri": dataset_path, "schema_uri": schema_path, "sample_size": sample_size}
+            {
+                "dataset_uri": dataset_path,
+                "schema_uri": schema_path,
+                "sample_size": sample_size,
+                "dataset_config": dataset_config,
+            }
         )
     except Exception as exc:  # noqa: BLE001 - never let format check crash validation
         format_check = {
@@ -189,7 +202,11 @@ def validate_dataset(
     }
 
 
-def audit_dataset(dataset_path: str, schema_path: str) -> dict[str, Any]:
+def audit_dataset(
+    dataset_path: str,
+    schema_path: str,
+    dataset_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Scan every native shard and report algorithm compatibility/filtering.
 
     Unlike the sample-based preflight validator, this function reads every
@@ -199,7 +216,12 @@ def audit_dataset(dataset_path: str, schema_path: str) -> dict[str, Any]:
     from quadmix_platform.dataset_inspector import _data_files
 
     schema = DatasetSchema.from_yaml(str(Path(schema_path).expanduser().resolve()))
-    sources = _data_files(Path(dataset_path).expanduser().resolve())
+    dataset_config = dataset_config or {}
+    sources = _data_files(
+        Path(dataset_path).expanduser().resolve(),
+        dataset_config.get("shard_start"),
+        dataset_config.get("shard_end"),
+    )
     scanned = accepted = rejected = 0
     reasons: dict[str, int] = {}
     errors: list[str] = []

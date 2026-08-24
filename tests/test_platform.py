@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from quadmix import DatasetSchema
-from quadmix_platform.dataset_inspector import inspect_dataset
+from quadmix_platform.dataset_inspector import _data_files, inspect_dataset
 from quadmix_platform.service import PlatformService
 from quadmix_platform.components import HpcClusterExecutor, LocalExecutor
 from quadmix_platform.models import CommandSpec, JobRecord
@@ -73,6 +73,24 @@ class DatasetInspectionTests(unittest.TestCase):
             path.write_text(json.dumps([{"text": "ok"}, "not-an-object"]), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "JSON record must be an object"):
                 inspect_dataset(str(path), str(SCHEMA))
+
+    def test_numeric_shard_range_is_inclusive_and_ignores_zero_padding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("part-00000", "part-00199", "part-00200", "part-001000"):
+                (root / name).write_text('{}\n', encoding="utf-8")
+
+            first_200 = _data_files(root, 0, 199)
+            through_1000 = _data_files(root, 0, 1000)
+
+        self.assertEqual(
+            [path.name for path in first_200],
+            ["part-00000", "part-00199"],
+        )
+        self.assertEqual(
+            [path.name for path in through_1000],
+            ["part-00000", "part-00199", "part-00200", "part-001000"],
+        )
 
 
 class ServiceTests(unittest.TestCase):

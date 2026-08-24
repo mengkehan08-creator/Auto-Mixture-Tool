@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import math
+import re
 from collections import Counter
 from itertools import islice
 from pathlib import Path
@@ -18,19 +19,59 @@ SUPPORTED_SUFFIXES = {
 CONTROL_FILENAMES = {"manifest.json", "shard_index.json", "metadata_shard_info.json"}
 
 
-def _data_files(path: Path) -> list[Path]:
+def _data_files(
+    path: Path,
+    shard_start: int | None = None,
+    shard_end: int | None = None,
+) -> list[Path]:
+    try:
+        shard_start = int(shard_start) if shard_start is not None else None
+        shard_end = int(shard_end) if shard_end is not None else None
+    except (TypeError, ValueError) as exc:
+        raise ValueError("shard_start and shard_end must be integers") from exc
+    if shard_start is not None and shard_start < 0:
+        raise ValueError("shard_start must not be negative")
+    if shard_end is not None and shard_end < 0:
+        raise ValueError("shard_end must not be negative")
+    if shard_start is not None and shard_end is not None and shard_start > shard_end:
+        raise ValueError("shard_start must not exceed shard_end")
     if path.is_file():
         if path.suffix.lower() not in SUPPORTED_SUFFIXES and not is_json_shard(str(path)):
             raise ValueError(f"unsupported dataset file: {path}")
-        return [path]
-    if not path.is_dir():
+        files = [path]
+    elif not path.is_dir():
         raise ValueError(f"dataset path does not exist: {path}")
-    files = sorted(
-        p for p in path.rglob("*")
-        if p.is_file() and (p.suffix.lower() in SUPPORTED_SUFFIXES or is_json_shard(str(p)))
-        and p.name not in CONTROL_FILENAMES
-    )
+    else:
+        files = sorted(
+            p for p in path.rglob("*")
+            if p.is_file() and (p.suffix.lower() in SUPPORTED_SUFFIXES or is_json_shard(str(p)))
+            and p.name not in CONTROL_FILENAMES
+        )
+    if shard_start is not None or shard_end is not None:
+        selected: list[tuple[int, Path]] = []
+        for source in files:
+            match = re.search(r"part-(\d+)", source.name)
+            if not match:
+                continue
+            shard_index = int(match.group(1))
+            if shard_start is not None and shard_index < shard_start:
+                continue
+            if shard_end is not None and shard_index > shard_end:
+                continue
+            selected.append((shard_index, source))
+        files = [
+            source
+            for _, source in sorted(
+                selected, key=lambda item: (item[0], str(item[1]))
+            )
+        ]
     if not files:
+        if shard_start is not None or shard_end is not None:
+            raise ValueError(
+                f"no supported data files matched shard range "
+                f"[{shard_start if shard_start is not None else '*'}, "
+                f"{shard_end if shard_end is not None else '*'}] under: {path}"
+            )
         raise ValueError(f"no supported data files found under: {path}")
     return files
 
@@ -121,8 +162,16 @@ def _is_float(value: Any) -> bool:
         return False
 
 
-def inspect_dataset(dataset_path: str, schema_path: str, sample_size: int = 100) -> dict[str, Any]:
-    sources = _data_files(Path(dataset_path).expanduser().resolve())
+def inspect_dataset(
+    dataset_path: str,
+    schema_path: str,
+    sample_size: int = 100,
+    shard_start: int | None = None,
+    shard_end: int | None = None,
+) -> dict[str, Any]:
+    sources = _data_files(
+        Path(dataset_path).expanduser().resolve(), shard_start, shard_end
+    )
     schema_file = Path(schema_path).expanduser().resolve()
     schema = DatasetSchema.from_yaml(str(schema_file))
     limit = max(1, min(sample_size, 10000))
@@ -192,6 +241,7 @@ def inspect_dataset(dataset_path: str, schema_path: str, sample_size: int = 100)
         "dataset_path": str(Path(dataset_path).resolve()),
         "inspected_file": str(sources[0]),
         "inspected_files": [str(source) for source in sources],
+        "shard_range": {"start": shard_start, "end": shard_end},
         "schema_path": str(schema_file),
         "format": (
             "json" if is_json_shard(str(sources[0]))

@@ -58,11 +58,13 @@ class PlatformService:
             self._resolve_local_path(payload["schema_uri"]),
             int(payload.get("sample_size", 1000)),
             format_validator=dataset,
+            dataset_config=payload.get("dataset_config", {}),
         )
         if payload.get("full_scan"):
             report["full_audit"] = audit_dataset(
                 self._resolve_local_path(payload["dataset_uri"]),
                 self._resolve_local_path(payload["schema_uri"]),
+                payload.get("dataset_config", {}),
             )
             report["valid"] = report["valid"] and report["full_audit"]["valid"]
             report["errors"] = sorted(

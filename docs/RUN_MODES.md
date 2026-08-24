@@ -10,6 +10,8 @@ Auto-Mixture-Tool 只提供两个执行后端：本地八卡开发环境使用 `
 dataset_id: stem-json-parquet
 dataset_config:
   output_schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_quadmix_parquet.yaml
+  shard_start: 0
+  shard_end: 199
   rows_per_group: 10000
   compression: zstd
 

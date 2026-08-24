@@ -68,6 +68,9 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
         schema_uri = str(request["schema_uri"])
         sample_size = int(request.get("sample_size", 1000))
         options = request.get("format_options", {}) or {}
+        dataset_config = request.get("dataset_config", {}) or {}
+        shard_start = dataset_config.get("shard_start")
+        shard_end = dataset_config.get("shard_end")
 
         errors: list[str] = []
         warnings: list[str] = []
@@ -88,7 +91,7 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
 
         # Read the sample (encoding errors are caught and reported cleanly).
         try:
-            sources = _data_files(dataset_path)
+            sources = _data_files(dataset_path, shard_start, shard_end)
             limit = max(1, min(sample_size, 10000))
             per_file_limit = max(1, math.ceil(limit / len(sources)))
             rows: list[dict[str, Any]] = []
@@ -123,6 +126,7 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
             }
 
         details["inspected_files"] = [str(source) for source in sources]
+        details["shard_range"] = {"start": shard_start, "end": shard_end}
         unsupported = [
             source.name for source in sources
             if source.suffix.lower() not in _NATIVE_SUFFIXES and not is_json_shard(str(source))
@@ -190,7 +194,7 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
 
         # 7) Duplicate shard files within a directory dataset.
         if options.get("check_duplicate_files", True):
-            self._check_duplicate_files(dataset_path, warnings, details)
+            self._check_duplicate_files(dataset_path, warnings, details, sources)
 
         return {
             "valid": len(errors) == 0,
@@ -354,12 +358,13 @@ class QuadMixFormatValidator(FormatValidatorAdapter):
         dataset_path: Path,
         warnings: list[str],
         details: dict[str, Any],
+        selected_files: list[Path] | None = None,
     ) -> None:
         if dataset_path.is_file():
             details["duplicate_files"] = {"is_directory": False}
             return
 
-        files = _data_files(dataset_path)
+        files = selected_files or _data_files(dataset_path)
         by_name: dict[str, list[str]] = {}
         for f in files:
             by_name.setdefault(f.name, []).append(str(f))

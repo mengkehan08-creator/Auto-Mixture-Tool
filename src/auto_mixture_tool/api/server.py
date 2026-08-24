@@ -25,6 +25,7 @@ class InspectRequest(BaseModel):
     dataset_id: str = "quadmix"
     format_validator_id: str | None = None
     full_scan: bool = False
+    dataset_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class JobRequest(BaseModel):
@@ -82,6 +83,7 @@ def inspect(payload: InspectRequest) -> dict[str, Any]:
             payload.sample_size,
             payload.format_validator_id or payload.dataset_id,
             payload.full_scan,
+            payload.dataset_config,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
