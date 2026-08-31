@@ -27,24 +27,29 @@ QuaDMix 使用前两个变量分配代理实验；NanoChat 还使用
 
 ## 2. 每次改变节点数需要修改的字段
 
-### 必须修改：`.env.modelarts`
+### 必须修改：`modelarts_training_job.py`
 
-```env
-MODELARTS_NODE_COUNT=<目标节点数>
+编辑脚本顶部的配置字典：
+
+```python
+MODELARTS_CONFIG = {
+    # 其他字段省略
+    "MODELARTS_NODE_COUNT": 目标节点数,
+}
 ```
 
 例如四节点：
 
-```env
-MODELARTS_NODE_COUNT=4
+```python
+"MODELARTS_NODE_COUNT": 4,
 ```
 
 如果新的节点数量仍使用相同的“单节点 8 卡”规格，`MODELARTS_FLAVOR_ID` 不需要
 修改。只有切换了单节点资源规格或资源池时，才修改：
 
-```env
-MODELARTS_FLAVOR_ID=<新的单节点规格ID>
-MODELARTS_POOL_ID=<能够提供目标节点数的资源池ID>
+```python
+"MODELARTS_FLAVOR_ID": "新的单节点规格ID",
+"MODELARTS_POOL_ID": "能够提供目标节点数的资源池ID",
 ```
 
 ### 必须检查：`examples/configs/modelarts_pipeline.yaml`
@@ -83,11 +88,11 @@ num_experiments >= N × 8
 | 4 | 32 | `NODE_COUNT=4` | 32 | 每节点8个 |
 | 8 | 64 | `NODE_COUNT=8` | 64 | 每节点8个 |
 
-这里的 `NODE_COUNT` 是 `.env.modelarts` 中的 `MODELARTS_NODE_COUNT`。例如从
-两节点改为八节点：
+这里的 `NODE_COUNT` 是 `modelarts_training_job.py` 中的
+`MODELARTS_CONFIG["MODELARTS_NODE_COUNT"]`。例如从两节点改为八节点：
 
-```env
-MODELARTS_NODE_COUNT=8
+```python
+"MODELARTS_NODE_COUNT": 8,
 ```
 
 ```yaml
@@ -134,7 +139,7 @@ executor_config:
 
 ```bash
 cd /home/ma-user/work/Auto-Mixture-Tool
-python3 modelarts_training_job.py --env-file .env.modelarts --dry-run
+python3 modelarts_training_job.py --dry-run
 ```
 
 确认输出中的：
@@ -157,7 +162,7 @@ algorithm.environments.NUM_NPU = 8
 确认后提交：
 
 ```bash
-python3 modelarts_training_job.py --env-file .env.modelarts
+python3 modelarts_training_job.py
 ```
 
 ## 6. 日志验收

@@ -119,34 +119,38 @@ status_map:
 ModelArts 使用仓库根目录的独立提交入口：
 
 ```bash
-cp .env.modelarts.example .env.modelarts
-# 编辑 .env.modelarts，填写新的 Authorization、endpoint、资源池、镜像和 OBS 路径
+# 编辑 modelarts_training_job.py 顶部的 MODELARTS_CONFIG
 python modelarts_training_job.py --dry-run
 python modelarts_training_job.py
 ```
 
-`.env.modelarts` 已被 Git 忽略。不要把 Authorization 写入 Python、YAML 或提交记录。
+Authorization、endpoint、镜像、OBS输入输出和资源参数直接写在提交脚本的
+`MODELARTS_CONFIG` 中。真实Authorization只能保留在本地副本，不要提交到Git。
+算法、训练、评测和执行器参数写在 `examples/configs/modelarts_pipeline.yaml`。
 
 该脚本向 ModelArts `training-jobs` API 提交一个训练作业。远端容器依次执行：
 
 ```bash
 cd /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool
-python -m pip install -e . --no-deps
-auto-mixture run /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool/examples/configs/modelarts_pipeline.yaml
+export PYTHONPATH=/home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool/src
+python3 -m auto_mixture_tool.cli run /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool/examples/configs/modelarts_pipeline.yaml
 ```
 
 容器内配置 `examples/configs/modelarts_pipeline.yaml` 使用 `executor_id: local`，在同一个八卡任务内完成数据校验、QuadMix、NanoChat、STEM 和结果写出。不能在这个配置里使用 `hpc-cluster`，否则会在 ModelArts 任务内部再次提交远端任务。
 
 ModelArts 输入挂载约定：
 
-| 输入 | 容器路径 | 环境配置 |
+| 输入 | 容器路径 | `MODELARTS_CONFIG` 字段 |
 |---|---|---|
-| STEM 原始数据 | `/home/ma-user/modelarts/inputs/data-url_0` | `MODELARTS_DATA_OBS_URL` |
-| NanoChat 代码 | `/home/ma-user/modelarts/inputs/nanochat-repo_1` | `MODELARTS_NANOCHAT_REPO_OBS_URL` |
-| NanoChat 模型目录 | `/home/ma-user/modelarts/inputs/nanochat-model_2` | `MODELARTS_NANOCHAT_MODEL_OBS_URL` |
-| 结果输出 | `/home/ma-user/modelarts/outputs/train_url_0` | `MODELARTS_OUTPUT_OBS_URL` |
+| QuaDMix标准Parquet | `/home/ma-user/modelarts/inputs/data_dir_0` | `MODELARTS_DATA_OBS_URL` |
+| NanoChat模型目录 | `/home/ma-user/modelarts/inputs/nanochat_model_dir_1` | `MODELARTS_NANOCHAT_MODEL_OBS_URL` |
+| NanoChat代码 | `/home/ma-user/modelarts/inputs/nanochat_npu_dir_3` | `MODELARTS_NANOCHAT_REPO_OBS_URL` |
+| QuaDMix Tokenizer | `/home/ma-user/modelarts/inputs/quadmix_tokenizer_dir_4` | `MODELARTS_QUADMIX_TOKENIZER_OBS_URL` |
+| 代理验证集 | `/home/ma-user/modelarts/inputs/proxy_validation_dir_5` | `MODELARTS_PROXY_VALIDATION_OBS_URL` |
+| 结果输出 | `/home/ma-user/modelarts/outputs/output_dir_0` | `MODELARTS_OUTPUT_OBS_URL` |
 
-运行镜像必须预装 Torch、torch-npu、CANN 和项目依赖。远端使用 `pip install -e . --no-deps`，不会在任务启动时临时下载大型依赖。
+运行镜像必须预装 Torch、torch-npu、CANN 和项目依赖。远端通过 `PYTHONPATH`
+直接运行源码，不执行旧版环境不支持的 `pip install -e .`。
 
 ## 3. 数据路径要求
 

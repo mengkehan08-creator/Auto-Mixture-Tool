@@ -43,7 +43,7 @@ auto-mixture serve --host 127.0.0.1 --port 8080
 
 完整使用说明见 [`docs/USAGE.md`](docs/USAGE.md)；本地八卡与 HPC API 运行见 [`docs/RUN_MODES.md`](docs/RUN_MODES.md)；模块切换见 [`docs/SWITCHING_COMPONENTS.md`](docs/SWITCHING_COMPONENTS.md)；当前 STEM JSON 的字段映射、全量审查和过滤规则见 [`docs/DATASET_AUDIT.md`](docs/DATASET_AUDIT.md)。`CanonicalPipeline` 仍保留为 Python 契约与离线参照测试，不是第二套用户入口。
 
-ModelArts 完整流程任务使用仓库根目录的 `modelarts_training_job.py`；实际 Authorization 和资源参数放在被 Git 忽略的 `.env.modelarts` 中。
+ModelArts 完整流程任务使用仓库根目录的 `modelarts_training_job.py`；API鉴权、镜像、OBS和节点参数直接编辑该文件顶部的 `MODELARTS_CONFIG`，算法与训练参数编辑 `examples/configs/modelarts_pipeline.yaml`。不要把填入真实Authorization的本地脚本提交到Git。
 
 ---
 

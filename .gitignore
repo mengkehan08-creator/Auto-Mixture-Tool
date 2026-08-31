@@ -32,7 +32,6 @@ Thumbs.db
 
 # Environment
 .env
-.env.modelarts
 hermes_conversation_*.json
 
 # Local analysis
@@ -48,3 +47,6 @@ platform_demo/
 # Local scratch logs
 platform-server-error.log
 *.log
+
+# Legacy local ModelArts credentials (not used by the current submit script)
+.env.modelarts

@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import unittest
 from unittest import mock
 
 import modelarts_training_job as modelarts
 
 
-ENVIRONMENT = {
+CONFIG = {
     "MODELARTS_AUTHORIZATION": "test-token",
     "MODELARTS_ENDPOINT": "https://modelarts.example/v2/project/training-jobs",
     "MODELARTS_REGION": "cn-test-1",
@@ -24,14 +23,14 @@ ENVIRONMENT = {
     "MODELARTS_PROXY_VALIDATION_OBS_URL": "/bucket/proxy-validation/",
     "MODELARTS_OUTPUT_OBS_URL": "/bucket/output/",
     "MODELARTS_FLAVOR_ID": "8xnpu",
-    "MODELARTS_NODE_COUNT": "2",
+    "MODELARTS_NODE_COUNT": 2,
     "MODELARTS_POOL_ID": "pool",
     "MODELARTS_RESOURCE_POLICY": "regular",
 }
 
 
 class ModelArtsJobTests(unittest.TestCase):
-    @mock.patch.dict(os.environ, ENVIRONMENT, clear=True)
+    @mock.patch.dict(modelarts.MODELARTS_CONFIG, CONFIG, clear=True)
     def test_builds_complete_pipeline_job(self) -> None:
         job = modelarts.build_job_data("amt-test")
         self.assertEqual(job["metadata"]["name"], "amt-test")
@@ -44,7 +43,7 @@ class ModelArtsJobTests(unittest.TestCase):
         self.assertEqual(job["algorithm"]["environments"]["HF_HUB_OFFLINE"], "1")
         self.assertNotIn("volumes", job["spec"])
 
-    @mock.patch.dict(os.environ, ENVIRONMENT, clear=True)
+    @mock.patch.dict(modelarts.MODELARTS_CONFIG, CONFIG, clear=True)
     @mock.patch("modelarts_training_job.urllib.request.urlopen")
     def test_submits_and_reads_nested_job_id(self, urlopen: mock.Mock) -> None:
         urlopen.return_value = io.BytesIO(
@@ -58,7 +57,7 @@ class ModelArtsJobTests(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertNotIn("Authorization", json.dumps(payload))
 
-    @mock.patch.dict(os.environ, {}, clear=True)
+    @mock.patch.dict(modelarts.MODELARTS_CONFIG, {}, clear=True)
     def test_missing_configuration_fails_before_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "MODELARTS_WORKSPACE_ID"):
             modelarts.build_job_data("amt-test")
