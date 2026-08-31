@@ -22,7 +22,14 @@ def get_tokenizer(tokenizer_path: str, use_cache: bool = True):
     if use_cache and tokenizer_path in _cache:
         return _cache[tokenizer_path]
     from tokenizers import Tokenizer
-    if os.path.exists(tokenizer_path):
+    if os.path.isdir(tokenizer_path):
+        tokenizer_json = os.path.join(tokenizer_path, "tokenizer.json")
+        if not os.path.isfile(tokenizer_json):
+            raise FileNotFoundError(
+                f"Tokenizer directory does not contain tokenizer.json: {tokenizer_path}"
+            )
+        tok = Tokenizer.from_file(tokenizer_json)
+    elif os.path.isfile(tokenizer_path):
         tok = Tokenizer.from_file(tokenizer_path)
     else:
         tok = Tokenizer.from_pretrained(tokenizer_path)

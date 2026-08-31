@@ -20,9 +20,11 @@ ENVIRONMENT = {
     "MODELARTS_DATA_OBS_URL": "/bucket/data/",
     "MODELARTS_NANOCHAT_REPO_OBS_URL": "/bucket/nanochat/",
     "MODELARTS_NANOCHAT_MODEL_OBS_URL": "/bucket/model/",
+    "MODELARTS_QUADMIX_TOKENIZER_OBS_URL": "/bucket/quadmix-tokenizer/",
+    "MODELARTS_PROXY_VALIDATION_OBS_URL": "/bucket/proxy-validation/",
     "MODELARTS_OUTPUT_OBS_URL": "/bucket/output/",
     "MODELARTS_FLAVOR_ID": "8xnpu",
-    "MODELARTS_NODE_COUNT": "1",
+    "MODELARTS_NODE_COUNT": "2",
     "MODELARTS_POOL_ID": "pool",
     "MODELARTS_RESOURCE_POLICY": "regular",
 }
@@ -33,10 +35,13 @@ class ModelArtsJobTests(unittest.TestCase):
     def test_builds_complete_pipeline_job(self) -> None:
         job = modelarts.build_job_data("amt-test")
         self.assertEqual(job["metadata"]["name"], "amt-test")
-        self.assertIn("auto-mixture run", job["algorithm"]["command"])
+        self.assertIn("auto_mixture_tool.cli run", job["algorithm"]["command"])
         self.assertIn("modelarts_pipeline.yaml", job["algorithm"]["command"])
-        self.assertEqual(job["spec"]["resource"]["node_count"], 1)
-        self.assertEqual(len(job["algorithm"]["inputs"]), 3)
+        self.assertEqual(job["spec"]["resource"]["node_count"], 2)
+        self.assertEqual(len(job["algorithm"]["inputs"]), 5)
+        validation_input = job["algorithm"]["inputs"][-1]
+        self.assertEqual(validation_input["name"], "proxy_validation_dir")
+        self.assertEqual(job["algorithm"]["environments"]["HF_HUB_OFFLINE"], "1")
         self.assertNotIn("volumes", job["spec"])
 
     @mock.patch.dict(os.environ, ENVIRONMENT, clear=True)

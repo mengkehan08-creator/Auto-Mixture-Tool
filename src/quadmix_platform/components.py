@@ -87,6 +87,9 @@ class LocalExecutor(ExecutorAdapter):
             return {"AMT_DEVICE_TYPE": device_type}
 
         device_count = counts[0]
+        node_count = int(os.environ.get("MA_NUM_HOSTS", "1"))
+        if node_count <= 0:
+            raise ValueError("MA_NUM_HOSTS must be positive")
         visible = ",".join(str(index) for index in range(device_count))
         env = {
             "AMT_DEVICE_TYPE": device_type,
@@ -95,7 +98,11 @@ class LocalExecutor(ExecutorAdapter):
         if device_type == "npu":
             env.update({
                 "NUM_NPU": str(device_count),
-                "RANK_SIZE": str(device_count),
+                # ModelArts injects the global rank size for multi-node jobs.
+                # Keep it instead of incorrectly reducing 2x8 back to 8.
+                "RANK_SIZE": os.environ.get(
+                    "RANK_SIZE", str(device_count * node_count)
+                ),
                 "ASCEND_VISIBLE_DEVICES": visible,
             })
         else:

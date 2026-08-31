@@ -34,7 +34,7 @@ class NanoChatTrainer(TrainerAdapter):
         output = request.get("output_uri") or str(
             workspace / "result" / request["job_id"] / "quadmix"
         )
-        sampled = str(Path(output) / "sampled_dataset")
+        sampled = str(request.get("_training_dataset_uri") or Path(output) / "sampled_dataset")
 
         env = {
             "QUADMIX_SAMPLED_DATA": sampled,
@@ -51,20 +51,20 @@ class NanoChatTrainer(TrainerAdapter):
             "NANOCHAT_MODEL_DIR": config.get("model_dir"),
             "BASE_MODEL_TAG": config.get("base_model_tag"),
             "RESULT_DIR": config.get("result_dir"),
+            "MID_CHECKPOINTS_OUTPUT_DIR": config.get("checkpoint_dir"),
         }
         env.update({key: str(value) for key, value in optional.items() if value})
+        if config.get("skip_eval_download"):
+            env["NANOCHAT_SKIP_EVAL_DOWNLOAD"] = "1"
         env.update(evaluator_env)
 
-        # STEM currently uses the Python dispatcher so task/data switches are
-        # always forwarded consistently.
+        # The production path trains only the dataset selected by the chosen
+        # mixing algorithm.  Random/manual comparison runs remain standalone
+        # research scripts and are not part of the platform pipeline.
         if evaluator_id == "stem":
-            script = workspace / "scripts" / "platform" / "run_nanochat_validation.py"
-            executable = "python"
-            args = [
-                str(script),
-                "--experiment-script",
-                str(workspace / "nanochat_mid_compare" / "run_stem_experiment.sh"),
-            ]
+            script = workspace / "nanochat_mid_compare" / "run_quadmix_only.sh"
+            executable = "bash"
+            args = [str(script), "--data-dir", sampled]
         else:
             script = workspace / "nanochat_mid_compare" / "run_experiment.sh"
             executable = "bash"

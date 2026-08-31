@@ -132,8 +132,9 @@ class ServiceTests(unittest.TestCase):
             trainer_stage["env"]["STEM_DATA_DIR"], job["request"]["dataset_uri"]
         )
         self.assertEqual(trainer_stage["env"]["SCHEMA_CONFIG"], str(SCHEMA))
-        self.assertEqual(trainer_stage["executable"], "python")
-        self.assertTrue(trainer_stage["args"][0].endswith("run_nanochat_validation.py"))
+        self.assertEqual(trainer_stage["executable"], "bash")
+        self.assertTrue(trainer_stage["args"][0].endswith("run_quadmix_only.sh"))
+        self.assertEqual(trainer_stage["args"][1], "--data-dir")
 
         reloaded = PlatformService(self.workspace.name).get_job(job["id"])
         self.assertEqual(reloaded["id"], job["id"])

@@ -2,6 +2,11 @@
 
 Auto-Mixture-Tool 把数据校验、QuadMix 配比、NanoChat 训练、STEM 评测和执行后端组合为一条可配置流水线。
 
+Hadoop 外部数据处理、OBS 协调和 ModelArts 多节点运行见
+[MULTINODE_HADOOP_MODELARTS.md](MULTINODE_HADOOP_MODELARTS.md)。
+改变ModelArts节点数量时，按
+[SCALING_MODELARTS_NODES.md](SCALING_MODELARTS_NODES.md) 修改节点数和代理实验数。
+
 模块切换说明见 [SWITCHING_COMPONENTS.md](SWITCHING_COMPONENTS.md)；当前 STEM JSON 的字段映射、全量审查和过滤规则见 [DATASET_AUDIT.md](DATASET_AUDIT.md)。
 
 ## 1. 当前稳定运行路径

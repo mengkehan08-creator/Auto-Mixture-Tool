@@ -24,6 +24,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import numpy.typing as npt
@@ -34,6 +35,7 @@ from quadmix.core.types import (
     ParameterSet,
     MergedQualityConfig,
 )
+from quadmix.pipeline.distributed_proxy import parameter_set_hash
 from quadmix.core.quality_merger import compute_merged_quality_scores
 from quadmix.core.quality_rank import compute_quality_ranks
 from quadmix.pipeline.param_sampler import ParameterSampler
@@ -348,8 +350,9 @@ class QuaDMixPipeline:
         quality_directions: Optional[List[bool]] = None,
         parallel_workers: int = 1,
         val_set: Optional[str] = None,
+        distributed_coordinator: Optional[object] = None,
         **load_kwargs,
-    ) -> PipelineOutput:
+    ) -> Optional[PipelineOutput]:
         """Run the complete QuaDMix pipeline."""
         os.makedirs(output_dir, exist_ok=True)
         t_start = time.time()
@@ -382,7 +385,13 @@ class QuaDMixPipeline:
         n_exp, param_sets = self._stage3_param_sampling(num_experiments, stage_times)
 
         results, proxy_loss_stats = self._stage4_proxy_experiments(
-            proxy_runner, n_exp, param_sets, parallel_workers, stage_times)
+            proxy_runner, n_exp, param_sets, parallel_workers, stage_times,
+            distributed_coordinator)
+
+        # Non-primary distributed nodes publish their proxy subset, wait for
+        # node 0 to finish sampling, download the final artifacts, and stop.
+        if results is None:
+            return None
 
         self._stage5_lightgbm(results, stage_times)
 
@@ -420,6 +429,9 @@ class QuaDMixPipeline:
 
         elapsed = time.time() - t_start
         self._print_timing_summary(stage_times, elapsed, output_dir)
+
+        if distributed_coordinator is not None:
+            distributed_coordinator.publish_final_output(output_dir)
 
         print(f"\n{'=' * 70}")
         print(f"  Pipeline Complete! ({elapsed:.1f}s)")
@@ -531,9 +543,57 @@ class QuaDMixPipeline:
         return n_exp, param_sets
 
     def _stage4_proxy_experiments(self, proxy_runner, n_exp, param_sets,
-                                  parallel_workers, stage_times):
+                                  parallel_workers, stage_times,
+                                  distributed_coordinator=None):
         if proxy_runner is None:
             raise ValueError("proxy_runner is required. Pass an EssentialWebProxyRunner instance.")
+
+        if distributed_coordinator is not None:
+            indices = distributed_coordinator.local_indices(n_exp)
+            local_params = [param_sets[index] for index in indices]
+            if not local_params:
+                raise RuntimeError(
+                    f"node-{distributed_coordinator.node_rank}没有被分配代理实验；"
+                    "num_experiments必须不少于节点数"
+                )
+            print(
+                f"[Distributed] node-{distributed_coordinator.node_rank}/"
+                f"{distributed_coordinator.num_nodes}: experiments={indices}"
+            )
+            local_times: dict[str, float] = {}
+            local_results, _ = self._stage4_proxy_experiments(
+                proxy_runner,
+                len(local_params),
+                local_params,
+                min(parallel_workers, len(local_params)),
+                local_times,
+                None,
+            )
+            for global_index, result in zip(indices, local_results):
+                result.metadata["experiment_id"] = global_index
+                result.metadata["modelarts_node_rank"] = distributed_coordinator.node_rank
+            digest = parameter_set_hash(param_sets)
+            distributed_coordinator.publish_results(local_results, digest)
+
+            if not distributed_coordinator.is_primary:
+                distributed_coordinator.wait_and_download_final_output(
+                    Path(proxy_runner.output_dir).parent
+                )
+                return None, {}
+
+            results = distributed_coordinator.gather_results(
+                self.config, n_exp, digest
+            )
+            for name, seconds in local_times.items():
+                stage_times[f"node0_{name}"] = seconds
+            losses = np.array([result.validation_loss for result in results])
+            proxy_loss_stats = self._compute_proxy_loss_stats(results)
+            print(
+                f"[Distributed] gathered {len(results)} proxy results; "
+                f"mean={losses.mean():.4f}, std={losses.std():.4f}"
+            )
+            return results, proxy_loss_stats
+
         print(f"\n[Stage 4] Running {n_exp} proxy experiments...")
 
         _t_stage4 = time.time()

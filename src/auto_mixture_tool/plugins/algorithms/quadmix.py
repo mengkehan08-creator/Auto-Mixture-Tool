@@ -48,4 +48,17 @@ class QuadMixAlgorithm(AlgorithmAdapter):
             if float(config["target_tokens"]) < 0:
                 raise ValueError("quadmix target_tokens must not be negative")
             args.extend(["--target-tokens", str(config["target_tokens"])])
+        if config.get("tokenizer_path"):
+            args.extend(["--tokenizer-path", str(config["tokenizer_path"])])
+        if config.get("proxy_validation_path"):
+            args.extend(["--val-path", str(config["proxy_validation_path"])])
+        if config.get("algorithm_nodes") not in (None, "auto"):
+            nodes = int(config["algorithm_nodes"])
+            if nodes <= 0:
+                raise ValueError("quadmix algorithm_nodes must be positive or auto")
+            args.extend(["--distributed-nodes", str(nodes)])
+        if config.get("seed") is not None:
+            args.extend(["--seed", str(int(config["seed"]))])
+        if config.get("coordination_uri"):
+            args.extend(["--coordination-uri", str(config["coordination_uri"])])
         return [CommandSpec("quadmix-selection", "python", args, cwd=str(workspace))]

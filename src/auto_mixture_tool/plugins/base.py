@@ -16,6 +16,7 @@ from quadmix_platform.interfaces import (
     Sample,
     Trainer,
     TrainerAdapter,
+    TrainingDataAdapter,
     UnifiedDataset,
     ValidatorAdapter,
 )
@@ -26,6 +27,7 @@ from quadmix_platform.models import CommandSpec, JobRecord
 __all__ = [
     "AlgorithmAdapter",
     "TrainerAdapter",
+    "TrainingDataAdapter",
     "ValidatorAdapter",
     "ExecutorAdapter",
     "FormatValidatorAdapter",

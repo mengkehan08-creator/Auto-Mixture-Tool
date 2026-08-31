@@ -66,6 +66,9 @@ class PipelineConfig:
             "dataset_config": self._data.get("dataset_config", {}),
             "algorithm_config": self._data.get("algorithm_config", {}),
             "trainer_config": self._data.get("trainer_config", {}),
+            "training_data_adapter_config": self._data.get(
+                "training_data_adapter_config", {}
+            ),
             "evaluator_config": self._data.get(
                 "evaluator_config", self._data.get("validator_config", {})
             ),
@@ -84,6 +87,9 @@ class PipelineConfig:
             "output_uri": self.output_uri,
             "algorithm_id": self.algorithm_id,
             "trainer_id": self.trainer_id,
+            "training_data_adapter_id": str(
+                self._data.get("training_data_adapter_id", "none")
+            ),
             "evaluator_id": self.evaluator_id,
             "executor_id": self.executor_id,
             "full_scan": full_scan,

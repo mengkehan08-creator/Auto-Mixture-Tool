@@ -47,6 +47,8 @@ def main() -> None:
     config = PipelineConfig.from_yaml(args.config)
     value = manager.submit(config.to_job_request())
     print(json.dumps(value, ensure_ascii=False, indent=2))
+    if value.get("status") == "FAILED":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

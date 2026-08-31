@@ -23,6 +23,18 @@ class TrainerAdapter(ABC):
     def build(self, request: dict[str, Any], workspace: Path) -> list[CommandSpec]: ...
 
 
+class TrainingDataAdapter(ABC):
+    """Optional adapter between mixing output and the selected trainer."""
+
+    id: str
+    display_name: str
+
+    @abstractmethod
+    def prepare(
+        self, request: dict[str, Any], workspace: Path, mixed_uri: str
+    ) -> tuple[str, list[CommandSpec]]: ...
+
+
 class ValidatorAdapter(ABC):
     id: str
     display_name: str

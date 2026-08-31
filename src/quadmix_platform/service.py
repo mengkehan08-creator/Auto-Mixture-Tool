@@ -12,6 +12,10 @@ from auto_mixture_tool.plugins.format_validators.stem_json_parquet import (
     StemJsonParquetDataset,
 )
 from auto_mixture_tool.plugins.trainers.nanochat import NanoChatTrainer
+from auto_mixture_tool.plugins.training_data import (
+    ExternalHadoopArtifact,
+    NoOpTrainingDataAdapter,
+)
 from auto_mixture_tool.plugins.validators.stem import StemValidator
 from auto_mixture_tool.data.validator import audit_dataset, validate_dataset
 from .components import HpcClusterExecutor, LocalExecutor
@@ -25,6 +29,7 @@ class PlatformService:
         self.job_dir = self.workspace / "result" / ".jobs"
         self.algorithms = ComponentRegistry()
         self.trainers = ComponentRegistry()
+        self.training_data_adapters = ComponentRegistry()
         self.evaluators = ComponentRegistry()
         self.executors = ComponentRegistry()
         self.datasets = ComponentRegistry()
@@ -35,6 +40,8 @@ class PlatformService:
         self.datasets.register(StemJsonParquetDataset())
         self.algorithms.register(QuadMixAlgorithm())
         self.trainers.register(NanoChatTrainer())
+        self.training_data_adapters.register(NoOpTrainingDataAdapter())
+        self.training_data_adapters.register(ExternalHadoopArtifact())
         self.evaluators.register(StemValidator())
         self.executors.register(LocalExecutor())
         self.executors.register(HpcClusterExecutor())
@@ -44,6 +51,7 @@ class PlatformService:
             "datasets": self.datasets.catalog(),
             "algorithms": self.algorithms.catalog(),
             "trainers": self.trainers.catalog(),
+            "training_data_adapters": self.training_data_adapters.catalog(),
             "evaluators": self.evaluators.catalog(),
             "executors": self.executors.catalog(),
         }
@@ -89,6 +97,9 @@ class PlatformService:
         request["algorithm_id"] = str(payload.get("algorithm_id") or "quadmix")
         trainer_id = str(payload.get("trainer_id") or "nanochat")
         request["trainer_id"] = "nanochat" if trainer_id == "nanochat-stem" else trainer_id
+        request["training_data_adapter_id"] = str(
+            payload.get("training_data_adapter_id") or "none"
+        )
         request["evaluator_id"] = str(
             payload.get("evaluator_id") or payload.get("validator_id") or "stem"
         )
@@ -96,7 +107,8 @@ class PlatformService:
         request.pop("format_validator_id", None)
         request.pop("validator_id", None)
         for name in (
-            "dataset_config", "algorithm_config", "trainer_config", "executor_config"
+            "dataset_config", "algorithm_config", "trainer_config", "executor_config",
+            "training_data_adapter_config",
         ):
             value = request.get(name, {})
             if not isinstance(value, dict):
@@ -113,6 +125,9 @@ class PlatformService:
         dataset = self.datasets.get(request["dataset_id"])
         algorithm = self.algorithms.get(request["algorithm_id"])
         trainer = self.trainers.get(request["trainer_id"])
+        training_data_adapter = self.training_data_adapters.get(
+            request["training_data_adapter_id"]
+        )
         evaluator = self.evaluators.get(request["evaluator_id"])
         executor = self.executors.get(request["executor_id"])
 
@@ -131,10 +146,14 @@ class PlatformService:
         build_request["_evaluator_env"] = evaluator.environment(
             request["evaluator_config"]
         )
-        stages = (
-            dataset_stages
-            + algorithm.build(build_request, self.workspace)
-            + trainer.build(build_request, self.workspace)
+        algorithm_stages = algorithm.build(build_request, self.workspace)
+        mixed_uri = str(Path(request.get("output_uri") or self.workspace / "result" / job_id / "quadmix") / "sampled_dataset")
+        training_uri, training_data_stages = training_data_adapter.prepare(
+            build_request, self.workspace, mixed_uri
+        )
+        build_request["_training_dataset_uri"] = training_uri
+        stages = dataset_stages + algorithm_stages + training_data_stages + trainer.build(
+            build_request, self.workspace
         )
         job = JobRecord(job_id, "VALIDATED", request, stages, request["executor_id"])
         self.jobs[job_id] = job

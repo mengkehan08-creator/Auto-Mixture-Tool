@@ -310,6 +310,15 @@ def build_parser():
                    help="Device type for proxy model training")
     p.add_argument("--npu-devices", type=int, default=1,
                    help="Number of NPU devices (1=sequential, 8=8-way parallel)")
+    p.add_argument(
+        "--tokenizer-path",
+        default="EleutherAI/gpt-neox-20b",
+        help="Local GPT-NeoX tokenizer directory or Hugging Face model id",
+    )
+    p.add_argument("--distributed-nodes", type=int, default=None)
+    p.add_argument("--node-rank", type=int, default=None)
+    p.add_argument("--coordination-uri", default=None)
+    p.add_argument("--coordination-timeout", type=float, default=86400)
 
     # Proxy model config
     p.add_argument("--block-size", type=int, default=2048,
@@ -423,6 +432,7 @@ def create_proxy_runner(config, args, output_dir, metadata_manager):
         rank_ref_size=args.rank_ref_size,
         token_cache_dir=os.path.join(QUADMIX_TEMP_DIR, "token_cache"),
         checkpoint_interval=checkpoint_interval,
+        tokenizer_path=args.tokenizer_path,
         domain_names=metadata_manager.detected_domain_names,
         quality_names=metadata_manager.detected_quality_names,
         quality_directions=metadata_manager.quality_directions,
@@ -509,6 +519,23 @@ def main():
     pipeline = QuaDMixPipeline(config)
     proxy_runner = create_proxy_runner(config, args, output_dir, metadata_manager)
 
+    num_nodes = args.distributed_nodes or int(os.environ.get("MA_NUM_HOSTS", "1"))
+    node_rank = args.node_rank
+    if node_rank is None:
+        node_rank = int(os.environ.get("VC_TASK_INDEX", "0"))
+    distributed_coordinator = None
+    if num_nodes > 1:
+        from quadmix.pipeline.distributed_proxy import DistributedProxyCoordinator
+
+        coordination_uri = args.coordination_uri or os.environ.get("AMT_RUN_OBS_URI", "")
+        distributed_coordinator = DistributedProxyCoordinator(
+            coordination_uri,
+            node_rank,
+            num_nodes,
+            timeout_seconds=args.coordination_timeout,
+            backend=os.environ.get("AMT_OBS_BACKEND", "auto"),
+        )
+
     print(f"\n[Setup] Proxy runner: {n_exp} experiments, "
          f"{args.tiny_steps} steps each, "
          f"val={args.val_set}"
@@ -533,6 +560,7 @@ def main():
         parallel_workers=args.npu_devices,
         val_set=args.val_set,
         schema=schema,
+        distributed_coordinator=distributed_coordinator,
     )
     return 0
 

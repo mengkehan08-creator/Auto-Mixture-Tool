@@ -35,11 +35,13 @@ class JobRequest(BaseModel):
     output_uri: str | None = None
     algorithm_id: str = "quadmix"
     trainer_id: str = "nanochat"
+    training_data_adapter_id: str = "none"
     evaluator_id: str = "stem"
     executor_id: str = "local"
     dataset_config: dict[str, Any] = Field(default_factory=dict)
     algorithm_config: dict[str, Any] = Field(default_factory=dict)
     trainer_config: dict[str, Any] = Field(default_factory=dict)
+    training_data_adapter_config: dict[str, Any] = Field(default_factory=dict)
     evaluator_config: dict[str, Any] = Field(default_factory=dict)
     executor_config: dict[str, Any] = Field(default_factory=dict)
     # Read-only compatibility with configurations written before the component

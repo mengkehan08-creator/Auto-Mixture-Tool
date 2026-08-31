@@ -19,6 +19,8 @@ Aligned with RegMix:
   - RegMix training loop: gradient accumulation, cosine LR, AdamW
 """
 
+from __future__ import annotations
+
 import os, math, time, json, glob, threading
 import multiprocessing as mp
 import multiprocessing.shared_memory
@@ -168,6 +170,7 @@ class EssentialWebProxyRunner(BaseProxyRunner):
             token_cache_dir: Optional[str] = None,
             memory_cache_max_gb: float = 500.0,
             checkpoint_interval: int = 1000,
+            tokenizer_path: str = "EleutherAI/gpt-neox-20b",
             domain_names: Optional[List[str]] = None,
             quality_names: Optional[List[str]] = None,
             quality_directions: Optional[List[bool]] = None,
@@ -217,7 +220,21 @@ class EssentialWebProxyRunner(BaseProxyRunner):
         self.gradient_accumulation_steps = max(1, self.batch_size // micro_batch_size)
 
         from transformers import AutoTokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-neox-20b")
+        tokenizer_is_local = os.path.isdir(tokenizer_path)
+        if os.environ.get("HF_HUB_OFFLINE") == "1" and not tokenizer_is_local:
+            raise FileNotFoundError(
+                f"QuadMix本地Tokenizer目录不存在: {tokenizer_path}"
+            )
+        if tokenizer_is_local and not os.path.isfile(
+            os.path.join(tokenizer_path, "tokenizer.json")
+        ):
+            raise FileNotFoundError(
+                f"Tokenizer目录缺少tokenizer.json: {tokenizer_path}"
+            )
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer_path,
+            local_files_only=tokenizer_is_local,
+        )
         self.tokenizer.pad_token = self.tokenizer.eos_token
         assert self.tokenizer.vocab_size <= self.model_config.vocab_size, \
             f"Tokenizer vocab ({self.tokenizer.vocab_size}) > model vocab ({self.model_config.vocab_size})"

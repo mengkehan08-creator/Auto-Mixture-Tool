@@ -1,0 +1,229 @@
+# Hadoop 数据处理与 ModelArts 多节点运行
+
+本文描述当前可执行边界和人工操作。Hadoop 只负责数据处理；ModelArts
+负责 QuaDMix 配比、NanoChat 训练、STEM 评测和结果输出。
+
+## 1. 工作流
+
+```text
+STEM JSON
+  -> Hadoop 外部过滤、标签提取、Parquet 转换与校验
+  -> OBS 标准 Parquet
+  -> ModelArts 多节点 QuaDMix
+  -> sampled_dataset（Parquet）
+  -> training_data_adapter_id=none（NanoChat/STEM）
+  -> ModelArts 多节点 NanoChat
+  -> STEM 评测
+  -> 模型、指标、得分和报告写入 OBS
+```
+
+Hadoop 的提交 API 尚未确定，所以当前版本不伪造 Hadoop 调用。当前将
+`prepared_parquet_57ffce0ca0a2/` 视为 Hadoop 已完成且通过校验的产物。
+
+需要其他训练格式时，可以选择 `external-hadoop-artifact`。它表示先结束
+QuaDMix 作业，人工或外部系统执行 Hadoop 转换，再把转换结果作为新的
+ModelArts 训练输入。NanoChat/STEM 使用 `none`，不执行 Parquet 到 JSON。
+
+## 2. OBS 目录
+
+当前标准 Parquet：
+
+```text
+obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/prepared_parquet_57ffce0ca0a2/
+```
+
+建议运行产物：
+
+```text
+obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/runs/<job-name>/
+```
+
+多节点协调目录由提交脚本自动生成：
+
+```text
+runs/<job-name>/quadmix/
+├── proxy_results/node-0.json
+├── proxy_results/node-0._SUCCESS
+├── proxy_results/node-1.json
+├── proxy_results/node-1._SUCCESS
+└── final/
+    ├── sampled_dataset/
+    ├── optimal_parameters.json
+    ├── pipeline_summary.json
+    └── _SUCCESS
+```
+
+OBS 不是 POSIX 共享盘。节点只能在 `_SUCCESS` 出现后下载完整产物。
+
+## 3. 准备 GPT-NeoX Tokenizer
+
+在能连接 Hugging Face 的机器下载一次：
+
+```bash
+python3 -c "from transformers import AutoTokenizer; t=AutoTokenizer.from_pretrained('EleutherAI/gpt-neox-20b'); t.save_pretrained('./gpt-neox-20b-tokenizer')"
+```
+
+上传整个目录到 OBS，例如：
+
+```text
+obs://bucket-pangu-green-guangzhou/s00944147/l00916525/gpt-neox-tokenizer/
+```
+
+目录中至少需要 `tokenizer.json`、`tokenizer_config.json` 和相关配置文件。
+ModelArts 运行时强制离线，不会再访问 Hugging Face。
+
+## 4. 检查镜像
+
+镜像使用 Python 3.11，并且必须提供一种 OBS 客户端：
+
+```bash
+python3 --version
+python3 -c "import moxing; print('moxing available')"
+which obsutil
+```
+
+程序按 `moxing -> obsutil` 自动选择。两者都没有时任务会立即给出明确错误。
+
+镜像还必须包含与 Ascend/CANN 匹配的 `torch`、`torch-npu`、`transformers`、
+`pyarrow`、`lightgbm`、`scikit-learn` 和 NanoChat 依赖。
+
+## 5. 配置提交环境
+
+复制示例：
+
+```bash
+cp .env.modelarts.example .env.modelarts
+```
+
+两节点测试的关键配置：
+
+```text
+MODELARTS_NODE_COUNT=2
+MODELARTS_DATA_OBS_URL=obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/prepared_parquet_57ffce0ca0a2/
+MODELARTS_QUADMIX_TOKENIZER_OBS_URL=obs://bucket-pangu-green-guangzhou/s00944147/l00916525/gpt-neox-tokenizer/
+MODELARTS_PROXY_VALIDATION_OBS_URL=obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/quadmix-proxy-validation/
+MODELARTS_OUTPUT_OBS_URL=obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/
+MODELARTS_OBS_BACKEND=auto
+```
+
+Authorization 只放在本机 `.env.modelarts`，不要提交到 Git。
+
+## 6. 流水线配置
+
+使用 `examples/configs/modelarts_pipeline.yaml`。关键字段：
+
+```yaml
+dataset_id: quadmix
+dataset_config: {}
+training_data_adapter_id: none
+
+algorithm_config:
+  num_experiments: 16
+  num_search: 1000
+  seed: 42
+  npu_devices: 8
+  algorithm_nodes: auto
+  tokenizer_path: /home/ma-user/modelarts/inputs/quadmix_tokenizer_dir_4
+  proxy_validation_path: /home/ma-user/modelarts/inputs/proxy_validation_dir_5/stem_v2_tokenized.pt
+
+trainer_config:
+  npu_devices: 8
+```
+
+`algorithm_nodes: auto` 从 ModelArts 的 `MA_NUM_HOSTS` 获取节点数。固定 `seed`
+确保每个节点产生完全相同的16组参数，然后按全局实验编号分片。
+
+`MODELARTS_PROXY_VALIDATION_OBS_URL` 指向的 OBS 目录必须包含
+`stem_v2_tokenized.pt`。该二进制验证集不在 Git 仓库中，提交脚本会把它挂载到
+`proxy_validation_dir_5`，因此不能继续引用仓库内不存在的 `data/` 文件。
+
+两节点分配为：
+
+```text
+node-0: 0,2,4,6,8,10,12,14
+node-1: 1,3,5,7,9,11,13,15
+```
+
+每个节点内部最多使用8张NPU。worker-0 收齐16条结果后执行LightGBM、最优
+搜索和最终采样。所有节点拿到最终采样数据后，以2×8=16个进程启动NanoChat。
+
+## 7. 提交任务
+
+先验证请求，不提交：
+
+```bash
+cd /home/ma-user/work/Auto-Mixture-Tool
+python3 modelarts_training_job.py --env-file .env.modelarts --dry-run
+```
+
+确认 `node_count` 为2、输入路径和镜像正确后提交：
+
+```bash
+python3 modelarts_training_job.py --env-file .env.modelarts
+```
+
+脚本通过 ModelArts training-jobs API 创建任务。远端不再执行旧版
+`pip install -e .`，而是设置 `PYTHONPATH=<repo>/src` 后直接运行模块入口。
+
+## 8. 日志验收
+
+QuaDMix 应出现：
+
+```text
+[Distributed] node-0/2: experiments=[0, 2, ...]
+[Distributed] node-1/2: experiments=[1, 3, ...]
+[Distributed] gathered 16 proxy results
+```
+
+训练应出现：
+
+```text
+--nnodes=2
+--nproc_per_node=8
+--node_rank=0|1
+```
+
+成功产物至少包含：
+
+```text
+sampled_dataset/
+optimal_parameters.json
+pipeline_summary.json
+nanochat_checkpoints/
+nanochat_results/
+```
+
+CLI 在任何阶段失败时返回非零退出码，ModelArts 不应再把内部 `FAILED`
+误显示成成功。
+
+## 9. 扩展节点数
+
+当前支持每节点固定8张NPU、节点数灵活变化。简要修改：
+
+```text
+MODELARTS_NODE_COUNT=<节点数>
+```
+
+同时按 `节点数 × 8` 检查或调整 `algorithm_config.num_experiments`，并保持
+`algorithm_nodes: auto`。完整的1/2/4/8节点配置表、自动计算字段、日志验收和
+扩缩容故障处理见 [SCALING_MODELARTS_NODES.md](SCALING_MODELARTS_NODES.md)。
+
+## 10. 可选 Hadoop 目标格式
+
+NanoChat/STEM保持：
+
+```yaml
+training_data_adapter_id: none
+```
+
+外部Hadoop已经把配比结果转换为JSON/JSONL后，新的训练作业可配置：
+
+```yaml
+training_data_adapter_id: external-hadoop-artifact
+training_data_adapter_config:
+  target_format: jsonl
+  prepared_uri: /home/ma-user/modelarts/inputs/training_json_dir
+```
+
+获得真实Hadoop提交和状态API后，再为该接口增加自动提交、轮询、转换报告和
+输出校验；不会影响算法、训练器或评测器注册方式。

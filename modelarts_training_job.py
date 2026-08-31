@@ -22,10 +22,11 @@ from typing import Any
 REPOSITORY_DIR = "/home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool"
 PIPELINE_CONFIG = f"{REPOSITORY_DIR}/examples/configs/modelarts_pipeline.yaml"
 REMOTE_COMMAND = (
-    "set -euo pipefail\n"
-    f"cd {REPOSITORY_DIR}\n"
-    "python -m pip install -e . --no-deps\n"
-    f"auto-mixture run {PIPELINE_CONFIG}\n"
+    "/bin/bash -c 'set -euo pipefail; "
+    f"cd {REPOSITORY_DIR}; "
+    f"export PYTHONPATH={REPOSITORY_DIR}/src:${{PYTHONPATH:-}}; "
+    "python3 --version; "
+    f"exec python3 -m auto_mixture_tool.cli run {PIPELINE_CONFIG}' modelarts"
 )
 
 
@@ -58,12 +59,14 @@ def required_env(name: str) -> str:
 def build_job_data(job_name: str | None = None) -> dict[str, Any]:
     """Build the ModelArts v2 training-job request body."""
     name = job_name or f"auto-mixture-{datetime.now():%Y%m%d-%H%M%S}"
+    workspace_id = required_env("MODELARTS_WORKSPACE_ID")
+    output_obs_url = required_env("MODELARTS_OUTPUT_OBS_URL").rstrip("/")
     job_data: dict[str, Any] = {
         "kind": "job",
         "metadata": {
             "name": name,
             "description": "Auto-Mixture complete pipeline: audit, mix, train and evaluate",
-            "workspace_id": required_env("MODELARTS_WORKSPACE_ID"),
+            "workspace_id": workspace_id,
         },
         "algorithm": {
             "engine": {
@@ -80,33 +83,47 @@ def build_job_data(job_name: str | None = None) -> dict[str, Any]:
                 "PYTHONUTF8": "1",
                 "PYTHONUNBUFFERED": "1",
                 "NUM_NPU": "8",
-                "RANK_SIZE": "8",
                 "ASCEND_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+                "AMT_RUN_ID": name,
+                "AMT_RUN_OBS_URI": f"{output_obs_url}/runs/{name}/quadmix",
+                "AMT_OBS_BACKEND": os.environ.get("MODELARTS_OBS_BACKEND", "auto"),
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
             },
             "code_dir": required_env("MODELARTS_CODE_OBS_URL"),
             "local_code_dir": REPOSITORY_DIR,
             "working_dir": REPOSITORY_DIR,
             "inputs": [
                 _obs_input(
-                    "data-url",
-                    "/home/ma-user/modelarts/inputs/data-url_0",
+                    "data_dir",
+                    "/home/ma-user/modelarts/inputs/data_dir_0",
                     required_env("MODELARTS_DATA_OBS_URL"),
                 ),
                 _obs_input(
-                    "nanochat-repo",
-                    "/home/ma-user/modelarts/inputs/nanochat-repo_1",
+                    "nanochat_model_dir",
+                    "/home/ma-user/modelarts/inputs/nanochat_model_dir_1",
+                    required_env("MODELARTS_NANOCHAT_MODEL_OBS_URL"),
+                ),
+                _obs_input(
+                    "nanochat_npu_dir",
+                    "/home/ma-user/modelarts/inputs/nanochat_npu_dir_3",
                     required_env("MODELARTS_NANOCHAT_REPO_OBS_URL"),
                 ),
                 _obs_input(
-                    "nanochat-model",
-                    "/home/ma-user/modelarts/inputs/nanochat-model_2",
-                    required_env("MODELARTS_NANOCHAT_MODEL_OBS_URL"),
+                    "quadmix_tokenizer_dir",
+                    "/home/ma-user/modelarts/inputs/quadmix_tokenizer_dir_4",
+                    required_env("MODELARTS_QUADMIX_TOKENIZER_OBS_URL"),
+                ),
+                _obs_input(
+                    "proxy_validation_dir",
+                    "/home/ma-user/modelarts/inputs/proxy_validation_dir_5",
+                    required_env("MODELARTS_PROXY_VALIDATION_OBS_URL"),
                 ),
             ],
             "outputs": [{
                 "name": "train_url",
-                "local_dir": "/home/ma-user/modelarts/outputs/train_url_0",
-                "remote": {"obs": {"obs_url": required_env("MODELARTS_OUTPUT_OBS_URL")}},
+                "local_dir": "/home/ma-user/modelarts/outputs/output_dir_0",
+                "remote": {"obs": {"obs_url": output_obs_url}},
             }],
         },
         "spec": {
