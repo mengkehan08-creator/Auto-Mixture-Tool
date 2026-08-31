@@ -1,66 +1,51 @@
 from __future__ import annotations
 
-import io
-import json
 import unittest
 from unittest import mock
 
 import modelarts_training_job as modelarts
 
 
-CONFIG = {
-    "MODELARTS_AUTHORIZATION": "test-token",
-    "MODELARTS_ENDPOINT": "https://modelarts.example/v2/project/training-jobs",
-    "MODELARTS_REGION": "cn-test-1",
-    "MODELARTS_WORKSPACE_ID": "workspace",
-    "MODELARTS_IMAGE_URL": "registry/amt:latest",
-    "MODELARTS_IMAGE_REPO_ID": "image-repo",
-    "MODELARTS_CODE_OBS_URL": "/bucket/amt/",
-    "MODELARTS_DATA_OBS_URL": "/bucket/data/",
-    "MODELARTS_NANOCHAT_REPO_OBS_URL": "/bucket/nanochat/",
-    "MODELARTS_NANOCHAT_MODEL_OBS_URL": "/bucket/model/",
-    "MODELARTS_QUADMIX_TOKENIZER_OBS_URL": "/bucket/quadmix-tokenizer/",
-    "MODELARTS_PROXY_VALIDATION_OBS_URL": "/bucket/proxy-validation/",
-    "MODELARTS_OUTPUT_OBS_URL": "/bucket/output/",
-    "MODELARTS_FLAVOR_ID": "8xnpu",
-    "MODELARTS_NODE_COUNT": 2,
-    "MODELARTS_POOL_ID": "pool",
-    "MODELARTS_RESOURCE_POLICY": "regular",
-}
+class _Response:
+    def json(self) -> dict[str, object]:
+        return {"metadata": {"id": "job-42", "name": "amt-test"}}
 
 
 class ModelArtsJobTests(unittest.TestCase):
-    @mock.patch.dict(modelarts.MODELARTS_CONFIG, CONFIG, clear=True)
-    def test_builds_complete_pipeline_job(self) -> None:
-        job = modelarts.build_job_data("amt-test")
-        self.assertEqual(job["metadata"]["name"], "amt-test")
+    def test_job_data_matches_multinode_mount_contract(self) -> None:
+        job = modelarts.job_data
         self.assertIn("auto_mixture_tool.cli run", job["algorithm"]["command"])
-        self.assertIn("modelarts_pipeline.yaml", job["algorithm"]["command"])
         self.assertEqual(job["spec"]["resource"]["node_count"], 2)
-        self.assertEqual(len(job["algorithm"]["inputs"]), 5)
-        validation_input = job["algorithm"]["inputs"][-1]
-        self.assertEqual(validation_input["name"], "proxy_validation_dir")
-        self.assertEqual(job["algorithm"]["environments"]["HF_HUB_OFFLINE"], "1")
-        self.assertNotIn("volumes", job["spec"])
-
-    @mock.patch.dict(modelarts.MODELARTS_CONFIG, CONFIG, clear=True)
-    @mock.patch("modelarts_training_job.urllib.request.urlopen")
-    def test_submits_and_reads_nested_job_id(self, urlopen: mock.Mock) -> None:
-        urlopen.return_value = io.BytesIO(
-            json.dumps({"metadata": {"id": "job-42", "name": "amt-test"}}).encode()
+        inputs = {item["name"]: item for item in job["algorithm"]["inputs"]}
+        self.assertEqual(len(inputs), 6)
+        self.assertEqual(
+            inputs["quadmix_tokenizer_dir"]["local_dir"],
+            "/home/ma-user/modelarts/inputs/quadmix_tokenizer_dir_4",
         )
-        value = modelarts.submit_job(modelarts.build_job_data("amt-test"))
-        self.assertEqual(modelarts.response_job(value), ("job-42", "amt-test"))
-        request = urlopen.call_args.args[0]
-        self.assertEqual(request.get_method(), "POST")
-        self.assertEqual(request.get_header("Authorization"), "test-token")
-        payload = json.loads(request.data)
-        self.assertNotIn("Authorization", json.dumps(payload))
+        self.assertEqual(
+            inputs["proxy_validation_dir"]["local_dir"],
+            "/home/ma-user/modelarts/inputs/proxy_validation_dir_5",
+        )
+        self.assertTrue(all(item["access_method"] == "env" for item in inputs.values()))
 
-    @mock.patch.dict(modelarts.MODELARTS_CONFIG, {}, clear=True)
-    def test_missing_configuration_fails_before_request(self) -> None:
-        with self.assertRaisesRegex(ValueError, "MODELARTS_WORKSPACE_ID"):
-            modelarts.build_job_data("amt-test")
+    def test_update_parameter_updates_or_appends(self) -> None:
+        parameters = [{"name": "nodes", "value": "1"}]
+        modelarts.update_parameter(parameters, "nodes", "2")
+        modelarts.update_parameter(parameters, "new", "value")
+        self.assertEqual(parameters[0]["value"], "2")
+        self.assertEqual(parameters[1], {"name": "new", "value": "value"})
+
+    @mock.patch("modelarts_training_job.requests.post", return_value=_Response())
+    def test_main_posts_sample_structure(self, post: mock.Mock) -> None:
+        with mock.patch.dict(
+            modelarts.headers,
+            {"region": "cn-test-1", "Authorization": "test-token"},
+        ):
+            modelarts.main()
+        request = post.call_args
+        self.assertIs(request.kwargs["json"], modelarts.job_data)
+        self.assertFalse(request.kwargs["verify"])
+        self.assertNotIn("Authorization", str(request.kwargs["json"]))
 
 
 if __name__ == "__main__":

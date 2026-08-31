@@ -13,7 +13,8 @@ QuaDMix/NanoChat 全局卡数 = N × 8
 NanoChat world size       = N × 8
 ```
 
-ModelArts 提交脚本把 `MODELARTS_NODE_COUNT` 写入作业的 `node_count`。作业启动
+ModelArts 提交脚本把 `job_data["spec"]["resource"]["node_count"]` 写入作业。
+作业启动
 后，ModelArts 应向每个节点注入：
 
 ```text
@@ -27,29 +28,24 @@ QuaDMix 使用前两个变量分配代理实验；NanoChat 还使用
 
 ## 2. 每次改变节点数需要修改的字段
 
-### 必须修改：`modelarts_training_job.py`
-
-编辑脚本顶部的配置字典：
+### 必须修改：`modelarts_training_job.py` 的 `job_data`
 
 ```python
-MODELARTS_CONFIG = {
-    # 其他字段省略
-    "MODELARTS_NODE_COUNT": 目标节点数,
-}
+job_data["spec"]["resource"]["node_count"] = 目标节点数
 ```
 
 例如四节点：
 
 ```python
-"MODELARTS_NODE_COUNT": 4,
+job_data["spec"]["resource"]["node_count"] = 4
 ```
 
-如果新的节点数量仍使用相同的“单节点 8 卡”规格，`MODELARTS_FLAVOR_ID` 不需要
+如果新的节点数量仍使用相同的“单节点 8 卡”规格，`flavor_id` 不需要
 修改。只有切换了单节点资源规格或资源池时，才修改：
 
 ```python
-"MODELARTS_FLAVOR_ID": "新的单节点规格ID",
-"MODELARTS_POOL_ID": "能够提供目标节点数的资源池ID",
+job_data["spec"]["resource"]["flavor_id"] = "新的单节点规格ID"
+job_data["spec"]["resource"]["pool_id"] = "能够提供目标节点数的资源池ID"
 ```
 
 ### 必须检查：`examples/configs/modelarts_pipeline.yaml`
@@ -88,11 +84,10 @@ num_experiments >= N × 8
 | 4 | 32 | `NODE_COUNT=4` | 32 | 每节点8个 |
 | 8 | 64 | `NODE_COUNT=8` | 64 | 每节点8个 |
 
-这里的 `NODE_COUNT` 是 `modelarts_training_job.py` 中的
-`MODELARTS_CONFIG["MODELARTS_NODE_COUNT"]`。例如从两节点改为八节点：
+这里的 `NODE_COUNT` 是 `job_data` 中的 `node_count`。例如从两节点改为八节点：
 
 ```python
-"MODELARTS_NODE_COUNT": 8,
+job_data["spec"]["resource"]["node_count"] = 8
 ```
 
 ```yaml
@@ -130,29 +125,29 @@ executor_config:
   `world_size=N×8`；
 - 只有全局主节点生成最终报告和主checkpoint。
 
-提交脚本默认使用时间戳生成不同的作业名和OBS协调目录。不要为两次并行任务手动
-指定相同的 `--job-name`，否则旧的 `_SUCCESS` 标记可能污染新任务。
+每次提交都要手工修改 `job_data["metadata"]["name"]`。`main()` 会用该名称更新
+OBS协调目录。不要为两次任务使用相同名称，否则旧的 `_SUCCESS` 标记可能污染新任务。
 
 ## 5. 提交前检查
 
-先生成请求，不创建任务：
+先检查脚本语法：
 
 ```bash
 cd /home/ma-user/work/Auto-Mixture-Tool
-python3 modelarts_training_job.py --dry-run
+python3 -m py_compile modelarts_training_job.py
 ```
 
-确认输出中的：
+人工确认脚本中的：
 
 ```text
-spec.resource.node_count = 目标节点数
-algorithm.environments.NUM_NPU = 8
+job_data["spec"]["resource"]["node_count"] = 目标节点数
+job_data["algorithm"]["environments"]["NUM_NPU"] = "8"
 ```
 
 然后确认镜像和平台满足：
 
 - 每节点确实有8张NPU；
-- 所有节点都能读取5个ModelArts输入挂载；
+- 所有节点都能读取6个ModelArts输入挂载；
 - 镜像包含 `moxing` 或 `obsutil`；
 - 节点之间允许使用训练通信端口（默认29500）；
 - ModelArts正确注入 `MA_NUM_HOSTS`、`VC_TASK_INDEX` 和
@@ -191,6 +186,6 @@ NanoChat 应打印或包含等价参数：
 ## 7. 当前不支持的自动扩缩容
 
 当前提交脚本把每节点卡数固定为8。如果需要改成每节点4卡、16卡或混合规格，不能
-只修改 `MODELARTS_NODE_COUNT`。还需要统一修改提交脚本中的设备环境、YAML三处
+只修改 `job_data` 的 `node_count`。还需要统一修改提交脚本中的设备环境、YAML三处
 设备数以及训练规格，并重新验证HCCL和batch size；这属于“改变单节点规格”，不是
 本文所述的“改变节点数量”。

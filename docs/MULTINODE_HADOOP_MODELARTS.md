@@ -89,25 +89,26 @@ which obsutil
 
 ## 5. 配置提交脚本
 
-编辑仓库根目录 `modelarts_training_job.py` 顶部的 `MODELARTS_CONFIG`。两节点
-测试的关键字段示例：
+保留仓库根目录 `modelarts_training_job.py` 样例的主体函数结构，只修改参数。
+两节点测试的关键位置：
 
 ```python
-MODELARTS_CONFIG = {
-    "MODELARTS_AUTHORIZATION": "替换为Authorization",
-    "MODELARTS_ENDPOINT": "替换为training-jobs API地址",
-    "MODELARTS_NODE_COUNT": 2,
-    "MODELARTS_DATA_OBS_URL": "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/prepared_parquet_57ffce0ca0a2/",
-    "MODELARTS_QUADMIX_TOKENIZER_OBS_URL": "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/gpt-neox-tokenizer/",
-    "MODELARTS_PROXY_VALIDATION_OBS_URL": "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/quadmix-proxy-validation/",
-    "MODELARTS_OUTPUT_OBS_URL": "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/",
-    "MODELARTS_OBS_BACKEND": "auto",
-    # 其余镜像、代码、NanoChat和资源字段也在同一字典中填写。
+url = "training-jobs API地址"
+headers = {
+    "region": "区域",
+    "Authorization": "替换为Authorization",
 }
+
+job_data["metadata"]["workspace_id"] = "工作空间ID"
+job_data["algorithm"]["engine"]["image_url"] = "镜像地址"
+job_data["algorithm"]["engine"]["image_repo_id"] = "镜像仓库ID"
+job_data["spec"]["resource"]["node_count"] = 2
+job_data["spec"]["resource"]["pool_id"] = "资源池ID"
 ```
 
-真实Authorization只保留在本机修改后的脚本中，不要把该修改提交到Git。YAML
-只配置容器内流水线，不能代替提交API所需的Authorization和资源参数。
+OBS地址修改 `job_data["algorithm"]["inputs"]` 和 `outputs` 中对应项。`main()`
+保留样例原有流程，其中的输入覆盖值也必须同步修改；真实Authorization不要提交到Git。
+YAML只配置容器内流水线，不能代替提交API所需的Authorization和资源参数。
 
 ## 6. 流水线配置
 
@@ -134,7 +135,7 @@ trainer_config:
 `algorithm_nodes: auto` 从 ModelArts 的 `MA_NUM_HOSTS` 获取节点数。固定 `seed`
 确保每个节点产生完全相同的16组参数，然后按全局实验编号分片。
 
-提交脚本中 `MODELARTS_PROXY_VALIDATION_OBS_URL` 指向的OBS目录必须包含
+提交脚本中 `proxy_validation_dir` 输入指向的OBS目录必须包含
 `stem_v2_tokenized.pt`。该二进制验证集不在 Git 仓库中，提交脚本会把它挂载到
 `proxy_validation_dir_5`，因此不能继续引用仓库内不存在的 `data/` 文件。
 
@@ -150,11 +151,11 @@ node-1: 1,3,5,7,9,11,13,15
 
 ## 7. 提交任务
 
-先验证请求，不提交：
+先检查脚本语法：
 
 ```bash
 cd /home/ma-user/work/Auto-Mixture-Tool
-python3 modelarts_training_job.py --dry-run
+python3 -m py_compile modelarts_training_job.py
 ```
 
 确认 `node_count` 为2、输入路径和镜像正确后提交：
@@ -201,8 +202,8 @@ CLI 在任何阶段失败时返回非零退出码，ModelArts 不应再把内部
 
 当前支持每节点固定8张NPU、节点数灵活变化。简要修改：
 
-```text
-MODELARTS_NODE_COUNT=<节点数>
+```python
+job_data["spec"]["resource"]["node_count"] = 目标节点数
 ```
 
 同时按 `节点数 × 8` 检查或调整 `algorithm_config.num_experiments`，并保持

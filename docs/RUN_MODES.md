@@ -119,13 +119,13 @@ status_map:
 ModelArts 使用仓库根目录的独立提交入口：
 
 ```bash
-# 编辑 modelarts_training_job.py 顶部的 MODELARTS_CONFIG
-python modelarts_training_job.py --dry-run
+# 只修改modelarts_training_job.py中的url、headers和job_data参数
 python modelarts_training_job.py
 ```
 
-Authorization、endpoint、镜像、OBS输入输出和资源参数直接写在提交脚本的
-`MODELARTS_CONFIG` 中。真实Authorization只能保留在本地副本，不要提交到Git。
+保留样例的 `update_parameter()`、`job_data`、`main()`、`requests.post()` 和响应
+判断结构。Authorization与region写入 `headers`，API地址写入 `url`，镜像、OBS
+输入输出和资源参数写入 `job_data`。真实Authorization只能保留在本地副本，不要提交到Git。
 算法、训练、评测和执行器参数写在 `examples/configs/modelarts_pipeline.yaml`。
 
 该脚本向 ModelArts `training-jobs` API 提交一个训练作业。远端容器依次执行：
@@ -140,14 +140,14 @@ python3 -m auto_mixture_tool.cli run /home/ma-user/modelarts/user-job-dir/Auto-M
 
 ModelArts 输入挂载约定：
 
-| 输入 | 容器路径 | `MODELARTS_CONFIG` 字段 |
+| 输入 | 容器路径 | `job_data.algorithm.inputs` 中的名称 |
 |---|---|---|
-| QuaDMix标准Parquet | `/home/ma-user/modelarts/inputs/data_dir_0` | `MODELARTS_DATA_OBS_URL` |
-| NanoChat模型目录 | `/home/ma-user/modelarts/inputs/nanochat_model_dir_1` | `MODELARTS_NANOCHAT_MODEL_OBS_URL` |
-| NanoChat代码 | `/home/ma-user/modelarts/inputs/nanochat_npu_dir_3` | `MODELARTS_NANOCHAT_REPO_OBS_URL` |
-| QuaDMix Tokenizer | `/home/ma-user/modelarts/inputs/quadmix_tokenizer_dir_4` | `MODELARTS_QUADMIX_TOKENIZER_OBS_URL` |
-| 代理验证集 | `/home/ma-user/modelarts/inputs/proxy_validation_dir_5` | `MODELARTS_PROXY_VALIDATION_OBS_URL` |
-| 结果输出 | `/home/ma-user/modelarts/outputs/output_dir_0` | `MODELARTS_OUTPUT_OBS_URL` |
+| QuaDMix标准Parquet | `/home/ma-user/modelarts/inputs/data_dir_0` | `data_dir` |
+| NanoChat模型目录 | `/home/ma-user/modelarts/inputs/nanochat_model_dir_1` | `nanochat_model_dir` |
+| NanoChat代码 | `/home/ma-user/modelarts/inputs/nanochat_npu_dir_3` | `nanochat_npu_dir` |
+| QuaDMix Tokenizer | `/home/ma-user/modelarts/inputs/quadmix_tokenizer_dir_4` | `quadmix_tokenizer_dir` |
+| 代理验证集 | `/home/ma-user/modelarts/inputs/proxy_validation_dir_5` | `proxy_validation_dir` |
+| 结果输出 | `/home/ma-user/modelarts/outputs/output_dir_0` | `output_dir` |
 
 运行镜像必须预装 Torch、torch-npu、CANN 和项目依赖。远端通过 `PYTHONPATH`
 直接运行源码，不执行旧版环境不支持的 `pip install -e .`。
