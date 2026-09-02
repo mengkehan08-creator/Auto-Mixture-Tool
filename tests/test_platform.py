@@ -13,6 +13,8 @@ from quadmix_platform.service import PlatformService
 from quadmix_platform.components import HpcClusterExecutor, LocalExecutor
 from quadmix_platform.models import CommandSpec, JobRecord
 from auto_mixture_tool.config.pipeline_config import PipelineConfig
+from auto_mixture_tool.plugins.algorithms.quadmix import QuadMixAlgorithm
+from auto_mixture_tool.plugins.trainers.nanochat import NanoChatTrainer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -133,8 +135,9 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertEqual(trainer_stage["env"]["SCHEMA_CONFIG"], str(SCHEMA))
         self.assertEqual(trainer_stage["executable"], "bash")
-        self.assertTrue(trainer_stage["args"][0].endswith("run_quadmix_only.sh"))
-        self.assertEqual(trainer_stage["args"][1], "--data-dir")
+        self.assertTrue(trainer_stage["args"][0].endswith("run_stem_experiment.sh"))
+        self.assertEqual(trainer_stage["env"]["COMPARISON_METHODS"], "quadmix")
+        self.assertEqual(trainer_stage["env"]["MIX_GENERAL_DATA"], "0")
 
         reloaded = PlatformService(self.workspace.name).get_job(job["id"])
         self.assertEqual(reloaded["id"], job["id"])
@@ -189,6 +192,49 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(config["evaluator_id"], "stem")
         self.assertEqual(config["evaluator_config"], {"tasks": ["gsm8k"]})
         self.assertNotIn("validator_id", config)
+
+    def test_comparison_config_is_passed_to_nanochat(self) -> None:
+        config = PipelineConfig({
+            "dataset_uri": str(DATASET),
+            "schema_uri": str(SCHEMA),
+            "comparison_config": {
+                "methods": ["quadmix", "random", "manual"],
+                "manual_ratios": {
+                    "数学": 0.60,
+                    "物理": 0.15,
+                    "化学": 0.125,
+                    "生物学": 0.125,
+                },
+            },
+        }).to_job_request()
+        config.update({
+            "job_id": "0123456789ab",
+            "evaluator_id": "stem",
+            "trainer_config": {"npu_devices": 8},
+            "_evaluator_env": {},
+        })
+
+        stage = NanoChatTrainer().build(config, ROOT)[0]
+
+        self.assertEqual(stage.env["COMPARISON_METHODS"], "quadmix,random,manual")
+        self.assertEqual(
+            stage.env["MANUAL_RATIO"],
+            "数学=0.6:物理=0.15:化学=0.125:生物学=0.125",
+        )
+        self.assertEqual(stage.env["AMT_RUN_ID"], "0123456789ab")
+
+    def test_quadmix_adapter_passes_proxy_training_steps(self) -> None:
+        request = {
+            "job_id": "0123456789ab",
+            "dataset_uri": str(DATASET),
+            "schema_uri": str(SCHEMA),
+            "algorithm_config": {"tiny_steps": 5000},
+        }
+
+        stage = QuadMixAlgorithm().build(request, ROOT)[0]
+
+        index = stage.args.index("--tiny-steps")
+        self.assertEqual(stage.args[index + 1], "5000")
 
 
 class ExecutorTests(unittest.TestCase):

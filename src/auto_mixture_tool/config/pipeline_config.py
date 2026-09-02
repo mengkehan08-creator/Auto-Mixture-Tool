@@ -65,6 +65,7 @@ class PipelineConfig:
         sections = {
             "dataset_config": self._data.get("dataset_config", {}),
             "algorithm_config": self._data.get("algorithm_config", {}),
+            "comparison_config": self._data.get("comparison_config", {}),
             "trainer_config": self._data.get("trainer_config", {}),
             "training_data_adapter_config": self._data.get(
                 "training_data_adapter_config", {}

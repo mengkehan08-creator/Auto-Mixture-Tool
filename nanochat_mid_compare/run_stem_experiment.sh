@@ -27,7 +27,23 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 QUADMIX_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+TIMESTAMP="${AMT_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+
+# QuaDMix remains the selected platform algorithm. Random and manual are
+# controlled comparison strategies that use the same token budget.
+COMPARISON_METHODS="${COMPARISON_METHODS:-quadmix,random,manual}"
+has_method() {
+    case ",$COMPARISON_METHODS," in
+        *",$1,"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+for method in ${COMPARISON_METHODS//,/ }; do
+    case "$method" in
+        quadmix|random|manual) ;;
+        *) echo "ERROR: unsupported comparison method: $method"; exit 1 ;;
+    esac
+done
 
 # QuadMix output: sampled_dataset from STEM pipeline
 QUADMIX_SAMPLED_DATA="${QUADMIX_SAMPLED_DATA:-/home/ma-user/work/quadmix/result/reoptimize_20260724_095141/sampled_dataset}"
@@ -94,13 +110,13 @@ MANUAL_RATIO_MODEL_TAG="${MANUAL_RATIO_MODEL_TAG:-}"
 #  VALIDATION
 # ══════════════════════════════════════════════════════════════
 
-if [ -z "$QUADMIX_SAMPLED_DATA" ]; then
+if has_method quadmix && [ -z "$QUADMIX_SAMPLED_DATA" ]; then
     echo "ERROR: QUADMIX_SAMPLED_DATA not set"
     echo "  Set via: QUADMIX_SAMPLED_DATA=/path/to/stem_sampled_dataset"
     exit 1
 fi
 
-if [ ! -f "$QUADMIX_SAMPLED_DATA" ] && [ ! -d "$QUADMIX_SAMPLED_DATA" ]; then
+if has_method quadmix && [ ! -f "$QUADMIX_SAMPLED_DATA" ] && [ ! -d "$QUADMIX_SAMPLED_DATA" ]; then
     echo "ERROR: QuadMix dataset not found: $QUADMIX_SAMPLED_DATA"
     exit 1
 fi
@@ -193,9 +209,27 @@ fi
 
 ASCEND_DEVICE_LIST=$(seq -s, 0 $((NUM_NPU - 1)))
 export ASCEND_VISIBLE_DEVICES="$ASCEND_DEVICE_LIST"
-export RANK_SIZE=$NUM_NPU
-export MASTER_ADDR=127.0.0.1
-export MASTER_PORT=29500
+NNODES="${MA_NUM_HOSTS:-1}"
+NODE_RANK="${VC_TASK_INDEX:-0}"
+MASTER_PORT="${MASTER_PORT:-29500}"
+if [ "$NNODES" -gt 1 ]; then
+    MASTER_ADDR="${VC_WORKER_HOSTS%%,*}"
+    if [ -z "$MASTER_ADDR" ]; then
+        echo "ERROR: VC_WORKER_HOSTS is required for multi-node training"
+        exit 1
+    fi
+else
+    MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+fi
+export NNODES NODE_RANK MASTER_ADDR MASTER_PORT
+export RANK_SIZE=$((NNODES * NUM_NPU))
+TORCHRUN_ARGS=(
+    --nnodes="$NNODES"
+    --nproc_per_node="$NUM_NPU"
+    --node_rank="$NODE_RANK"
+    --rdzv_backend=static
+    --rdzv_endpoint="$MASTER_ADDR:$MASTER_PORT"
+)
 export HCCL_EXEC_TIMEOUT=1200
 export ASCEND_DISABLE_MEM_SWAP=1
 export ASCEND_LAUNCH_BLOCKING=0
@@ -251,6 +285,8 @@ if [ -n "$MID_CHECKPOINTS_OUTPUT_DIR" ]; then
 fi
 echo ""
 echo "  Manual Ratio:        $MANUAL_RATIO"
+echo "  Comparison methods:  $COMPARISON_METHODS"
+echo "  Training topology:   $NNODES node(s) × $NUM_NPU NPU(s)"
 echo ""
 echo "  Mid-training config:"
 echo "    target-param-data-ratio: $TARGET_PARAM_DATA_RATIO"
@@ -281,13 +317,11 @@ echo "╔══ Step 1: Prepare STEM datasets ══╗"
 echo ""
 
 PREP_ARGS=(
-    --quadmix-sampled-data "$QUADMIX_SAMPLED_DATA"
     --preprocessed-data-dir "$STEM_DATA_DIR"
     --output-dir "$DATA_DIR"
     --tokenizer-pkl "$TOKENIZER_DIR/tokenizer.pkl"
     --schema "$SCHEMA_PATH"
     --file-pattern "$FILE_PATTERN"
-    --manual-ratio "$MANUAL_RATIO"
     --data-ratio "$TARGET_PARAM_DATA_RATIO"
     --num-scaling-params "$NUM_SCALING_PARAMS"
     --data-multiplier "$DATA_MULTIPLIER"
@@ -297,6 +331,15 @@ PREP_ARGS=(
     --max-shards "$MAX_SHARDS"
     --num-npu "$NUM_NPU"
 )
+if has_method quadmix; then
+    PREP_ARGS+=(--quadmix-sampled-data "$QUADMIX_SAMPLED_DATA")
+fi
+if has_method manual; then
+    PREP_ARGS+=(--manual-ratio "$MANUAL_RATIO")
+fi
+if ! has_method random; then
+    export SKIP_RANDOM=1
+fi
 python3 "$SCRIPT_DIR/prepare_data.py" "${PREP_ARGS[@]}"
 
 # Update dataset_stats.json with experiment metadata
@@ -314,6 +357,7 @@ QUADMIX_GIT_HASH="$(git -C "$QUADMIX_DIR" rev-parse --short HEAD 2>/dev/null || 
 NANOCHAT_GIT_HASH="$(git -C "$NANOCHAT_REPO" rev-parse --short HEAD 2>/dev/null || echo 'unknown')" \
 MANUAL_RATIO="$MANUAL_RATIO" \
 EVAL_BENCHMARKS="$EVAL_BENCHMARKS" \
+COMPARISON_METHODS="$COMPARISON_METHODS" \
 python3 -c "
 import os, json
 stats_path = os.path.join(os.environ['DATA_DIR'], 'dataset_stats.json')
@@ -333,6 +377,7 @@ stats['config'].update({
     'nanochat_git_hash': os.environ.get('NANOCHAT_GIT_HASH', ''),
     'manual_ratio': os.environ.get('MANUAL_RATIO', ''),
     'eval_benchmarks': os.environ.get('EVAL_BENCHMARKS', ''),
+    'comparison_methods': os.environ.get('COMPARISON_METHODS', '').split(','),
 })
 with open(stats_path, 'w') as f:
     json.dump(stats, f, indent=2)
@@ -343,14 +388,12 @@ echo "  Dataset stats:"
 DATA_DIR="$DATA_DIR" python3 -c "
 import os, json
 stats = json.load(open(os.path.join(os.environ['DATA_DIR'], 'dataset_stats.json')))
-q, r = stats['quadmix'], stats['random']
 method = stats['config'].get('token_method', 'unknown')
 print(f'    Token method: {method}')
-print(f'    QuadMix: {q[\"train_docs\"]:,} train docs, {q[\"tokens\"]:,} tokens, {q[\"shards\"]} shards')
-print(f'    Random:  {r[\"train_docs\"]:,} train docs, {r[\"tokens\"]:,} tokens, {r[\"shards\"]} shards')
-if 'manual_ratio' in stats:
-    mr = stats['manual_ratio']
-    print(f'    Manual Ratio: {mr[\"train_docs\"]:,} train docs, {mr[\"tokens\"]:,} tokens, {mr[\"shards\"]} shards')
+for key, label in [('quadmix', 'QuadMix'), ('random', 'Random'), ('manual_ratio', 'Manual Ratio')]:
+    if key in stats:
+        item = stats[key]
+        print(f'    {label}: {item[\"train_docs\"]:,} train docs, {item[\"tokens\"]:,} tokens, {item[\"shards\"]} shards')
 for key in stats:
     if key.startswith('quality_'):
         method = key[len('quality_'):]
@@ -465,15 +508,18 @@ if [ "$MIX_GENERAL_DATA" = "1" ]; then
             || { echo "  ERROR: mixing failed for $LABEL"; return 1; }
     }
 
-    mix_one "$QUADMIX_DATA" "$DATA_DIR/quadmix_mixed" "QuadMix"
-    mix_one "$RANDOM_DATA" "$DATA_DIR/random_mixed" "Random"
-    if [ -d "$MANUAL_RATIO_DATA" ]; then
-        mix_one "$MANUAL_RATIO_DATA" "$DATA_DIR/manual_ratio_mixed" "Manual Ratio"
+    if has_method quadmix; then
+        mix_one "$QUADMIX_DATA" "$DATA_DIR/quadmix_mixed" "QuadMix"
+        QUADMIX_DATA="$DATA_DIR/quadmix_mixed"
     fi
-
-    QUADMIX_DATA="$DATA_DIR/quadmix_mixed"
-    RANDOM_DATA="$DATA_DIR/random_mixed"
-    MANUAL_RATIO_DATA="$DATA_DIR/manual_ratio_mixed"
+    if has_method random; then
+        mix_one "$RANDOM_DATA" "$DATA_DIR/random_mixed" "Random"
+        RANDOM_DATA="$DATA_DIR/random_mixed"
+    fi
+    if has_method manual; then
+        mix_one "$MANUAL_RATIO_DATA" "$DATA_DIR/manual_ratio_mixed" "Manual Ratio"
+        MANUAL_RATIO_DATA="$DATA_DIR/manual_ratio_mixed"
+    fi
 
     echo ""
     echo "╚════════════════════════════════════════════════════════════╝"
@@ -528,10 +574,14 @@ echo ""
 echo "╔══ Pre-flight: Download eval data ══╗"
 echo ""
 pushd "$NANOCHAT_REPO" > /dev/null
-python3 -c "from scripts.base_eval import prepare_eval_data; prepare_eval_data('${EVAL_BENCHMARKS:-all}')" || {
-    echo "  ERROR: eval data download failed"
-    exit 1
-}
+if [ "${NANOCHAT_SKIP_EVAL_DOWNLOAD:-0}" != "1" ]; then
+    python3 -c "from scripts.base_eval import prepare_eval_data; prepare_eval_data('${EVAL_BENCHMARKS:-all}')" || {
+        echo "  ERROR: eval data download failed"
+        exit 1
+    }
+else
+    echo "  Skipping eval download; using data already present in the mounted model directory"
+fi
 popd > /dev/null
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
@@ -574,7 +624,7 @@ run_mid_training() {
     trap 'if [ -L "$LINK_DIR" ]; then echo "    Cleaning up symlink on exit: $LINK_DIR"; rm "$LINK_DIR"; fi' RETURN
 
     pushd "$NANOCHAT_REPO" > /dev/null
-    python3 -m torch.distributed.run --standalone --nproc_per_node="$NUM_NPU" -m scripts.mid_train -- \
+    python3 -m torch.distributed.run "${TORCHRUN_ARGS[@]}" -m scripts.mid_train -- \
         --num-iterations="$NUM_ITERATIONS" \
         --target-param-data-ratio="$TARGET_PARAM_DATA_RATIO" \
         --device-batch-size="$DEVICE_BATCH_SIZE" \
@@ -602,29 +652,26 @@ if [ "$TRAIN_BUDGET" -le 0 ] 2>/dev/null || [ -z "$TRAIN_BUDGET" ]; then
     echo "       Delete $DATA_DIR and re-run prepare_data to regenerate." >&2
     exit 1
 fi
-read -r QUADMIX_TOKENS RANDOM_TOKENS < <(
+read -r QUADMIX_TOKENS RANDOM_TOKENS MANUAL_RATIO_TOKENS < <(
     STATS_FILE="$STATS_FILE" python3 -c "
 import os, json
 s = json.load(open(os.environ['STATS_FILE']))
-print(s['quadmix']['tokens'], s['random']['tokens'])
+print(*(s.get(key, {}).get('tokens', 0) for key in ('quadmix', 'random', 'manual_ratio')))
 "
 )
-MANUAL_RATIO_TOKENS=$(STATS_FILE="$STATS_FILE" python3 -c "
-import os, json
-s = json.load(open(os.environ['STATS_FILE']))
-if 'manual_ratio' in s:
-    print(s['manual_ratio']['tokens'])
-else:
-    print('0')
-")
 echo "  Common training budget: $TRAIN_BUDGET tokens (data_multiplier=$DATA_MULTIPLIER)"
 
 echo ""
 echo "╔══ Step 3a: Mid-training on QuadMix data ══╗"
 echo ""
 
-QUADMIX_LOG="$RESULT_DIR/mid_train_quadmix.log"
-run_mid_training "$QUADMIX_DATA" "$QUADMIX_MODEL_TAG" "stem_quadmix_mid" "$QUADMIX_LOG" "$QUADMIX_TOKENS" "$TRAIN_BUDGET"
+QUADMIX_LOG=""
+if has_method quadmix; then
+    QUADMIX_LOG="$RESULT_DIR/mid_train_quadmix.log"
+    run_mid_training "$QUADMIX_DATA" "$QUADMIX_MODEL_TAG" "stem_quadmix_mid" "$QUADMIX_LOG" "$QUADMIX_TOKENS" "$TRAIN_BUDGET"
+else
+    echo "  Skipped (not selected)"
+fi
 
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
@@ -634,8 +681,13 @@ echo ""
 echo "╔══ Step 3b: Mid-training on Random data ══╗"
 echo ""
 
-RANDOM_LOG="$RESULT_DIR/mid_train_random.log"
-run_mid_training "$RANDOM_DATA" "$RANDOM_MODEL_TAG" "stem_random_mid" "$RANDOM_LOG" "$RANDOM_TOKENS" "$TRAIN_BUDGET"
+RANDOM_LOG=""
+if has_method random; then
+    RANDOM_LOG="$RESULT_DIR/mid_train_random.log"
+    run_mid_training "$RANDOM_DATA" "$RANDOM_MODEL_TAG" "stem_random_mid" "$RANDOM_LOG" "$RANDOM_TOKENS" "$TRAIN_BUDGET"
+else
+    echo "  Skipped (not selected)"
+fi
 
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
@@ -645,8 +697,13 @@ echo ""
 echo "╔══ Step 3c: Mid-training on Manual Ratio data ══╗"
 echo ""
 
-MANUAL_RATIO_LOG="$RESULT_DIR/mid_train_manual_ratio.log"
-run_mid_training "$MANUAL_RATIO_DATA" "$MANUAL_RATIO_MODEL_TAG" "stem_manual_ratio_mid" "$MANUAL_RATIO_LOG" "$MANUAL_RATIO_TOKENS" "$TRAIN_BUDGET"
+MANUAL_RATIO_LOG=""
+if has_method manual; then
+    MANUAL_RATIO_LOG="$RESULT_DIR/mid_train_manual_ratio.log"
+    run_mid_training "$MANUAL_RATIO_DATA" "$MANUAL_RATIO_MODEL_TAG" "stem_manual_ratio_mid" "$MANUAL_RATIO_LOG" "$MANUAL_RATIO_TOKENS" "$TRAIN_BUDGET"
+else
+    echo "  Skipped (not selected)"
+fi
 
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
@@ -664,7 +721,7 @@ run_eval() {
     echo "  Evaluating: $MODEL_TAG ($MODEL_TYPE)"
 
     pushd "$NANOCHAT_REPO" > /dev/null
-    python3 -m torch.distributed.run --standalone --nproc_per_node="$NUM_NPU" -m scripts.base_eval -- \
+    python3 -m torch.distributed.run "${TORCHRUN_ARGS[@]}" -m scripts.base_eval -- \
         --eval=core \
         --eval-benchmarks="$EVAL_BENCHMARKS" \
         --device-batch-size=16 \
@@ -678,14 +735,23 @@ echo ""
 echo "╔══ Step 4: Evaluation (benchmarks=$EVAL_BENCHMARKS) ══╗"
 echo ""
 
-QUADMIX_EVAL_LOG="$RESULT_DIR/eval_quadmix.log"
-run_eval "$QUADMIX_MODEL_TAG" "mid" "$QUADMIX_EVAL_LOG"
+QUADMIX_EVAL_LOG=""
+if has_method quadmix; then
+    QUADMIX_EVAL_LOG="$RESULT_DIR/eval_quadmix.log"
+    run_eval "$QUADMIX_MODEL_TAG" "mid" "$QUADMIX_EVAL_LOG"
+fi
 
-RANDOM_EVAL_LOG="$RESULT_DIR/eval_random.log"
-run_eval "$RANDOM_MODEL_TAG" "mid" "$RANDOM_EVAL_LOG"
+RANDOM_EVAL_LOG=""
+if has_method random; then
+    RANDOM_EVAL_LOG="$RESULT_DIR/eval_random.log"
+    run_eval "$RANDOM_MODEL_TAG" "mid" "$RANDOM_EVAL_LOG"
+fi
 
-MANUAL_RATIO_EVAL_LOG="$RESULT_DIR/eval_manual_ratio.log"
-run_eval "$MANUAL_RATIO_MODEL_TAG" "mid" "$MANUAL_RATIO_EVAL_LOG"
+MANUAL_RATIO_EVAL_LOG=""
+if has_method manual; then
+    MANUAL_RATIO_EVAL_LOG="$RESULT_DIR/eval_manual_ratio.log"
+    run_eval "$MANUAL_RATIO_MODEL_TAG" "mid" "$MANUAL_RATIO_EVAL_LOG"
+fi
 
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
@@ -702,13 +768,16 @@ echo ""
 REPORT_ARGS=(
     --result-dir "$RESULT_DIR"
     --dataset-stats "$DATA_DIR/dataset_stats.json"
-    --quadmix-train-log "$QUADMIX_LOG"
-    --random-train-log "$RANDOM_LOG"
-    --manual-ratio-train-log "$MANUAL_RATIO_LOG"
-    --quadmix-eval-log "$QUADMIX_EVAL_LOG"
-    --random-eval-log "$RANDOM_EVAL_LOG"
-    --manual-ratio-eval-log "$MANUAL_RATIO_EVAL_LOG"
 )
+if has_method quadmix; then
+    REPORT_ARGS+=(--quadmix-train-log "$QUADMIX_LOG" --quadmix-eval-log "$QUADMIX_EVAL_LOG")
+fi
+if has_method random; then
+    REPORT_ARGS+=(--random-train-log "$RANDOM_LOG" --random-eval-log "$RANDOM_EVAL_LOG")
+fi
+if has_method manual; then
+    REPORT_ARGS+=(--manual-ratio-train-log "$MANUAL_RATIO_LOG" --manual-ratio-eval-log "$MANUAL_RATIO_EVAL_LOG")
+fi
 python3 "$SCRIPT_DIR/generate_report.py" "${REPORT_ARGS[@]}"
 
 echo ""

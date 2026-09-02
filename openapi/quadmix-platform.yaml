@@ -135,6 +135,7 @@ components:
             evaluator_id: {type: string, example: stem}
             executor_id: {type: string, enum: [local, hpc-cluster]}
             algorithm_config: {type: object, additionalProperties: true}
+            comparison_config: {type: object, additionalProperties: true}
             trainer_config: {type: object, additionalProperties: true}
             evaluator_config: {type: object, additionalProperties: true}
             executor_config:

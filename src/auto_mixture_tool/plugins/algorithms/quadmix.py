@@ -22,10 +22,13 @@ class QuadMixAlgorithm(AlgorithmAdapter):
         config = request.get("algorithm_config", {})
         num_experiments = int(config.get("num_experiments", 200))
         num_search = int(config.get("num_search", 2000))
+        tiny_steps = int(config.get("tiny_steps", 3))
         npu_devices = int(config.get("npu_devices", 1))
         device_type = str(config.get("device_type", "cpu"))
-        if num_experiments <= 0 or num_search <= 0:
-            raise ValueError("quadmix num_experiments and num_search must be positive")
+        if num_experiments <= 0 or num_search <= 0 or tiny_steps <= 0:
+            raise ValueError(
+                "quadmix num_experiments, num_search and tiny_steps must be positive"
+            )
         if npu_devices <= 0:
             raise ValueError("quadmix npu_devices must be positive")
         if device_type not in {"cpu", "cuda", "npu"}:
@@ -40,6 +43,7 @@ class QuadMixAlgorithm(AlgorithmAdapter):
             "--output", output,
             "--num-experiments", str(num_experiments),
             "--num-search", str(num_search),
+            "--tiny-steps", str(tiny_steps),
             "--device-type", device_type,
             "--npu-devices", str(npu_devices),
             "--val-set", str(config.get("proxy_validation_set", "cap_v1")),

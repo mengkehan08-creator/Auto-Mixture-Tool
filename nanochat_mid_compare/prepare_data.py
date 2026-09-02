@@ -1192,6 +1192,39 @@ def main():
         quality_trains[m] = qt
         quality_vals[m] = qv
 
+    def summarize_domain_mix(docs):
+        counts = Counter(
+            str(doc.get("domain"))
+            for doc in docs
+            if doc.get("domain") not in (None, "")
+        )
+        token_counts = Counter()
+        for doc in docs:
+            domain = doc.get("domain")
+            if domain not in (None, ""):
+                token_counts[str(domain)] += int(doc.get("token_count", 0))
+        total_tokens = sum(token_counts.values())
+        total_docs = sum(counts.values())
+        return {
+            "domain_counts": dict(sorted(counts.items())),
+            "domain_token_counts": dict(sorted(token_counts.items())),
+            "domain_ratios": {
+                domain: count / total_tokens
+                for domain, count in sorted(token_counts.items())
+            } if total_tokens else {},
+            "domain_doc_ratios": {
+                domain: count / total_docs for domain, count in sorted(counts.items())
+            } if total_docs else {},
+        }
+
+    domain_mix = {}
+    if not skip_quadmix:
+        domain_mix["quadmix"] = summarize_domain_mix(quadmix_train)
+    if not skip_random:
+        domain_mix["random"] = summarize_domain_mix(random_train)
+    if do_manual_ratio:
+        domain_mix["manual_ratio"] = summarize_domain_mix(manual_ratio_train)
+
     if not skip_quadmix:
         print(f"  QuadMix train: {len(quadmix_train):,}, val: {len(quadmix_val):,}")
     print(f"  Random  train: {len(random_train):,}, val: {len(random_val):,}")
@@ -1298,6 +1331,7 @@ def main():
             "n_empty": n_empty,
             "n_too_long": n_too_long,
             "n_repeat": n_repeat,
+            **domain_mix["quadmix"],
         }
     if not skip_random:
         rd_td, rd_vd, rd_tt, rd_sh = precompute["random"]
@@ -1306,6 +1340,7 @@ def main():
             "val_docs": rd_vd,
             "tokens": rd_tt,
             "shards": rd_sh,
+            **domain_mix["random"],
         }
     if args.data_ratio is not None:
         stats["config"]["data_ratio"] = args.data_ratio
@@ -1325,6 +1360,7 @@ def main():
             "shards": mr_sh,
             "label": manual_ratio_label,
             "ratio_map": manual_ratio_map,
+            **domain_mix["manual_ratio"],
         }
 
     if quality_methods:

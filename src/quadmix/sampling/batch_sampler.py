@@ -6,7 +6,6 @@ Provides:
 """
 
 from typing import Callable, Dict, List, Optional, Tuple
-import glob
 import json
 import os
 import time
@@ -19,38 +18,7 @@ import pyarrow.parquet as pq
 
 from quadmix.core.types import ParameterSet
 from quadmix.core.sampler import compute_sampling_values
-
-
-def resolve_parquet_source(path: str) -> List[str]:
-    """Resolve a parquet source path to a list of file paths.
-
-    Handles both sharded (directory) and legacy (single file) outputs.
-
-    Args:
-        path: Path to a directory containing ``shard_*.parquet`` files,
-            or a single ``.parquet`` file.
-
-    Returns:
-        Sorted list of parquet file paths.
-
-    Raises:
-        FileNotFoundError: If *path* does not exist.
-        ValueError: If *path* is a directory but contains no ``.parquet``
-            files.
-    """
-    if os.path.isdir(path):
-        shards = sorted(glob.glob(os.path.join(path, "*.parquet")))
-        if not shards:
-            raise ValueError(
-                f"Directory '{path}' contains no .parquet files"
-            )
-        return shards
-    elif os.path.isfile(path):
-        return [path]
-    else:
-        raise FileNotFoundError(
-            f"Parquet source not found: {path} (not a file or directory)"
-        )
+from quadmix.sampling.sources import resolve_parquet_source
 
 
 def _select_documents_vectorized(

@@ -13,7 +13,7 @@ from datetime import datetime
 
 
 def parse_dataset_stats(path):
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -222,6 +222,32 @@ def generate_report(args):
         lines.append(row)
     lines.append("")
 
+    domains = sorted({
+        domain
+        for baseline in baselines
+        for domain in stats.get(baseline, {}).get("domain_ratios", {})
+    })
+    if domains:
+        lines.append("## Sampling Domain Ratios (by token)")
+        lines.append("")
+        lines.append("| Domain | " + " | ".join(labels[b] for b in baselines) + " |")
+        lines.append("|---|" + "|".join("---" for _ in baselines) + "|")
+        for domain in domains:
+            row = f"| {domain} |"
+            for baseline in baselines:
+                ratio = stats.get(baseline, {}).get("domain_ratios", {}).get(domain)
+                row += f" {ratio:.2%} |" if ratio is not None else " - |"
+            lines.append(row)
+        lines.append("")
+
+        if mr_info.get("ratio_map"):
+            target = ", ".join(
+                f"{domain}={float(weight) / sum(mr_info['ratio_map'].values()):.2%}"
+                for domain, weight in mr_info["ratio_map"].items()
+            )
+            lines.append(f"Manual target ratio: {target}")
+            lines.append("")
+
     lines.append("## Training Statistics")
     lines.append("")
     lines.append(header)
@@ -314,7 +340,7 @@ def generate_report(args):
     report_text = "\n".join(lines)
 
     report_path = os.path.join(args.result_dir, "experiment_report.md")
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         f.write(report_text)
 
     print(f"Report written to: {report_path}")

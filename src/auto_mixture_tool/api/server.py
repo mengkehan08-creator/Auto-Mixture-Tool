@@ -40,6 +40,7 @@ class JobRequest(BaseModel):
     executor_id: str = "local"
     dataset_config: dict[str, Any] = Field(default_factory=dict)
     algorithm_config: dict[str, Any] = Field(default_factory=dict)
+    comparison_config: dict[str, Any] = Field(default_factory=dict)
     trainer_config: dict[str, Any] = Field(default_factory=dict)
     training_data_adapter_config: dict[str, Any] = Field(default_factory=dict)
     evaluator_config: dict[str, Any] = Field(default_factory=dict)

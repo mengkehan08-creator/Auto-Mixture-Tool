@@ -132,6 +132,7 @@ import os, sys, json, multiprocessing as mp, pyarrow.parquet as pq, pyarrow as p
 from tqdm import tqdm
 sys.path.insert(0, os.environ['SCRIPT_DIR'])
 from prepare_data import count_tokens_mp, _filter_docs_chunk, _SPAWN_CTX
+from quadmix.sampling.sources import resolve_parquet_source
 
 src = os.environ['DATA_DIR']
 out_dir = os.environ['QUADMIX_DATA']
@@ -143,7 +144,9 @@ max_chars = int(os.environ['MAX_CHARS'])
 max_char_repeat_ratio = float(os.environ['MAX_CHAR_REPEAT_RATIO'])
 
 print(f'  Reading {src}...')
-table = pq.read_table(src, columns=['text'])
+# A sampled-dataset directory also contains manifest.json. Passing the whole
+# directory to PyArrow makes it try to parse that JSON file as Parquet.
+table = pq.read_table(resolve_parquet_source(src), columns=['text'])
 raw_texts = table['text'].to_pylist()
 
 num_workers = min(mp.cpu_count(), 128) or 1

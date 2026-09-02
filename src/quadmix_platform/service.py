@@ -107,7 +107,8 @@ class PlatformService:
         request.pop("format_validator_id", None)
         request.pop("validator_id", None)
         for name in (
-            "dataset_config", "algorithm_config", "trainer_config", "executor_config",
+            "dataset_config", "algorithm_config", "comparison_config",
+            "trainer_config", "executor_config",
             "training_data_adapter_config",
         ):
             value = request.get(name, {})

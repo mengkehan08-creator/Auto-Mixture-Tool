@@ -19,6 +19,9 @@ algorithm_config:
   # Two-node smoke test: 16 proxy experiments keep 2 x 8 NPUs busy once
   # distributed experiment scheduling is enabled.
   num_experiments: 16
+  # Each proxy experiment trains for 5000 steps before its validation loss is
+  # used by QuaDMix. This is much more expensive than the old 3-step smoke test.
+  tiny_steps: 5000
   num_search: 1000
   seed: 42
   device_type: npu
@@ -27,6 +30,20 @@ algorithm_config:
   proxy_validation_set: stem_v2
   proxy_validation_path: /home/ma-user/modelarts/inputs/proxy_validation_dir_5/stem_v2_tokenized.pt
   tokenizer_path: /home/ma-user/modelarts/inputs/quadmix_tokenizer_dir_4
+
+# QuaDMix remains the selected platform algorithm. Random and manual are
+# comparison strategies that reuse the same token budget, then train/evaluate
+# sequentially so the three runs do not compete for NPU memory.
+comparison_config:
+  methods:
+    - quadmix
+    - random
+    - manual
+  manual_ratios:
+    数学: 0.60
+    物理: 0.15
+    化学: 0.125
+    生物学: 0.125
 
 trainer_config:
   npu_devices: 8

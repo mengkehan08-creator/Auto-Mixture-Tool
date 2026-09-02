@@ -138,6 +138,10 @@ python3 -m auto_mixture_tool.cli run /home/ma-user/modelarts/user-job-dir/Auto-M
 
 容器内配置 `examples/configs/modelarts_pipeline.yaml` 使用 `executor_id: local`，在同一个八卡任务内完成数据校验、QuadMix、NanoChat、STEM 和结果写出。不能在这个配置里使用 `hpc-cluster`，否则会在 ModelArts 任务内部再次提交远端任务。
 
+当 `comparison_config.methods` 配置 `quadmix, random, manual` 时，完整任务会为
+三种方法分别产生采样子集，依次执行 NanoChat 训练和 STEM 评测，并在
+`trainer_config.result_dir/experiment_report.md` 中输出实际领域配比和指标对比。
+
 ModelArts 输入挂载约定：
 
 | 输入 | 容器路径 | `job_data.algorithm.inputs` 中的名称 |

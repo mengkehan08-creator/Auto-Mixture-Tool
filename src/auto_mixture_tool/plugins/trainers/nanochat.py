@@ -17,6 +17,8 @@ class NanoChatTrainer(TrainerAdapter):
     id = "nanochat"
     display_name = "NanoChat mid-training"
 
+    _comparison_methods = {"quadmix", "random", "manual"}
+
     def build(self, request: dict[str, Any], workspace: Path) -> list[CommandSpec]:
         config = request.get("trainer_config", {})
         npu_devices = int(config.get("npu_devices", 8))
@@ -30,6 +32,32 @@ class NanoChatTrainer(TrainerAdapter):
             str(key): str(value)
             for key, value in request.get("_evaluator_env", {}).items()
         }
+        comparison = request.get("comparison_config", {})
+        methods = comparison.get("methods", ["quadmix"])
+        if not isinstance(methods, list) or not methods:
+            raise ValueError("comparison_config.methods must be a non-empty list")
+        methods = [str(method).strip().lower() for method in methods]
+        unknown = sorted(set(methods) - self._comparison_methods)
+        if unknown:
+            raise ValueError(
+                "unknown comparison methods: " + ", ".join(unknown)
+            )
+        if len(methods) != len(set(methods)):
+            raise ValueError("comparison_config.methods must not contain duplicates")
+
+        manual_ratios = comparison.get("manual_ratios", {})
+        if "manual" in methods:
+            if not isinstance(manual_ratios, dict) or not manual_ratios:
+                raise ValueError(
+                    "comparison_config.manual_ratios is required for manual comparison"
+                )
+            normalized_ratios = {
+                str(domain): float(ratio) for domain, ratio in manual_ratios.items()
+            }
+            if any(not domain or ratio <= 0 for domain, ratio in normalized_ratios.items()):
+                raise ValueError("manual comparison domains and ratios must be positive")
+        else:
+            normalized_ratios = {}
 
         output = request.get("output_uri") or str(
             workspace / "result" / request["job_id"] / "quadmix"
@@ -42,7 +70,14 @@ class NanoChatTrainer(TrainerAdapter):
             "SCHEMA_CONFIG": request["schema_uri"],
             "NUM_NPU": str(npu_devices),
             "TARGET_PARAM_DATA_RATIO": str(target_ratio),
+            "COMPARISON_METHODS": ",".join(methods),
+            "AMT_RUN_ID": str(request["job_id"]),
+            "MIX_GENERAL_DATA": "1" if config.get("mix_general_data", False) else "0",
         }
+        if normalized_ratios:
+            env["MANUAL_RATIO"] = ":".join(
+                f"{domain}={ratio:g}" for domain, ratio in normalized_ratios.items()
+            )
         if evaluator_id == "stem":
             env["STEM_DATA_DIR"] = request["dataset_uri"]
 
@@ -58,13 +93,10 @@ class NanoChatTrainer(TrainerAdapter):
             env["NANOCHAT_SKIP_EVAL_DOWNLOAD"] = "1"
         env.update(evaluator_env)
 
-        # The production path trains only the dataset selected by the chosen
-        # mixing algorithm.  Random/manual comparison runs remain standalone
-        # research scripts and are not part of the platform pipeline.
         if evaluator_id == "stem":
-            script = workspace / "nanochat_mid_compare" / "run_quadmix_only.sh"
+            script = workspace / "nanochat_mid_compare" / "run_stem_experiment.sh"
             executable = "bash"
-            args = [str(script), "--data-dir", sampled]
+            args = [str(script)]
         else:
             script = workspace / "nanochat_mid_compare" / "run_experiment.sh"
             executable = "bash"

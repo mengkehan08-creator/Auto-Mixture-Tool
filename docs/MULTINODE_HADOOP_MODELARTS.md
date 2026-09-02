@@ -121,6 +121,7 @@ training_data_adapter_id: none
 
 algorithm_config:
   num_experiments: 16
+  tiny_steps: 5000
   num_search: 1000
   seed: 42
   npu_devices: 8
@@ -130,6 +131,14 @@ algorithm_config:
 
 trainer_config:
   npu_devices: 8
+
+comparison_config:
+  methods: [quadmix, random, manual]
+  manual_ratios:
+    数学: 0.60
+    物理: 0.15
+    化学: 0.125
+    生物学: 0.125
 ```
 
 `algorithm_nodes: auto` 从 ModelArts 的 `MA_NUM_HOSTS` 获取节点数。固定 `seed`
@@ -148,6 +157,29 @@ node-1: 1,3,5,7,9,11,13,15
 
 每个节点内部最多使用8张NPU。worker-0 收齐16条结果后执行LightGBM、最优
 搜索和最终采样。所有节点拿到最终采样数据后，以2×8=16个进程启动NanoChat。
+
+`tiny_steps: 5000` 表示16个代理实验每个都训练5000步，不是整个作业
+只训练5000步。相比原先的3步冒烟配置，耗时、NPU占用和中间产物会大幅
+增加，但代理验证损失更有参考价值。
+
+`algorithm_id` 仍然只选择 `quadmix`。`comparison_config.methods` 选择需要训练和
+评测的对比方法，可以去掉 `random` 或 `manual`。选择 `manual` 时必须提供
+`manual_ratios`，数值按权重归一化。各方法严格串行训练、再串行评测，避免三组
+实验同时抢占NPU。
+
+对比产物位于 `trainer_config.result_dir`：
+
+```text
+nanochat_results/
+├── data/
+│   ├── quadmix_data/          # QuaDMix采样子集（Parquet）
+│   ├── random_data/           # 随机采样子集（Parquet）
+│   ├── manual_ratio_data/     # 人工比例子集（Parquet）
+│   └── dataset_stats.json     # 实际领域数量与比例
+├── mid_train_*.log
+├── eval_*.log
+└── experiment_report.md       # 配比、训练指标和评测对比
+```
 
 ## 7. 提交任务
 
