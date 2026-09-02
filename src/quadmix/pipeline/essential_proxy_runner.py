@@ -195,6 +195,7 @@ class EssentialWebProxyRunner(BaseProxyRunner):
         self.rank_ref_size = rank_ref_size
         self.token_cache_dir = token_cache_dir
         self.checkpoint_interval = checkpoint_interval
+        self.tokenizer_path = tokenizer_path
 
         self._domain_names = domain_names
         self._quality_names = quality_names
@@ -220,19 +221,19 @@ class EssentialWebProxyRunner(BaseProxyRunner):
         self.gradient_accumulation_steps = max(1, self.batch_size // micro_batch_size)
 
         from transformers import AutoTokenizer
-        tokenizer_is_local = os.path.isdir(tokenizer_path)
+        tokenizer_is_local = os.path.isdir(self.tokenizer_path)
         if os.environ.get("HF_HUB_OFFLINE") == "1" and not tokenizer_is_local:
             raise FileNotFoundError(
-                f"QuadMix本地Tokenizer目录不存在: {tokenizer_path}"
+                f"QuadMix本地Tokenizer目录不存在: {self.tokenizer_path}"
             )
         if tokenizer_is_local and not os.path.isfile(
-            os.path.join(tokenizer_path, "tokenizer.json")
+            os.path.join(self.tokenizer_path, "tokenizer.json")
         ):
             raise FileNotFoundError(
-                f"Tokenizer目录缺少tokenizer.json: {tokenizer_path}"
+                f"Tokenizer目录缺少tokenizer.json: {self.tokenizer_path}"
             )
         self.tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_path,
+            self.tokenizer_path,
             local_files_only=tokenizer_is_local,
         )
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -1646,6 +1647,7 @@ class EssentialWebProxyRunner(BaseProxyRunner):
             "rank_ref_size": self.rank_ref_size,
             "checkpoint_interval": self.checkpoint_interval,
             "token_cache_dir": self.token_cache_dir,
+            "tokenizer_path": self.tokenizer_path,
             "shared_domain_labels": shared_metadata.get("domain_labels") if shared_metadata else None,
             "shared_quality_scores": shared_metadata.get("quality_scores") if shared_metadata else None,
             "shared_doc_char_counts": shared_metadata.get("doc_char_counts") if shared_metadata else None,

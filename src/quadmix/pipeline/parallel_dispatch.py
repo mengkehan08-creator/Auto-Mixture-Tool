@@ -211,6 +211,7 @@ def _worker_dynamic_loop(
             test_block_size=config_dict["test_block_size"],
             rank_ref_size=config_dict["rank_ref_size"],
             token_cache_dir=config_dict["token_cache_dir"],
+            tokenizer_path=config_dict["tokenizer_path"],
             checkpoint_interval=config_dict.get("checkpoint_interval", 1000),
             domain_names=config_dict.get("domain_names"),
             quality_names=config_dict.get("quality_names"),
