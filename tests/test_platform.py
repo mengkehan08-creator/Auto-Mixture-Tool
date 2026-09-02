@@ -228,13 +228,13 @@ class ServiceTests(unittest.TestCase):
             "job_id": "0123456789ab",
             "dataset_uri": str(DATASET),
             "schema_uri": str(SCHEMA),
-            "algorithm_config": {"tiny_steps": 5000},
+            "algorithm_config": {"tiny_steps": 15},
         }
 
         stage = QuadMixAlgorithm().build(request, ROOT)[0]
 
         index = stage.args.index("--tiny-steps")
-        self.assertEqual(stage.args[index + 1], "5000")
+        self.assertEqual(stage.args[index + 1], "15")
 
 
 class ExecutorTests(unittest.TestCase):

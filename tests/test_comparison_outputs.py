@@ -21,6 +21,17 @@ def test_sampled_directory_ignores_manifest_json(tmp_path: Path) -> None:
     ]
 
 
+def test_multinode_checkpoint_links_are_created_idempotently() -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "nanochat_mid_compare"
+        / "run_stem_experiment.sh"
+    ).read_text(encoding="utf-8")
+    assert 'install_shared_symlink "$MID_CHECKPOINTS_OUTPUT_DIR" "$LINK_PATH"' in script
+    assert 'install_shared_symlink "$BASE_CKPT_DIR" "$LINK_DIR"' in script
+    assert 'ln -sfnT "$TARGET" "$LINK"' in script
+
+
 def test_comparison_report_contains_realized_domain_ratios(tmp_path: Path) -> None:
     stats = {
         "config": {

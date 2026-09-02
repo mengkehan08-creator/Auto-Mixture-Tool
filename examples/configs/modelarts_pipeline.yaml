@@ -19,9 +19,8 @@ algorithm_config:
   # Two-node smoke test: 16 proxy experiments keep 2 x 8 NPUs busy once
   # distributed experiment scheduling is enabled.
   num_experiments: 16
-  # Each proxy experiment trains for 5000 steps before its validation loss is
-  # used by QuaDMix. This is much more expensive than the old 3-step smoke test.
-  tiny_steps: 5000
+  # Temporary integration setting: each proxy experiment trains for 15 steps.
+  tiny_steps: 15
   num_search: 1000
   seed: 42
   device_type: npu

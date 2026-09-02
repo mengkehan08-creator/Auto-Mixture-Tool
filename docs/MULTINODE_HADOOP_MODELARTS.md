@@ -121,7 +121,7 @@ training_data_adapter_id: none
 
 algorithm_config:
   num_experiments: 16
-  tiny_steps: 5000
+  tiny_steps: 15
   num_search: 1000
   seed: 42
   npu_devices: 8
@@ -158,9 +158,9 @@ node-1: 1,3,5,7,9,11,13,15
 每个节点内部最多使用8张NPU。worker-0 收齐16条结果后执行LightGBM、最优
 搜索和最终采样。所有节点拿到最终采样数据后，以2×8=16个进程启动NanoChat。
 
-`tiny_steps: 5000` 表示16个代理实验每个都训练5000步，不是整个作业
-只训练5000步。相比原先的3步冒烟配置，耗时、NPU占用和中间产物会大幅
-增加，但代理验证损失更有参考价值。
+`tiny_steps: 15` 表示16个代理实验每个都训练15步，不是 NanoChat
+最终训练步数。这是多节点联调的临时设置；流程稳定后再根据时间和搜索质量
+提高，例如恢复到5000步。
 
 `algorithm_id` 仍然只选择 `quadmix`。`comparison_config.methods` 选择需要训练和
 评测的对比方法，可以去掉 `random` 或 `manual`。选择 `manual` 时必须提供

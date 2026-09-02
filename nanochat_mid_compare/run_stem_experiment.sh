@@ -38,6 +38,27 @@ has_method() {
         *) return 1 ;;
     esac
 }
+install_shared_symlink() {
+    local TARGET="$1"
+    local LINK="$2"
+    local CURRENT=""
+    if [ -e "$LINK" ] && [ ! -L "$LINK" ]; then
+        echo "ERROR: $LINK exists but is not a symbolic link"
+        return 1
+    fi
+    # A concurrent ln can briefly lose a check-then-create race. Retry and
+    # accept success only after observing the requested final target.
+    for _ in $(seq 1 20); do
+        ln -sfnT "$TARGET" "$LINK" 2>/dev/null || true
+        CURRENT=$(readlink "$LINK" 2>/dev/null || true)
+        if [ "$CURRENT" = "$TARGET" ]; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "ERROR: unable to install symlink: $LINK -> $TARGET"
+    return 1
+}
 for method in ${COMPARISON_METHODS//,/ }; do
     case "$method" in
         quadmix|random|manual) ;;
@@ -538,28 +559,11 @@ if [ -n "$MID_CHECKPOINTS_OUTPUT_DIR" ]; then
     mkdir -p "$MID_CHECKPOINTS_OUTPUT_DIR"
     LINK_PATH="$NANOCHAT_MODEL_DIR/mid_checkpoints"
 
-    if [ -L "$LINK_PATH" ]; then
-        CURRENT_TARGET=$(readlink "$LINK_PATH")
-        if [ "$CURRENT_TARGET" != "$MID_CHECKPOINTS_OUTPUT_DIR" ]; then
-            echo "  Updating stale symlink: $LINK_PATH"
-            echo "    was: $CURRENT_TARGET"
-            echo "    now: $MID_CHECKPOINTS_OUTPUT_DIR"
-            rm "$LINK_PATH"
-            ln -s "$MID_CHECKPOINTS_OUTPUT_DIR" "$LINK_PATH"
-        elif [ ! -d "$CURRENT_TARGET" ]; then
-            echo "  Symlink target missing, recreating: $LINK_PATH -> $MID_CHECKPOINTS_OUTPUT_DIR"
-            rm "$LINK_PATH"
-            ln -s "$MID_CHECKPOINTS_OUTPUT_DIR" "$LINK_PATH"
-        else
-            echo "  Symlink already exists: $LINK_PATH -> $CURRENT_TARGET"
-        fi
-    elif [ -d "$LINK_PATH" ]; then
-        echo "  WARNING: $LINK_PATH exists as a directory (not a symlink)."
-        echo "  Skipping symlink creation."
-    else
-        echo "  Creating symlink: $LINK_PATH -> $MID_CHECKPOINTS_OUTPUT_DIR"
-        ln -s "$MID_CHECKPOINTS_OUTPUT_DIR" "$LINK_PATH"
-    fi
+    # Multiple ModelArts nodes enter this block concurrently. Installation is
+    # retried and verified instead of relying on a racy existence check.
+    install_shared_symlink "$MID_CHECKPOINTS_OUTPUT_DIR" "$LINK_PATH"
+    CURRENT_TARGET=$(readlink "$LINK_PATH")
+    echo "  Checkpoint symlink ready: $LINK_PATH -> $CURRENT_TARGET"
 
     echo ""
     echo "╚══════════════════════════════════════════════════════════╝"
@@ -616,10 +620,7 @@ run_mid_training() {
 
     local LINK_DIR="$NANOCHAT_MODEL_DIR/base_checkpoints/$MODEL_TAG"
 
-    if [ ! -e "$LINK_DIR" ]; then
-        echo "    Creating symlink: $LINK_DIR -> $BASE_CKPT_DIR"
-        ln -s "$BASE_CKPT_DIR" "$LINK_DIR"
-    fi
+    install_shared_symlink "$BASE_CKPT_DIR" "$LINK_DIR"
 
     trap 'if [ -L "$LINK_DIR" ]; then echo "    Cleaning up symlink on exit: $LINK_DIR"; rm "$LINK_DIR"; fi' RETURN
 
