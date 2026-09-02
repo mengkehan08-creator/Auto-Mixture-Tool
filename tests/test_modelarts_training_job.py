@@ -15,6 +15,8 @@ class ModelArtsJobTests(unittest.TestCase):
     def test_job_data_matches_multinode_mount_contract(self) -> None:
         job = modelarts.job_data
         self.assertIn("auto_mixture_tool.cli run", job["algorithm"]["command"])
+        self.assertIn("/usr/local/python3.11.14/bin/python3", job["algorithm"]["command"])
+        self.assertIn("exec python -m auto_mixture_tool.cli", job["algorithm"]["command"])
         self.assertEqual(job["spec"]["resource"]["node_count"], 2)
         inputs = {item["name"]: item for item in job["algorithm"]["inputs"]}
         self.assertEqual(len(inputs), 6)

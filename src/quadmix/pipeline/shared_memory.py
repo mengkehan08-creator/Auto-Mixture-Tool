@@ -6,6 +6,24 @@ import multiprocessing.shared_memory
 import numpy as np
 
 
+def _load_shm_open():
+    """Load POSIX shm_open across both new and old glibc layouts."""
+    import ctypes
+
+    errors = []
+    for library_name in ("libc.so.6", "librt.so.1"):
+        try:
+            library = ctypes.CDLL(library_name, use_errno=True)
+            shm_open = library.shm_open
+        except (AttributeError, OSError) as exc:
+            errors.append(f"{library_name}: {exc}")
+            continue
+        shm_open.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_uint]
+        shm_open.restype = ctypes.c_int
+        return shm_open
+    raise OSError("unable to load shm_open (" + "; ".join(errors) + ")")
+
+
 class SharedArrayInfo:
     """Descriptor for a numpy array in shared memory — pickle-safe for mp."""
 
@@ -35,12 +53,17 @@ def shared_to_ndarray(info: SharedArrayInfo) -> np.ndarray:
     ndarray's base) retains the mapping until the ndarray is GC'd.
     """
     import ctypes, mmap, os
-    libc = ctypes.CDLL('libc.so.6')
-    fd = libc.shm_open(info.name.encode(), os.O_RDWR, 0o600)
+
+    shm_open = _load_shm_open()
+    posix_name = info.name if info.name.startswith("/") else f"/{info.name}"
+    fd = shm_open(posix_name.encode(), os.O_RDWR, 0o600)
     if fd < 0:
-        raise OSError(f"shm_open failed for {info.name}: fd={fd}")
-    m = mmap.mmap(fd, info.nbytes)
-    os.close(fd)
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno), info.name)
+    try:
+        m = mmap.mmap(fd, info.nbytes)
+    finally:
+        os.close(fd)
     arr = np.ndarray(shape=info.shape, dtype=np.dtype(info.dtype), buffer=m)
     arr.flags.writeable = False
     return arr
