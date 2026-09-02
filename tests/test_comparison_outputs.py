@@ -27,9 +27,23 @@ def test_multinode_checkpoint_links_are_created_idempotently() -> None:
         / "nanochat_mid_compare"
         / "run_stem_experiment.sh"
     ).read_text(encoding="utf-8")
+    assert 'LINK_PATH="$NANOCHAT_RUNTIME_DIR/mid_checkpoints"' in script
     assert 'install_shared_symlink "$MID_CHECKPOINTS_OUTPUT_DIR" "$LINK_PATH"' in script
     assert 'install_shared_symlink "$BASE_CKPT_DIR" "$LINK_DIR"' in script
     assert 'ln -sfnT "$TARGET" "$LINK"' in script
+    assert 'LINK_PATH="$NANOCHAT_MODEL_DIR/mid_checkpoints"' not in script
+
+
+def test_nanochat_runtime_layout_does_not_modify_modelarts_input() -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "nanochat_mid_compare"
+        / "run_stem_experiment.sh"
+    ).read_text(encoding="utf-8")
+    assert 'export NANOCHAT_BASE_DIR="$NANOCHAT_RUNTIME_DIR"' in script
+    assert '"$NANOCHAT_RUNTIME_DIR/base_checkpoints/$BASE_MODEL_TAG"' in script
+    assert 'install_shared_symlink "$TOKENIZER_DIR" "$NANOCHAT_RUNTIME_DIR/tokenizer"' in script
+    assert 'local LINK_DIR="$NANOCHAT_RUNTIME_DIR/base_checkpoints/$MODEL_TAG"' in script
 
 
 def test_comparison_report_contains_realized_domain_ratios(tmp_path: Path) -> None:

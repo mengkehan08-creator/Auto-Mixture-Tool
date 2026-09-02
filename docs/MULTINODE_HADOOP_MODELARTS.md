@@ -158,6 +158,21 @@ node-1: 1,3,5,7,9,11,13,15
 每个节点内部最多使用8张NPU。worker-0 收齐16条结果后执行LightGBM、最优
 搜索和最终采样。所有节点拿到最终采样数据后，以2×8=16个进程启动NanoChat。
 
+NanoChat 的 ModelArts 输入目录只用于读取基础模型和 tokenizer，流水线不会在
+`/home/ma-user/modelarts/inputs/nanochat_model_dir_1` 中创建或替换
+`mid_checkpoints`。每个节点使用下面的临时可写布局：
+
+```text
+/tmp/auto-mixture-<job_id>/nanochat_model/
+├── base_checkpoints/   # 链接到输入基础模型
+├── tokenizer           # 链接到输入 tokenizer
+└── mid_checkpoints     # 链接到 ModelArts 输出目录
+```
+
+真实的训练 checkpoint 仍写入
+`/home/ma-user/modelarts/outputs/output_dir_0/nanochat_checkpoints`。因此，即使输入
+模型目录已经存在普通 `mid_checkpoints/` 目录，也不会产生命名冲突。
+
 `tiny_steps: 15` 表示16个代理实验每个都训练15步，不是 NanoChat
 最终训练步数。这是多节点联调的临时设置；流程稳定后再根据时间和搜索质量
 提高，例如恢复到5000步。

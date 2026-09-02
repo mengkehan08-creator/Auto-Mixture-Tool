@@ -84,6 +84,10 @@ MANUAL_RATIO="${MANUAL_RATIO:-数学=60:物理=15:化学=12.5:生物学=12.5}"
 # Nanochat model directory
 NANOCHAT_MODEL_DIR="${NANOCHAT_MODEL_DIR:-/home/ma-user/work/nanochat_model_dir}"
 
+# Writable per-node runtime layout. ModelArts input mounts are treated as
+# immutable sources and are never modified by this script.
+NANOCHAT_RUNTIME_DIR="${NANOCHAT_RUNTIME_DIR:-/tmp/auto-mixture-${AMT_RUN_ID:-$TIMESTAMP}/nanochat_model}"
+
 # Base model tag
 BASE_MODEL_TAG="${BASE_MODEL_TAG:-d28}"
 
@@ -207,8 +211,8 @@ fi
 export OMP_NUM_THREADS=1
 export PYTHONWARNINGS="ignore::UserWarning:torch_npu"
 export WANDB_MODE=offline
-export NANOCHAT_BASE_DIR="$NANOCHAT_MODEL_DIR"
-mkdir -p "$NANOCHAT_MODEL_DIR"
+export NANOCHAT_BASE_DIR="$NANOCHAT_RUNTIME_DIR"
+mkdir -p "$NANOCHAT_RUNTIME_DIR/base_checkpoints"
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
@@ -298,6 +302,7 @@ echo "  QuadMix dataset:     $QUADMIX_SAMPLED_DATA"
 echo "  STEM data dir:       $STEM_DATA_DIR"
 echo "  Schema config:       $SCHEMA_PATH"
 echo "  Nanochat model dir:  $NANOCHAT_MODEL_DIR"
+echo "  Runtime model dir:   $NANOCHAT_RUNTIME_DIR"
 echo "  Nanochat repo:       $NANOCHAT_REPO"
 echo "  Base model tag:      $BASE_MODEL_TAG"
 echo "  Experiment output:   $RESULT_DIR"
@@ -557,7 +562,13 @@ if [ -n "$MID_CHECKPOINTS_OUTPUT_DIR" ]; then
     echo ""
 
     mkdir -p "$MID_CHECKPOINTS_OUTPUT_DIR"
-    LINK_PATH="$NANOCHAT_MODEL_DIR/mid_checkpoints"
+    # Build the layout expected by NanoChat under a writable, node-local path.
+    # The source model and tokenizer remain in the ModelArts input mount.
+    install_shared_symlink \
+        "$BASE_CKPT_DIR" \
+        "$NANOCHAT_RUNTIME_DIR/base_checkpoints/$BASE_MODEL_TAG"
+    install_shared_symlink "$TOKENIZER_DIR" "$NANOCHAT_RUNTIME_DIR/tokenizer"
+    LINK_PATH="$NANOCHAT_RUNTIME_DIR/mid_checkpoints"
 
     # Multiple ModelArts nodes enter this block concurrently. Installation is
     # retried and verified instead of relying on a racy existence check.
@@ -618,7 +629,7 @@ run_mid_training() {
     echo "    Steps:      $NUM_ITERATIONS"
     echo "    Log:        $LOG_FILE"
 
-    local LINK_DIR="$NANOCHAT_MODEL_DIR/base_checkpoints/$MODEL_TAG"
+    local LINK_DIR="$NANOCHAT_RUNTIME_DIR/base_checkpoints/$MODEL_TAG"
 
     install_shared_symlink "$BASE_CKPT_DIR" "$LINK_DIR"
 
