@@ -116,7 +116,20 @@ OBS地址修改 `job_data["algorithm"]["inputs"]` 和 `outputs` 中对应项。`
 保留样例原有流程，其中的输入覆盖值也必须同步修改；真实Authorization不要提交到Git。
 YAML只配置容器内流水线，不能代替提交API所需的Authorization和资源参数。
 
+离线评测还需要把解压后的 NanoChat `eval_bundle` 作为输入挂载。OBS 目录
+`obs://bucket-pangu-green-guangzhou/s00944147/l00916525/eval_bundle/` 的根目录中
+必须直接包含 `core.yaml`、`eval_meta_data.csv` 和 `eval_data/`。样例提交脚本将其
+挂载到 `/home/ma-user/modelarts/inputs/eval_bundle_dir_6`。
+
 ## 6. 流水线配置
+
+ModelArts 无公网下载能力时，NanoChat 配置使用预挂载评测包并禁止下载：
+
+```yaml
+trainer_config:
+  eval_bundle_dir: /home/ma-user/modelarts/inputs/eval_bundle_dir_6
+  skip_eval_download: true
+```
 
 使用 `examples/configs/modelarts_pipeline.yaml`。关键字段：
 

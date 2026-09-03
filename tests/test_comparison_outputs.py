@@ -43,7 +43,20 @@ def test_nanochat_runtime_layout_does_not_modify_modelarts_input() -> None:
     assert 'export NANOCHAT_BASE_DIR="$NANOCHAT_RUNTIME_DIR"' in script
     assert '"$NANOCHAT_RUNTIME_DIR/base_checkpoints/$BASE_MODEL_TAG"' in script
     assert 'install_shared_symlink "$TOKENIZER_DIR" "$NANOCHAT_RUNTIME_DIR/tokenizer"' in script
+    assert '"$NANOCHAT_RUNTIME_DIR/eval_bundle"' in script
     assert 'local LINK_DIR="$NANOCHAT_RUNTIME_DIR/base_checkpoints/$MODEL_TAG"' in script
+
+
+def test_nanochat_offline_eval_bundle_is_validated() -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "nanochat_mid_compare"
+        / "run_stem_experiment.sh"
+    ).read_text(encoding="utf-8")
+    assert 'NANOCHAT_EVAL_BUNDLE_DIR="${NANOCHAT_EVAL_BUNDLE_DIR:-}"' in script
+    assert '"$NANOCHAT_EVAL_BUNDLE_DIR/core.yaml"' in script
+    assert '"$NANOCHAT_EVAL_BUNDLE_DIR/eval_meta_data.csv"' in script
+    assert '"$NANOCHAT_EVAL_BUNDLE_DIR/eval_data"' in script
 
 
 def test_nanochat_script_reports_stage_progress() -> None:

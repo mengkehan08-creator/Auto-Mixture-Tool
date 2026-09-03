@@ -163,6 +163,19 @@ job_data = {
                     "obs": {"obs_url": "REPLACE_ME_PROXY_VALIDATION_OBS_URL"}
                 },
             },
+            {
+                "name": "eval_bundle_dir",
+                "local_dir": "/home/ma-user/modelarts/inputs/eval_bundle_dir_6",
+                "access_method": "env",
+                "remote": {
+                    "obs": {
+                        "obs_url": (
+                            "obs://bucket-pangu-green-guangzhou/s00944147/"
+                            "l00916525/eval_bundle/"
+                        )
+                    }
+                },
+            },
         ],
         "outputs": [
             {
@@ -257,6 +270,15 @@ def main():
         if i["name"] == "proxy_validation_dir"
     )
     item["remote"]["obs"]["obs_url"] = "REPLACE_ME_PROXY_VALIDATION_OBS_URL"
+
+    item = next(
+        i
+        for i in job_data["algorithm"]["inputs"]
+        if i["name"] == "eval_bundle_dir"
+    )
+    item["remote"]["obs"]["obs_url"] = (
+        "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/eval_bundle/"
+    )
 
     # 输出。
     item = next(i for i in job_data["algorithm"]["outputs"] if i["name"] == "output_dir")

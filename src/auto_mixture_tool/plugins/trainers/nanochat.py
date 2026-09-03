@@ -84,6 +84,7 @@ class NanoChatTrainer(TrainerAdapter):
         optional = {
             "NANOCHAT_REPO": config.get("nanochat_repo"),
             "NANOCHAT_MODEL_DIR": config.get("model_dir"),
+            "NANOCHAT_EVAL_BUNDLE_DIR": config.get("eval_bundle_dir"),
             "BASE_MODEL_TAG": config.get("base_model_tag"),
             "RESULT_DIR": config.get("result_dir"),
             "MID_CHECKPOINTS_OUTPUT_DIR": config.get("checkpoint_dir"),

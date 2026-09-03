@@ -223,6 +223,27 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertEqual(stage.env["AMT_RUN_ID"], "0123456789ab")
 
+    def test_offline_eval_bundle_config_is_passed_to_nanochat(self) -> None:
+        request = {
+            "job_id": "0123456789ab",
+            "dataset_uri": str(DATASET),
+            "schema_uri": str(SCHEMA),
+            "evaluator_id": "stem",
+            "trainer_config": {
+                "eval_bundle_dir": "/modelarts/inputs/eval_bundle_dir_6",
+                "skip_eval_download": True,
+            },
+            "_evaluator_env": {},
+        }
+
+        stage = NanoChatTrainer().build(request, ROOT)[0]
+
+        self.assertEqual(
+            stage.env["NANOCHAT_EVAL_BUNDLE_DIR"],
+            "/modelarts/inputs/eval_bundle_dir_6",
+        )
+        self.assertEqual(stage.env["NANOCHAT_SKIP_EVAL_DOWNLOAD"], "1")
+
     def test_quadmix_adapter_passes_proxy_training_steps(self) -> None:
         request = {
             "job_id": "0123456789ab",

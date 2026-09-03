@@ -98,6 +98,10 @@ MANUAL_RATIO="${MANUAL_RATIO:-数学=60:物理=15:化学=12.5:生物学=12.5}"
 # Nanochat model directory
 NANOCHAT_MODEL_DIR="${NANOCHAT_MODEL_DIR:-/home/ma-user/work/nanochat_model_dir}"
 
+# Pre-downloaded NanoChat CORE evaluation bundle. When set, this directory is
+# linked into the writable NanoChat runtime so evaluation remains offline.
+NANOCHAT_EVAL_BUNDLE_DIR="${NANOCHAT_EVAL_BUNDLE_DIR:-}"
+
 # Writable per-node runtime layout. ModelArts input mounts are treated as
 # immutable sources and are never modified by this script.
 NANOCHAT_RUNTIME_DIR="${NANOCHAT_RUNTIME_DIR:-/tmp/auto-mixture-${AMT_RUN_ID:-$TIMESTAMP}/nanochat_model}"
@@ -191,6 +195,16 @@ TOKENIZER_DIR="$NANOCHAT_MODEL_DIR/tokenizer"
 if [ ! -f "$TOKENIZER_DIR/tokenizer.pkl" ]; then
     echo "ERROR: Tokenizer not found: $TOKENIZER_DIR/tokenizer.pkl"
     exit 1
+fi
+
+if [ -n "$NANOCHAT_EVAL_BUNDLE_DIR" ]; then
+    if [ ! -f "$NANOCHAT_EVAL_BUNDLE_DIR/core.yaml" ] || \
+       [ ! -f "$NANOCHAT_EVAL_BUNDLE_DIR/eval_meta_data.csv" ] || \
+       [ ! -d "$NANOCHAT_EVAL_BUNDLE_DIR/eval_data" ]; then
+        echo "ERROR: Incomplete NanoChat eval bundle: $NANOCHAT_EVAL_BUNDLE_DIR"
+        echo "  Expected: core.yaml, eval_meta_data.csv, and eval_data/"
+        exit 1
+    fi
 fi
 
 # Auto-detect num_scaling_params from checkpoint meta JSON
@@ -586,6 +600,12 @@ if [ -n "$MID_CHECKPOINTS_OUTPUT_DIR" ]; then
         "$BASE_CKPT_DIR" \
         "$NANOCHAT_RUNTIME_DIR/base_checkpoints/$BASE_MODEL_TAG"
     install_shared_symlink "$TOKENIZER_DIR" "$NANOCHAT_RUNTIME_DIR/tokenizer"
+    if [ -n "$NANOCHAT_EVAL_BUNDLE_DIR" ]; then
+        install_shared_symlink \
+            "$NANOCHAT_EVAL_BUNDLE_DIR" \
+            "$NANOCHAT_RUNTIME_DIR/eval_bundle"
+        echo "  Eval bundle linked: $NANOCHAT_RUNTIME_DIR/eval_bundle"
+    fi
     LINK_PATH="$NANOCHAT_RUNTIME_DIR/mid_checkpoints"
 
     # Multiple ModelArts nodes enter this block concurrently. Installation is
