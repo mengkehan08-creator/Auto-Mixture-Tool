@@ -87,11 +87,20 @@ which obsutil
 镜像还必须包含与 Ascend/CANN 匹配的 `torch`、`torch-npu`、`transformers`、
 `pyarrow`、`lightgbm`、`scikit-learn` 和 NanoChat 依赖。
 
-提交脚本通过 `AMT_PYTHON_EXECUTABLE=/usr/local/python3.11.14/bin/python3`
-固定流水线、NanoChat 和 `torchrun` 使用同一个解释器。Ascend 镜像固定在不含
+提交脚本优先发现镜像中的 `python3.11`，校验版本后通过
+`AMT_PYTHON_EXECUTABLE` 固定流水线、NanoChat 和 `torchrun` 使用同一个解释器，
+不再依赖某个镜像的硬编码 Python 路径。启动时
+`scripts/modelarts_runtime_check.py` 会一次列出所有缺失或导入失败的运行依赖，
+并执行 LightGBM 小规模拟合检查。Ascend 镜像固定在不含
 `torch.nn.functional.rms_norm` 的旧版 PyTorch 时，工具会加载基于基础张量算子的
-兼容实现。默认 `disable_wandb: true`，训练使用 NanoChat 的 `DummyWandb`，不会
-要求安装或连接 WandB。
+兼容实现。默认 `disable_wandb: true`，训练使用 NanoChat 的 `DummyWandb`，同时
+由仓库内的空实现满足源码顶层 `import wandb`，不会要求安装或连接 WandB。
+
+LightGBM 的 aarch64 离线 wheel 放在 OBS 的 `python_wheels/` 目录，样例提交脚本
+将其挂载到 `/home/ma-user/modelarts/inputs/python_wheels_dir_7`。工具会安装到任务
+临时目录，并隔离镜像中可能与 Python 3.11 不兼容的可选 Dask 包；QuaDMix 本身
+不使用 Dask。wheel 文件名必须为
+`lightgbm-4.6.0-py3-none-manylinux2014_aarch64.whl`。
 
 NanoChat 源码在加载 tokenizer 模块时会导入 `rustbpe`。当镜像没有安装
 `rustbpe`、但已挂载可用的 `tokenizer/tokenizer.pkl` 时，工具会启用仅限
@@ -126,6 +135,13 @@ YAML只配置容器内流水线，不能代替提交API所需的Authorization和
 `obs://bucket-pangu-green-guangzhou/s00944147/l00916525/eval_bundle/` 的根目录中
 必须直接包含 `core.yaml`、`eval_meta_data.csv` 和 `eval_data/`。样例提交脚本将其
 挂载到 `/home/ma-user/modelarts/inputs/eval_bundle_dir_6`。
+
+离线 LightGBM wheel 还需作为 `python_wheels_dir` 输入挂载：
+
+```text
+OBS:   obs://bucket-pangu-green-guangzhou/s00944147/l00916525/python_wheels/
+本地:  /home/ma-user/modelarts/inputs/python_wheels_dir_7
+```
 
 ## 6. 流水线配置
 

@@ -47,24 +47,31 @@ job_data = {
         # 末尾的 modelarts 是 bash -c 的 $0，可隔离平台可能附加的命令参数。
         "command": (
             "/bin/bash -c 'set -euo pipefail; "
-            "PY311=/usr/local/python3.11.14/bin/python3; "
-            "test -x $PY311; "
-            "mkdir -p /tmp/auto-mixture-python311; "
+            "PY311=$(command -v python3.11 || command -v python3 || true); "
+            "test -n \"$PY311\" || { echo \"ERROR: Python not found\"; exit 2; }; "
+            "$PY311 -c \"import sys; assert sys.version_info[:2] == (3, 11), "
+            "f\\\"Python 3.11 required, got {sys.version}\\\"\"; "
+            "PY_DEPS=/tmp/auto-mixture-python-packages; "
+            "mkdir -p $PY_DEPS /tmp/auto-mixture-python311; "
             "ln -sf $PY311 /tmp/auto-mixture-python311/python; "
             "ln -sf $PY311 /tmp/auto-mixture-python311/python3; "
-            "export PATH=/tmp/auto-mixture-python311:"
-            "/usr/local/python3.11.14/bin:$PATH; "
+            "export PATH=/tmp/auto-mixture-python311:$PATH; "
+            # LightGBM does not need Dask here. Shadow the image's incompatible
+            # optional Dask installation so LightGBM treats it as unavailable.
+            ": > $PY_DEPS/dask.py; "
+            "export PYTHONPATH=$PY_DEPS:${PYTHONPATH:-}; "
+            "if [ ! -d $PY_DEPS/lightgbm ]; then "
+            "echo \"Installing LightGBM from offline OBS wheel\"; "
+            "$PY311 -m pip install --no-index --no-deps --target $PY_DEPS "
+            "/home/ma-user/modelarts/inputs/python_wheels_dir_7/"
+            "lightgbm-4.6.0-py3-none-manylinux2014_aarch64.whl; "
+            "fi; "
             "export AMT_PYTHON_EXECUTABLE=$PY311; "
-            "python --version; "
-            "python -c \""
-            "import yaml,numpy,pandas,pyarrow,sklearn,lightgbm,joblib;"
-            "import torch,torch_npu,transformers,tokenizers,requests;"
-            "print(\\\"Python 3.11 runtime dependencies OK\\\")"
-            "\"; "
             "cd /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool; "
             "export PYTHONPATH=/home/ma-user/modelarts/user-job-dir/"
-            "Auto-Mixture-Tool/src:${PYTHONPATH:-}; "
-            "exec python -m auto_mixture_tool.cli run "
+            "Auto-Mixture-Tool/src:$PY_DEPS:${PYTHONPATH:-}; "
+            "$PY311 scripts/modelarts_runtime_check.py; "
+            "exec $PY311 -m auto_mixture_tool.cli run "
             "/home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool/"
             "examples/configs/modelarts_pipeline.yaml' modelarts\n"
         ),
@@ -73,7 +80,6 @@ job_data = {
             "MOX_OBS_SIGNATURE": "obs",
             "PYTHONUTF8": "1",
             "PYTHONUNBUFFERED": "1",
-            "AMT_PYTHON_EXECUTABLE": "/usr/local/python3.11.14/bin/python3",
             "NUM_NPU": "8",
             "ASCEND_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
             "AMT_RUN_ID": "auto-mixture-2node-change-me",
@@ -174,6 +180,19 @@ job_data = {
                         "obs_url": (
                             "obs://bucket-pangu-green-guangzhou/s00944147/"
                             "l00916525/eval_bundle/"
+                        )
+                    }
+                },
+            },
+            {
+                "name": "python_wheels_dir",
+                "local_dir": "/home/ma-user/modelarts/inputs/python_wheels_dir_7",
+                "access_method": "env",
+                "remote": {
+                    "obs": {
+                        "obs_url": (
+                            "obs://bucket-pangu-green-guangzhou/s00944147/"
+                            "l00916525/python_wheels/"
                         )
                     }
                 },
@@ -280,6 +299,15 @@ def main():
     )
     item["remote"]["obs"]["obs_url"] = (
         "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/eval_bundle/"
+    )
+
+    item = next(
+        i
+        for i in job_data["algorithm"]["inputs"]
+        if i["name"] == "python_wheels_dir"
+    )
+    item["remote"]["obs"]["obs_url"] = (
+        "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/python_wheels/"
     )
 
     # 输出。

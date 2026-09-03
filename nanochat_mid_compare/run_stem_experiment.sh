@@ -264,6 +264,8 @@ export OMP_NUM_THREADS=1
 export PYTHONWARNINGS="ignore::UserWarning:torch_npu"
 if [ "$NANOCHAT_DISABLE_WANDB" = "1" ]; then
     export WANDB_MODE=disabled
+    export PYTHONPATH="$SCRIPT_DIR/compat/wandb_disabled:${PYTHONPATH:-}"
+    echo "  WandB disabled; using local no-op compatibility module"
 else
     export WANDB_MODE=offline
 fi

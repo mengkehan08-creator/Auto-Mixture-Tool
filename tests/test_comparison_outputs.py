@@ -104,6 +104,13 @@ def test_old_pytorch_and_wandb_have_offline_training_fallbacks() -> None:
     assert "PyTorch F.rms_norm unavailable" in script
     assert 'TRACKING_RUN_NAME="dummy"' in script
     assert '--run="$TRACKING_RUN_NAME"' in script
+    assert 'compat/wandb_disabled' in script
+    wandb_fallback = (
+        root / "nanochat_mid_compare" / "compat" / "wandb_disabled" / "wandb.py"
+    ).read_text(encoding="utf-8")
+    assert "def init(" in wandb_fallback
+    assert "def log(" in wandb_fallback
+    assert "def finish(" in wandb_fallback
     assert 'if not hasattr(functional, "rms_norm")' in compatibility
     assert "torch.rsqrt" in compatibility
 

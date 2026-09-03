@@ -15,16 +15,15 @@ class ModelArtsJobTests(unittest.TestCase):
     def test_job_data_matches_multinode_mount_contract(self) -> None:
         job = modelarts.job_data
         self.assertIn("auto_mixture_tool.cli run", job["algorithm"]["command"])
-        self.assertIn("/usr/local/python3.11.14/bin/python3", job["algorithm"]["command"])
+        self.assertIn("command -v python3.11", job["algorithm"]["command"])
+        self.assertIn("python_wheels_dir_7", job["algorithm"]["command"])
+        self.assertIn("scripts/modelarts_runtime_check.py", job["algorithm"]["command"])
         self.assertIn("export AMT_PYTHON_EXECUTABLE=$PY311", job["algorithm"]["command"])
-        self.assertIn("exec python -m auto_mixture_tool.cli", job["algorithm"]["command"])
-        self.assertEqual(
-            job["algorithm"]["environments"]["AMT_PYTHON_EXECUTABLE"],
-            "/usr/local/python3.11.14/bin/python3",
-        )
+        self.assertIn("exec $PY311 -m auto_mixture_tool.cli", job["algorithm"]["command"])
+        self.assertNotIn("AMT_PYTHON_EXECUTABLE", job["algorithm"]["environments"])
         self.assertEqual(job["spec"]["resource"]["node_count"], 2)
         inputs = {item["name"]: item for item in job["algorithm"]["inputs"]}
-        self.assertEqual(len(inputs), 7)
+        self.assertEqual(len(inputs), 8)
         self.assertEqual(
             inputs["quadmix_tokenizer_dir"]["local_dir"],
             "/home/ma-user/modelarts/inputs/quadmix_tokenizer_dir_4",
@@ -36,6 +35,10 @@ class ModelArtsJobTests(unittest.TestCase):
         self.assertEqual(
             inputs["eval_bundle_dir"]["local_dir"],
             "/home/ma-user/modelarts/inputs/eval_bundle_dir_6",
+        )
+        self.assertEqual(
+            inputs["python_wheels_dir"]["local_dir"],
+            "/home/ma-user/modelarts/inputs/python_wheels_dir_7",
         )
         self.assertTrue(all(item["access_method"] == "env" for item in inputs.values()))
 
