@@ -378,30 +378,38 @@ class QuaDMixPipeline:
         texts, domain_labels, quality_scores, token_counts, text_source, mm = \
             self._stage0_load(data_path, precomputed, text_col, domain_col,
                               quality_cols, doc_limit, stage_times, load_kwargs)
+        self._print_progress(8, "dataset loaded")
 
         quality_scores, domain_labels = \
             self._stage1_features(texts, precomputed, quality_scores, domain_labels, stage_times)
+        self._print_progress(12, "quality and domain features ready")
 
         n_exp, param_sets = self._stage3_param_sampling(num_experiments, stage_times)
+        self._print_progress(15, "proxy parameter sets sampled")
 
         results, proxy_loss_stats = self._stage4_proxy_experiments(
             proxy_runner, n_exp, param_sets, parallel_workers, stage_times,
             distributed_coordinator)
+        self._print_progress(65, "proxy experiments completed")
 
         # Non-primary distributed nodes publish their proxy subset, wait for
         # node 0 to finish sampling, download the final artifacts, and stop.
         if results is None:
+            self._print_progress(100, "final QuaDMix artifacts received")
             return None
 
         self._stage5_lightgbm(results, stage_times)
+        self._print_progress(72, "LightGBM surrogate trained")
 
         n_search, optimal_params, predicted_losses, top_k_avg_loss = \
             self._stage6_search(num_search, mm, token_counts, stage_times)
+        self._print_progress(80, "optimal parameters found")
 
         final_ranks, selected_indices, sampling_values, orig_dist, sel_dist = \
             self._stage7_final_sampling(
                 quality_scores, domain_labels, optimal_params, token_counts,
                 domain_names, stage_times)
+        self._print_progress(86, "final subset sampled")
 
         domain_dist_change = {}
         for m in range(self.config.num_domains):
@@ -421,11 +429,13 @@ class QuaDMixPipeline:
             predicted_losses, top_k_avg_loss, proxy_loss_stats, proxy_runner,
             val_set, stage_times, t_start, domain_dist_change,
             quality_scores=quality_scores)
+        self._print_progress(95, "sampled dataset and parameters saved")
 
         self._stage9_report(
             output_dir, data_path, optimal_params, selected_indices,
             domain_labels, token_counts, summary, t_start, text_source, stage_times,
             domain_names=domain_names, quality_names=quality_names)
+        self._print_progress(100, "QuaDMix report generated")
 
         elapsed = time.time() - t_start
         self._print_timing_summary(stage_times, elapsed, output_dir)
@@ -1041,3 +1051,10 @@ class QuaDMixPipeline:
             "quality_weights": quality_weights,
             "sampling_params": sampling_params,
         }
+
+    @staticmethod
+    def _print_progress(percent: int, label: str) -> None:
+        width = 20
+        filled = int(percent * width / 100)
+        bar = "#" * filled + "-" * (width - filled)
+        print(f"[QuaDMix Progress] [{bar}] {percent:3d}% {label}", flush=True)

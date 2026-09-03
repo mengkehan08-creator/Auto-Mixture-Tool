@@ -59,6 +59,20 @@ install_shared_symlink() {
     echo "ERROR: unable to install symlink: $LINK -> $TARGET"
     return 1
 }
+show_progress() {
+    local PERCENT="$1"
+    local LABEL="$2"
+    local WIDTH=20
+    local FILLED=$((PERCENT * WIDTH / 100))
+    local EMPTY=$((WIDTH - FILLED))
+    local DONE EMPTY_PART
+    printf -v DONE '%*s' "$FILLED" ''
+    printf -v EMPTY_PART '%*s' "$EMPTY" ''
+    DONE=${DONE// /#}
+    EMPTY_PART=${EMPTY_PART// /-}
+    printf '[NanoChat Progress][node %s] [%s%s] %3d%% %s\n' \
+        "${NODE_RANK:-0}" "$DONE" "$EMPTY_PART" "$PERCENT" "$LABEL"
+}
 for method in ${COMPARISON_METHODS//,/ }; do
     case "$method" in
         quadmix|random|manual) ;;
@@ -329,6 +343,7 @@ echo "    Manual Ratio:  $MANUAL_RATIO_MODEL_TAG"
 echo ""
 echo "════════════════════════════════════════════════════════════"
 echo ""
+show_progress 5 "configuration validated"
 
 mkdir -p "$RESULT_DIR"
 
@@ -341,6 +356,7 @@ DATA_DIR="$RESULT_DIR/data"
 echo ""
 echo "╔══ Step 1: Prepare STEM datasets ══╗"
 echo ""
+show_progress 8 "starting comparison dataset preparation"
 
 PREP_ARGS=(
     --preprocessed-data-dir "$STEM_DATA_DIR"
@@ -437,6 +453,7 @@ print(f'    Data multiplier:  {mult}')
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
+show_progress 25 "three comparison datasets prepared"
 
 # ══════════════════════════════════════════════════════════════
 #  PRE-FLIGHT: DISK SPACE CHECK (before mixing + checkpoint writing)
@@ -494,6 +511,7 @@ echo "  ✓ Disk space sufficient"
 echo ""
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
+show_progress 30 "disk capacity checked"
 
 # ══════════════════════════════════════════════════════════════
 #  STEP 1.5: MIX STEM WITH CLIMBMIX (anti-forgetting)
@@ -580,6 +598,7 @@ if [ -n "$MID_CHECKPOINTS_OUTPUT_DIR" ]; then
     echo "╚══════════════════════════════════════════════════════════╝"
     echo ""
 fi
+show_progress 35 "NanoChat runtime layout ready"
 
 # ══════════════════════════════════════════════════════════════
 #  PRE-FLIGHT: DOWNLOAD EVAL DATA
@@ -589,6 +608,17 @@ echo ""
 echo "╔══ Pre-flight: Download eval data ══╗"
 echo ""
 pushd "$NANOCHAT_REPO" > /dev/null
+# NanoChat imports rustbpe even when it only loads an existing tiktoken-based
+# tokenizer.pkl. Use the real package when installed; otherwise expose the
+# inference-only compatibility module shipped with this tool.
+if ! python3 -c "import rustbpe" >/dev/null 2>&1; then
+    export PYTHONPATH="${PYTHONPATH:-}:$SCRIPT_DIR/compat"
+    echo "  rustbpe not installed; using existing-tokenizer compatibility mode"
+fi
+python3 -c "from nanochat.tokenizer import get_tokenizer; get_tokenizer(); print('  NanoChat tokenizer import OK')" || {
+    echo "  ERROR: NanoChat tokenizer runtime check failed"
+    exit 1
+}
 if [ "${NANOCHAT_SKIP_EVAL_DOWNLOAD:-0}" != "1" ]; then
     python3 -c "from scripts.base_eval import prepare_eval_data; prepare_eval_data('${EVAL_BENCHMARKS:-all}')" || {
         echo "  ERROR: eval data download failed"
@@ -600,6 +630,7 @@ fi
 popd > /dev/null
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
+show_progress 40 "evaluation data ready"
 
 # ══════════════════════════════════════════════════════════════
 #  STEP 3: MID-TRAINING
@@ -676,6 +707,7 @@ echo "  Common training budget: $TRAIN_BUDGET tokens (data_multiplier=$DATA_MULT
 echo ""
 echo "╔══ Step 3a: Mid-training on QuadMix data ══╗"
 echo ""
+show_progress 42 "starting QuaDMix dataset training"
 
 QUADMIX_LOG=""
 if has_method quadmix; then
@@ -684,6 +716,7 @@ if has_method quadmix; then
 else
     echo "  Skipped (not selected)"
 fi
+show_progress 55 "QuaDMix dataset training finished"
 
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
@@ -692,6 +725,7 @@ echo ""
 echo ""
 echo "╔══ Step 3b: Mid-training on Random data ══╗"
 echo ""
+show_progress 57 "starting random dataset training"
 
 RANDOM_LOG=""
 if has_method random; then
@@ -700,6 +734,7 @@ if has_method random; then
 else
     echo "  Skipped (not selected)"
 fi
+show_progress 65 "random dataset training finished"
 
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
@@ -708,6 +743,7 @@ echo ""
 echo ""
 echo "╔══ Step 3c: Mid-training on Manual Ratio data ══╗"
 echo ""
+show_progress 67 "starting manual-ratio dataset training"
 
 MANUAL_RATIO_LOG=""
 if has_method manual; then
@@ -716,6 +752,7 @@ if has_method manual; then
 else
     echo "  Skipped (not selected)"
 fi
+show_progress 75 "manual-ratio dataset training finished"
 
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
@@ -746,24 +783,31 @@ run_eval() {
 echo ""
 echo "╔══ Step 4: Evaluation (benchmarks=$EVAL_BENCHMARKS) ══╗"
 echo ""
+show_progress 77 "starting model evaluations"
 
 QUADMIX_EVAL_LOG=""
 if has_method quadmix; then
+    show_progress 78 "evaluating QuaDMix model"
     QUADMIX_EVAL_LOG="$RESULT_DIR/eval_quadmix.log"
     run_eval "$QUADMIX_MODEL_TAG" "mid" "$QUADMIX_EVAL_LOG"
 fi
+show_progress 80 "QuaDMix model evaluation finished"
 
 RANDOM_EVAL_LOG=""
 if has_method random; then
+    show_progress 83 "evaluating random model"
     RANDOM_EVAL_LOG="$RESULT_DIR/eval_random.log"
     run_eval "$RANDOM_MODEL_TAG" "mid" "$RANDOM_EVAL_LOG"
 fi
+show_progress 85 "random model evaluation finished"
 
 MANUAL_RATIO_EVAL_LOG=""
 if has_method manual; then
+    show_progress 88 "evaluating manual-ratio model"
     MANUAL_RATIO_EVAL_LOG="$RESULT_DIR/eval_manual_ratio.log"
     run_eval "$MANUAL_RATIO_MODEL_TAG" "mid" "$MANUAL_RATIO_EVAL_LOG"
 fi
+show_progress 90 "manual-ratio model evaluation finished"
 
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
@@ -776,6 +820,7 @@ echo ""
 echo ""
 echo "╔══ Step 5: Generate experiment report ══╗"
 echo ""
+show_progress 95 "generating comparison report"
 
 REPORT_ARGS=(
     --result-dir "$RESULT_DIR"
@@ -791,6 +836,7 @@ if has_method manual; then
     REPORT_ARGS+=(--manual-ratio-train-log "$MANUAL_RATIO_LOG" --manual-ratio-eval-log "$MANUAL_RATIO_EVAL_LOG")
 fi
 python3 "$SCRIPT_DIR/generate_report.py" "${REPORT_ARGS[@]}"
+show_progress 98 "comparison report generated"
 
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
@@ -828,6 +874,7 @@ fi
 echo ""
 echo "════════════════════════════════════════════════════════════"
 echo "  STEM Experiment Complete!"
+show_progress 100 "NanoChat comparison experiment complete"
 echo "════════════════════════════════════════════════════════════"
 echo ""
 echo "  Output directory: $RESULT_DIR"

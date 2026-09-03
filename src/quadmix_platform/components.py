@@ -27,7 +27,13 @@ class LocalExecutor(ExecutorAdapter):
         external_id = f"local:{job.id}"
         runtime_env = self._runtime_env(job)
         timeout = self._timeout(job.request.get("executor_config", {}))
-        for stage in job.stages:
+        total_stages = len(job.stages)
+        self._print_progress(0, total_stages, "pipeline started")
+        for index, stage in enumerate(job.stages, start=1):
+            print(
+                f"[Pipeline Stage {index}/{total_stages}] starting: {stage.name}",
+                flush=True,
+            )
             env = dict(os.environ)
             env.update(runtime_env)
             env.update({str(k): str(v) for k, v in stage.env.items()})
@@ -41,16 +47,29 @@ class LocalExecutor(ExecutorAdapter):
                     timeout=timeout,
                 )
             except FileNotFoundError as exc:
+                self._print_progress(index - 1, total_stages, f"failed: {stage.name}")
                 return "FAILED", external_id, f"stage '{stage.name}' executable not found: {exc}"
             except subprocess.TimeoutExpired:
+                self._print_progress(index - 1, total_stages, f"timed out: {stage.name}")
                 return "FAILED", external_id, f"stage '{stage.name}' exceeded timeout_seconds"
             if completed.returncode != 0:
+                self._print_progress(index - 1, total_stages, f"failed: {stage.name}")
                 return (
                     "FAILED",
                     external_id,
                     f"stage '{stage.name}' exited with code {completed.returncode}",
                 )
+            self._print_progress(index, total_stages, f"completed: {stage.name}")
         return "SUCCEEDED", external_id, "All stages completed locally."
+
+    @staticmethod
+    def _print_progress(completed: int, total: int, label: str) -> None:
+        """Print a stable log-friendly progress bar without terminal control codes."""
+        percent = 100 if total == 0 else int(completed * 100 / total)
+        width = 20
+        filled = int(percent * width / 100)
+        bar = "#" * filled + "-" * (width - filled)
+        print(f"[Pipeline Progress] [{bar}] {percent:3d}% {label}", flush=True)
 
     @staticmethod
     def _timeout(config: dict[str, Any]) -> float | None:

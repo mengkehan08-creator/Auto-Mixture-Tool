@@ -269,6 +269,21 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(environment["RANK_SIZE"], "8")
         self.assertEqual(environment["ASCEND_VISIBLE_DEVICES"], "0,1,2,3,4,5,6,7")
 
+    @mock.patch("builtins.print")
+    @mock.patch("quadmix_platform.components.subprocess.run")
+    def test_local_executor_reports_stage_progress(
+        self, run: mock.Mock, print_mock: mock.Mock
+    ) -> None:
+        run.return_value.returncode = 0
+        job = self._job("local", {"device_type": "npu", "device_count": 8})
+
+        status, _, _ = LocalExecutor().submit(job)
+
+        self.assertEqual(status, "SUCCEEDED")
+        messages = [str(call.args[0]) for call in print_mock.call_args_list]
+        self.assertTrue(any("[--------------------]   0%" in item for item in messages))
+        self.assertTrue(any("[####################] 100%" in item for item in messages))
+
     def test_local_executor_rejects_inconsistent_device_counts(self) -> None:
         job = self._job("local", {"device_type": "npu", "device_count": 4})
         with self.assertRaisesRegex(ValueError, "must match"):

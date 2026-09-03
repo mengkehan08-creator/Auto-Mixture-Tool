@@ -87,6 +87,12 @@ which obsutil
 镜像还必须包含与 Ascend/CANN 匹配的 `torch`、`torch-npu`、`transformers`、
 `pyarrow`、`lightgbm`、`scikit-learn` 和 NanoChat 依赖。
 
+NanoChat 源码在加载 tokenizer 模块时会导入 `rustbpe`。当镜像没有安装
+`rustbpe`、但已挂载可用的 `tokenizer/tokenizer.pkl` 时，工具会启用仅限
+现有 tokenizer 的兼容模式。该模式可用于模型训练和评测，不支持在任务中
+重新训练 tokenizer。如果需要训练新 tokenizer，仍应在镜像中正式安装
+`rustbpe`。
+
 ## 5. 配置提交脚本
 
 保留仓库根目录 `modelarts_training_job.py` 样例的主体函数结构，只修改参数。
@@ -215,6 +221,19 @@ python3 modelarts_training_job.py
 `pip install -e .`，而是设置 `PYTHONPATH=<repo>/src` 后直接运行模块入口。
 
 ## 8. 日志验收
+
+日志中会输出两级文本进度条，不依赖网页或交互式终端：
+
+```text
+[Pipeline Progress] [##########----------]  50% completed: quadmix-selection
+[QuaDMix Progress] [#############-------]  65% proxy experiments completed
+[NanoChat Progress][node 0] [###########---------]  55% QuaDMix dataset training finished
+```
+
+`Pipeline Progress` 表示顶层算法和训练阶段，`QuaDMix Progress` 细分数据
+加载、代理实验、LightGBM、搜索、采样和报告，`NanoChat Progress` 细分三组数据
+准备、串行训练、串行评测和报告生成。这是“阶段进度”，
+不是按运行时间估算的剩余时间。
 
 QuaDMix 应出现：
 

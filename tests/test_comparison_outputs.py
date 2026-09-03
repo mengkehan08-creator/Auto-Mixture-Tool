@@ -46,6 +46,51 @@ def test_nanochat_runtime_layout_does_not_modify_modelarts_input() -> None:
     assert 'local LINK_DIR="$NANOCHAT_RUNTIME_DIR/base_checkpoints/$MODEL_TAG"' in script
 
 
+def test_nanochat_script_reports_stage_progress() -> None:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "nanochat_mid_compare"
+        / "run_stem_experiment.sh"
+    ).read_text(encoding="utf-8")
+    assert 'show_progress 5 "configuration validated"' in script
+    assert 'show_progress 55 "QuaDMix dataset training finished"' in script
+    assert 'show_progress 57 "starting random dataset training"' in script
+    assert 'show_progress 78 "evaluating QuaDMix model"' in script
+    assert 'show_progress 95 "generating comparison report"' in script
+    assert 'show_progress 100 "NanoChat comparison experiment complete"' in script
+
+
+def test_rustbpe_fallback_is_limited_to_existing_tokenizers() -> None:
+    fallback = (
+        Path(__file__).resolve().parents[1]
+        / "nanochat_mid_compare"
+        / "compat"
+        / "rustbpe.py"
+    ).read_text(encoding="utf-8")
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "nanochat_mid_compare"
+        / "run_stem_experiment.sh"
+    ).read_text(encoding="utf-8")
+    assert "training a new tokenizer is unavailable" in fallback
+    assert 'if ! python3 -c "import rustbpe"' in script
+    assert '$SCRIPT_DIR/compat' in script
+    assert "NanoChat tokenizer import OK" in script
+
+
+def test_quadmix_reports_detailed_stage_progress() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "quadmix"
+        / "pipeline"
+        / "real_pipeline.py"
+    ).read_text(encoding="utf-8")
+    assert 'self._print_progress(15, "proxy parameter sets sampled")' in source
+    assert 'self._print_progress(65, "proxy experiments completed")' in source
+    assert 'self._print_progress(100, "QuaDMix report generated")' in source
+
+
 def test_comparison_report_contains_realized_domain_ratios(tmp_path: Path) -> None:
     stats = {
         "config": {
