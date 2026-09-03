@@ -141,6 +141,7 @@ CORE_METRIC_EVERY="${CORE_METRIC_EVERY:--1}"
 EVAL_EVERY="${EVAL_EVERY:--1}"
 EVAL_BENCHMARKS="${EVAL_BENCHMARKS:-stem}"
 NANOCHAT_DISABLE_WANDB="${NANOCHAT_DISABLE_WANDB:-1}"
+NANOCHAT_LOAD_OPTIMIZER="${NANOCHAT_LOAD_OPTIMIZER:-0}"
 
 # ── Anti-forgetting data mixing ──
 # Mix STEM data with ClimbMix general data to prevent catastrophic forgetting.
@@ -295,6 +296,10 @@ export ASCEND_VISIBLE_DEVICES="$ASCEND_DEVICE_LIST"
 NNODES="${MA_NUM_HOSTS:-1}"
 NODE_RANK="${VC_TASK_INDEX:-0}"
 MASTER_PORT="${MASTER_PORT:-29500}"
+if [ -n "${AMT_EXPECTED_NODES:-}" ] && [ "$NNODES" -ne "$AMT_EXPECTED_NODES" ]; then
+    echo "ERROR: ModelArts reported $NNODES nodes, expected $AMT_EXPECTED_NODES"
+    exit 1
+fi
 if [ "$NNODES" -gt 1 ]; then
     MASTER_ADDR="${VC_WORKER_HOSTS%%,*}"
     if [ -z "$MASTER_ADDR" ]; then
@@ -378,6 +383,7 @@ echo "    data-multiplier:         $DATA_MULTIPLIER"
 echo "    num-scaling-params:      $NUM_SCALING_PARAMS (auto-detected)"
 echo "    device-batch-size:       $DEVICE_BATCH_SIZE"
 echo "    NPU cards:               $NUM_NPU"
+echo "    load optimizer state:    $NANOCHAT_LOAD_OPTIMIZER"
 echo "    eval-benchmarks:         $EVAL_BENCHMARKS"
 echo ""
 echo "  Model tags (save):"
@@ -721,11 +727,14 @@ run_mid_training() {
     trap 'if [ -L "$LINK_DIR" ]; then echo "    Cleaning up symlink on exit: $LINK_DIR"; rm "$LINK_DIR"; fi' RETURN
 
     pushd "$NANOCHAT_REPO" > /dev/null
-    python3 -m torch.distributed.run "${TORCHRUN_ARGS[@]}" -m scripts.mid_train -- \
+    export PYTHONPATH="$QUADMIX_DIR:${PYTHONPATH:-}"
+    python3 -m torch.distributed.run "${TORCHRUN_ARGS[@]}" \
+        -m nanochat_mid_compare.run_nanochat_mid_train -- \
         --num-iterations="$NUM_ITERATIONS" \
         --target-param-data-ratio="$TARGET_PARAM_DATA_RATIO" \
         --device-batch-size="$DEVICE_BATCH_SIZE" \
         --total-batch-size="$CKPT_TOTAL_BATCH_SIZE" \
+        --load-optimizer="$NANOCHAT_LOAD_OPTIMIZER" \
         --run="$TRACKING_RUN_NAME" \
         --model-tag="$MODEL_TAG" \
         --core-metric-every="$CORE_METRIC_EVERY" \

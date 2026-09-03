@@ -111,10 +111,11 @@ NanoChat 源码在加载 tokenizer 模块时会导入 `rustbpe`。当镜像没�
 ## 5. 配置提交脚本
 
 保留仓库根目录 `modelarts_training_job.py` 样例的主体函数结构，只修改参数。
-两节点测试的关键位置：
+节点数在脚本顶部一键设置，当前两节点测试使用：
 
 ```python
 url = "training-jobs API地址"
+NODE_COUNT = 2  # 可改为2到16
 headers = {
     "region": "区域",
     "Authorization": "替换为Authorization",
@@ -123,7 +124,6 @@ headers = {
 job_data["metadata"]["workspace_id"] = "工作空间ID"
 job_data["algorithm"]["engine"]["image_url"] = "镜像地址"
 job_data["algorithm"]["engine"]["image_repo_id"] = "镜像仓库ID"
-job_data["spec"]["resource"]["node_count"] = 2
 job_data["spec"]["resource"]["pool_id"] = "资源池ID"
 ```
 
@@ -173,6 +173,7 @@ algorithm_config:
 
 trainer_config:
   npu_devices: 8
+  load_optimizer: false
 
 comparison_config:
   methods: [quadmix, random, manual]
@@ -198,7 +199,8 @@ node-1: 1,3,5,7,9,11,13,15
 ```
 
 每个节点内部最多使用8张NPU。worker-0 收齐16条结果后执行LightGBM、最优
-搜索和最终采样。所有节点拿到最终采样数据后，以2×8=16个进程启动NanoChat。
+搜索和最终采样。所有节点拿到最终采样数据后，以 `NODE_COUNT×8` 个进程启动
+NanoChat。切换节点数时不加载旧的分片优化器状态，但仍加载完整基础模型权重。
 
 NanoChat 的 ModelArts 输入目录只用于读取基础模型和 tokenizer，流水线不会在
 `/home/ma-user/modelarts/inputs/nanochat_model_dir_1` 中创建或替换
@@ -247,7 +249,7 @@ cd /home/ma-user/work/Auto-Mixture-Tool
 python3 -m py_compile modelarts_training_job.py
 ```
 
-确认 `node_count` 为2、输入路径和镜像正确后提交：
+确认 `NODE_COUNT`、输入路径和镜像正确后提交：
 
 ```bash
 python3 modelarts_training_job.py
@@ -302,15 +304,16 @@ CLI 在任何阶段失败时返回非零退出码，ModelArts 不应再把内部
 
 ## 9. 扩展节点数
 
-当前支持每节点固定8张NPU、节点数灵活变化。简要修改：
+当前支持每节点固定8张NPU、2到16节点灵活变化。唯一修改：
 
 ```python
-job_data["spec"]["resource"]["node_count"] = 目标节点数
+NODE_COUNT = 目标节点数
 ```
 
 同时按 `节点数 × 8` 检查或调整 `algorithm_config.num_experiments`，并保持
 `algorithm_nodes: auto`。完整的1/2/4/8节点配置表、自动计算字段、日志验收和
 扩缩容故障处理见 [SCALING_MODELARTS_NODES.md](SCALING_MODELARTS_NODES.md)。
+3、5、6等节点数由训练包装器自动补齐AdamW分片，聚合后裁剪回原始参数长度。
 
 ## 10. 可选 Hadoop 目标格式
 

@@ -21,7 +21,12 @@ class ModelArtsJobTests(unittest.TestCase):
         self.assertIn("export AMT_PYTHON_EXECUTABLE=$PY311", job["algorithm"]["command"])
         self.assertIn("exec $PY311 -m auto_mixture_tool.cli", job["algorithm"]["command"])
         self.assertNotIn("AMT_PYTHON_EXECUTABLE", job["algorithm"]["environments"])
-        self.assertEqual(job["spec"]["resource"]["node_count"], 2)
+        self.assertEqual(job["spec"]["resource"]["node_count"], modelarts.NODE_COUNT)
+        self.assertEqual(
+            job["algorithm"]["environments"]["AMT_EXPECTED_NODES"],
+            str(modelarts.NODE_COUNT),
+        )
+        self.assertTrue(job["metadata"]["name"].startswith("auto-mixture-2node-"))
         inputs = {item["name"]: item for item in job["algorithm"]["inputs"]}
         self.assertEqual(len(inputs), 8)
         self.assertEqual(

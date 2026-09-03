@@ -1,8 +1,7 @@
 # ModelArts 节点扩缩容说明
 
-本文说明如何在不修改 Python 代码的情况下，把同一条流水线运行在 1、2、4、8
-或更多 ModelArts 节点上。当前支持的扩缩容边界是：**节点数可变，每个节点固定
-8 张 NPU**。
+本文说明如何通过一个参数，把同一条流水线运行在2到16个ModelArts节点上。
+当前支持的扩缩容边界是：**`NODE_COUNT=2..16`，每个节点固定8张NPU**。
 
 ## 1. 节点数与卡数
 
@@ -28,16 +27,16 @@ QuaDMix 使用前两个变量分配代理实验；NanoChat 还使用
 
 ## 2. 每次改变节点数需要修改的字段
 
-### 必须修改：`modelarts_training_job.py` 的 `job_data`
+### 唯一需要修改：`modelarts_training_job.py` 的 `NODE_COUNT`
 
 ```python
-job_data["spec"]["resource"]["node_count"] = 目标节点数
+NODE_COUNT = 目标节点数
 ```
 
 例如四节点：
 
 ```python
-job_data["spec"]["resource"]["node_count"] = 4
+NODE_COUNT = 4
 ```
 
 如果新的节点数量仍使用相同的“单节点 8 卡”规格，`flavor_id` 不需要
@@ -48,7 +47,10 @@ job_data["spec"]["resource"]["flavor_id"] = "新的单节点规格ID"
 job_data["spec"]["resource"]["pool_id"] = "能够提供目标节点数的资源池ID"
 ```
 
-### 必须检查：`examples/configs/modelarts_pipeline.yaml`
+提交脚本会自动把该值写入ModelArts `node_count`、运行时节点数校验和带时间戳
+的唯一作业名，不需要再同步修改其他节点数字段。
+
+### 保持不变：`examples/configs/modelarts_pipeline.yaml`
 
 保持自动读取平台节点数：
 
@@ -75,25 +77,35 @@ num_experiments >= N × 8
 空间覆盖越充分，但代理训练时间、NPU 费用和OBS临时结果也会增加；它不保证最终
 配比一定更好。
 
-## 3. 推荐配置表
+默认仍运行16个代理实验，以保证不同节点规模使用同一组QuaDMix实验进行可比测试。
+节点数超过2时，QuaDMix阶段不会占满所有NPU；NanoChat阶段仍使用全部节点和全部
+NPU。如果目标是提高QuaDMix代理实验覆盖率，可另外把 `num_experiments` 调成
+`NODE_COUNT × 8`，但这会改变实验数量和计算成本，不属于一键扩缩容参数。
 
-| 节点数 | 总NPU数 | 两个配置文件中的修改 | 建议最低代理实验数 | 实验分配 |
-|---:|---:|---|---:|---|
-| 1 | 8 | `NODE_COUNT=1` | 8 | 单节点本地汇总 |
-| 2 | 16 | `NODE_COUNT=2` | 16 | 每节点8个 |
-| 4 | 32 | `NODE_COUNT=4` | 32 | 每节点8个 |
-| 8 | 64 | `NODE_COUNT=8` | 64 | 每节点8个 |
+## 3. 支持配置表
 
-这里的 `NODE_COUNT` 是 `job_data` 中的 `node_count`。例如从两节点改为八节点：
+| 节点数 | 总NPU数 | 唯一修改 |
+|---:|---:|---|
+| 2 | 16 | `NODE_COUNT=2` |
+| 3 | 24 | `NODE_COUNT=3` |
+| 4 | 32 | `NODE_COUNT=4` |
+| 5 | 40 | `NODE_COUNT=5` |
+| 6 | 48 | `NODE_COUNT=6` |
+| 7 | 56 | `NODE_COUNT=7` |
+| 8 | 64 | `NODE_COUNT=8` |
+| 9 | 72 | `NODE_COUNT=9` |
+| 10 | 80 | `NODE_COUNT=10` |
+| 11 | 88 | `NODE_COUNT=11` |
+| 12 | 96 | `NODE_COUNT=12` |
+| 13 | 104 | `NODE_COUNT=13` |
+| 14 | 112 | `NODE_COUNT=14` |
+| 15 | 120 | `NODE_COUNT=15` |
+| 16 | 128 | `NODE_COUNT=16` |
+
+例如从两节点改为八节点，只修改：
 
 ```python
-job_data["spec"]["resource"]["node_count"] = 8
-```
-
-```yaml
-algorithm_config:
-  num_experiments: 64
-  algorithm_nodes: auto
+NODE_COUNT = 8
 ```
 
 以下字段保持为每节点卡数，不要改成全局卡数：
@@ -124,9 +136,13 @@ executor_config:
 - NanoChat 自动设置 `nnodes=N`、`nproc_per_node=8` 和
   `world_size=N×8`；
 - 只有全局主节点生成最终报告和主checkpoint。
+- NanoChat 中的大型 AdamW 参数在首维不能整除 `world_size` 时自动补零分片，
+  all-gather 后裁掉补齐部分，因此3、5、6等非2次幂节点数也可运行。
+- 切换节点数时默认 `load_optimizer: false`：加载基础模型权重，但重新初始化与
+  当前 `world_size` 匹配的优化器状态，避免2048/4096分片形状冲突。
 
-每次提交都要手工修改 `job_data["metadata"]["name"]`。`main()` 会用该名称更新
-OBS协调目录。不要为两次任务使用相同名称，否则旧的 `_SUCCESS` 标记可能污染新任务。
+提交脚本按节点数和当前时间自动生成唯一作业名，并用该名称更新OBS协调目录，
+避免旧的 `_SUCCESS` 标记污染新任务。
 
 ## 5. 提交前检查
 
@@ -140,14 +156,14 @@ python3 -m py_compile modelarts_training_job.py
 人工确认脚本中的：
 
 ```text
-job_data["spec"]["resource"]["node_count"] = 目标节点数
+NODE_COUNT = 2到16之间的目标节点数
 job_data["algorithm"]["environments"]["NUM_NPU"] = "8"
 ```
 
 然后确认镜像和平台满足：
 
 - 每节点确实有8张NPU；
-- 所有节点都能读取6个ModelArts输入挂载；
+- 所有节点都能读取8个ModelArts输入挂载；
 - 镜像包含 `moxing` 或 `obsutil`；
 - 节点之间允许使用训练通信端口（默认29500）；
 - ModelArts正确注入 `MA_NUM_HOSTS`、`VC_TASK_INDEX` 和

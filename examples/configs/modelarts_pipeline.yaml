@@ -52,6 +52,9 @@ trainer_config:
   eval_bundle_dir: /home/ma-user/modelarts/inputs/eval_bundle_dir_6
   skip_eval_download: true
   disable_wandb: true
+  # Optimizer checkpoints are world-size sharded. Keep false when node count
+  # can change; model weights are still loaded from base_model_tag.
+  load_optimizer: false
   result_dir: /home/ma-user/modelarts/outputs/output_dir_0/nanochat_results
   checkpoint_dir: /home/ma-user/modelarts/outputs/output_dir_0/nanochat_checkpoints
   base_model_tag: d24

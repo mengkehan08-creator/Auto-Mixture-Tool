@@ -223,6 +223,21 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertEqual(stage.env["AMT_RUN_ID"], "0123456789ab")
         self.assertEqual(stage.env["NANOCHAT_DISABLE_WANDB"], "1")
+        self.assertEqual(stage.env["NANOCHAT_LOAD_OPTIMIZER"], "0")
+
+    def test_nanochat_optimizer_state_loading_is_explicit(self) -> None:
+        request = {
+            "job_id": "0123456789ab",
+            "dataset_uri": str(DATASET),
+            "schema_uri": str(SCHEMA),
+            "evaluator_id": "stem",
+            "trainer_config": {"npu_devices": 8, "load_optimizer": True},
+            "_evaluator_env": {},
+        }
+
+        stage = NanoChatTrainer().build(request, ROOT)[0]
+
+        self.assertEqual(stage.env["NANOCHAT_LOAD_OPTIMIZER"], "1")
 
     def test_offline_eval_bundle_config_is_passed_to_nanochat(self) -> None:
         request = {

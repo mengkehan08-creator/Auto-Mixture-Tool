@@ -1,13 +1,21 @@
 """ModelArts training-job submission sample.
 
 Keep the sample's function structure unchanged. Before running, replace only
-the values marked ``REPLACE_ME`` and choose a unique job name. Never commit a
-real Authorization value to Git.
+the values marked ``REPLACE_ME`` and set ``NODE_COUNT``. Job names are generated
+automatically. Never commit a real Authorization value to Git.
 """
 
 import json
+from datetime import datetime
 
 import requests
+
+
+# One-click node switch: use any integer from 2 through 16. Each node has 8 NPUs.
+NODE_COUNT = 2
+if not 2 <= NODE_COUNT <= 16:
+    raise ValueError("NODE_COUNT must be between 2 and 16")
+JOB_NAME = f"auto-mixture-{NODE_COUNT}node-{datetime.now():%Y%m%d-%H%M%S}"
 
 
 def update_parameter(parameters, name, new_value):
@@ -30,7 +38,7 @@ job_data = {
     "kind": "job",
     "metadata": {
         # 每次提交使用唯一名称，避免复用旧的OBS节点同步标记。
-        "name": "auto-mixture-2node-change-me",
+        "name": JOB_NAME,
         "description": "Auto-Mixture: QuaDMix, NanoChat and STEM evaluation",
         "workspace_id": "REPLACE_ME_WORKSPACE_ID",
     },
@@ -82,12 +90,13 @@ job_data = {
             "PYTHONUNBUFFERED": "1",
             "NUM_NPU": "8",
             "ASCEND_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
-            "AMT_RUN_ID": "auto-mixture-2node-change-me",
+            "AMT_RUN_ID": JOB_NAME,
             "AMT_RUN_OBS_URI": (
                 "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/"
-                "chengchao/runs/auto-mixture-2node-change-me/quadmix"
+                f"chengchao/runs/{JOB_NAME}/quadmix"
             ),
             "AMT_OBS_BACKEND": "auto",
+            "AMT_EXPECTED_NODES": str(NODE_COUNT),
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
         },
@@ -218,7 +227,7 @@ job_data = {
             "policy": "regular",
             "flavor_id": "modelarts.pool.visual.8xlarge",
             "pool_id": "REPLACE_ME_POOL_ID",
-            "node_count": 2,
+            "node_count": NODE_COUNT,
         },
         "log_export_path": {},
         "runtime_type": "production",
@@ -233,7 +242,7 @@ def main():
     print("=" * 50)
 
     # 常见修改：每次任务使用唯一名称；同步目录随名称自动变化。
-    job_data["metadata"]["name"] = "auto-mixture-2node-change-me"
+    job_data["metadata"]["name"] = JOB_NAME
     job_name = job_data["metadata"]["name"]
     job_data["algorithm"]["environments"]["AMT_RUN_ID"] = job_name
     job_data["algorithm"]["environments"]["AMT_RUN_OBS_URI"] = (

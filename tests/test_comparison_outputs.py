@@ -115,6 +115,34 @@ def test_old_pytorch_and_wandb_have_offline_training_fallbacks() -> None:
     assert "torch.rsqrt" in compatibility
 
 
+def test_nanochat_training_uses_world_size_compatible_optimizer_wrapper() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "nanochat_mid_compare" / "run_stem_experiment.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "nanochat_mid_compare.run_nanochat_mid_train" in script
+    assert '--load-optimizer="$NANOCHAT_LOAD_OPTIMIZER"' in script
+    assert 'NANOCHAT_LOAD_OPTIMIZER="${NANOCHAT_LOAD_OPTIMIZER:-0}"' in script
+
+
+def test_adamw_sharding_supports_two_through_sixteen_nodes() -> None:
+    from nanochat_mid_compare.run_nanochat_mid_train import shard_layout
+
+    parameter_size = 32768
+    for node_count in range(2, 17):
+        world_size = node_count * 8
+        covered: list[int] = []
+        layouts = [
+            shard_layout(parameter_size, world_size, rank)
+            for rank in range(world_size)
+        ]
+        for layout in layouts:
+            covered.extend(range(layout.start, layout.stop))
+            assert layout.padded_size % world_size == 0
+            assert layout.padded_size - parameter_size < world_size
+        assert covered == list(range(parameter_size))
+
+
 def test_quadmix_reports_detailed_stage_progress() -> None:
     source = (
         Path(__file__).resolve().parents[1]

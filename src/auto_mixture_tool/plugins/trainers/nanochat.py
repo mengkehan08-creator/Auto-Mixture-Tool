@@ -74,6 +74,7 @@ class NanoChatTrainer(TrainerAdapter):
             "AMT_RUN_ID": str(request["job_id"]),
             "MIX_GENERAL_DATA": "1" if config.get("mix_general_data", False) else "0",
             "NANOCHAT_DISABLE_WANDB": "1" if config.get("disable_wandb", True) else "0",
+            "NANOCHAT_LOAD_OPTIMIZER": "1" if config.get("load_optimizer", False) else "0",
         }
         if normalized_ratios:
             env["MANUAL_RATIO"] = ":".join(
