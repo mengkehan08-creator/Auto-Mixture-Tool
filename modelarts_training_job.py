@@ -54,6 +54,7 @@ job_data = {
             "ln -sf $PY311 /tmp/auto-mixture-python311/python3; "
             "export PATH=/tmp/auto-mixture-python311:"
             "/usr/local/python3.11.14/bin:$PATH; "
+            "export AMT_PYTHON_EXECUTABLE=$PY311; "
             "python --version; "
             "python -c \""
             "import yaml,numpy,pandas,pyarrow,sklearn,lightgbm,joblib;"
@@ -72,6 +73,7 @@ job_data = {
             "MOX_OBS_SIGNATURE": "obs",
             "PYTHONUTF8": "1",
             "PYTHONUNBUFFERED": "1",
+            "AMT_PYTHON_EXECUTABLE": "/usr/local/python3.11.14/bin/python3",
             "NUM_NPU": "8",
             "ASCEND_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
             "AMT_RUN_ID": "auto-mixture-2node-change-me",

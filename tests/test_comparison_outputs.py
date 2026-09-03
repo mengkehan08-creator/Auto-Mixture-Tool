@@ -91,6 +91,23 @@ def test_rustbpe_fallback_is_limited_to_existing_tokenizers() -> None:
     assert "NanoChat tokenizer import OK" in script
 
 
+def test_old_pytorch_and_wandb_have_offline_training_fallbacks() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "nanochat_mid_compare" / "run_stem_experiment.sh").read_text(
+        encoding="utf-8"
+    )
+    compatibility = (
+        root / "nanochat_mid_compare" / "compat" / "sitecustomize.py"
+    ).read_text(encoding="utf-8")
+    assert 'AMT_PYTHON_EXECUTABLE="${AMT_PYTHON_EXECUTABLE:-$(command -v python3)}"' in script
+    assert '"$AMT_PYTHON_EXECUTABLE" "$@"' in script
+    assert "PyTorch F.rms_norm unavailable" in script
+    assert 'TRACKING_RUN_NAME="dummy"' in script
+    assert '--run="$TRACKING_RUN_NAME"' in script
+    assert 'if not hasattr(functional, "rms_norm")' in compatibility
+    assert "torch.rsqrt" in compatibility
+
+
 def test_quadmix_reports_detailed_stage_progress() -> None:
     source = (
         Path(__file__).resolve().parents[1]

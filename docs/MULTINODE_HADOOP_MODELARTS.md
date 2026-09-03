@@ -87,6 +87,12 @@ which obsutil
 镜像还必须包含与 Ascend/CANN 匹配的 `torch`、`torch-npu`、`transformers`、
 `pyarrow`、`lightgbm`、`scikit-learn` 和 NanoChat 依赖。
 
+提交脚本通过 `AMT_PYTHON_EXECUTABLE=/usr/local/python3.11.14/bin/python3`
+固定流水线、NanoChat 和 `torchrun` 使用同一个解释器。Ascend 镜像固定在不含
+`torch.nn.functional.rms_norm` 的旧版 PyTorch 时，工具会加载基于基础张量算子的
+兼容实现。默认 `disable_wandb: true`，训练使用 NanoChat 的 `DummyWandb`，不会
+要求安装或连接 WandB。
+
 NanoChat 源码在加载 tokenizer 模块时会导入 `rustbpe`。当镜像没有安装
 `rustbpe`、但已挂载可用的 `tokenizer/tokenizer.pkl` 时，工具会启用仅限
 现有 tokenizer 的兼容模式。该模式可用于模型训练和评测，不支持在任务中
@@ -129,6 +135,7 @@ ModelArts 无公网下载能力时，NanoChat 配置使用预挂载评测包并�
 trainer_config:
   eval_bundle_dir: /home/ma-user/modelarts/inputs/eval_bundle_dir_6
   skip_eval_download: true
+  disable_wandb: true
 ```
 
 使用 `examples/configs/modelarts_pipeline.yaml`。关键字段：

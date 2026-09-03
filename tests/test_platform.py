@@ -222,6 +222,7 @@ class ServiceTests(unittest.TestCase):
             "数学=0.6:物理=0.15:化学=0.125:生物学=0.125",
         )
         self.assertEqual(stage.env["AMT_RUN_ID"], "0123456789ab")
+        self.assertEqual(stage.env["NANOCHAT_DISABLE_WANDB"], "1")
 
     def test_offline_eval_bundle_config_is_passed_to_nanochat(self) -> None:
         request = {

@@ -28,6 +28,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 QUADMIX_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TIMESTAMP="${AMT_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+AMT_PYTHON_EXECUTABLE="${AMT_PYTHON_EXECUTABLE:-$(command -v python3)}"
+if [ -z "$AMT_PYTHON_EXECUTABLE" ] || [ ! -x "$AMT_PYTHON_EXECUTABLE" ]; then
+    echo "ERROR: Python executable not found: ${AMT_PYTHON_EXECUTABLE:-<empty>}"
+    exit 1
+fi
+# Keep every Python and torchrun child on the interpreter selected by the
+# ModelArts submission command instead of falling back to an image default.
+python3() {
+    "$AMT_PYTHON_EXECUTABLE" "$@"
+}
 
 # QuaDMix remains the selected platform algorithm. Random and manual are
 # controlled comparison strategies that use the same token budget.
@@ -130,6 +140,7 @@ NUM_NPU="${NUM_NPU:-8}"
 CORE_METRIC_EVERY="${CORE_METRIC_EVERY:--1}"
 EVAL_EVERY="${EVAL_EVERY:--1}"
 EVAL_BENCHMARKS="${EVAL_BENCHMARKS:-stem}"
+NANOCHAT_DISABLE_WANDB="${NANOCHAT_DISABLE_WANDB:-1}"
 
 # ── Anti-forgetting data mixing ──
 # Mix STEM data with ClimbMix general data to prevent catastrophic forgetting.
@@ -207,6 +218,19 @@ if [ -n "$NANOCHAT_EVAL_BUNDLE_DIR" ]; then
     fi
 fi
 
+echo "  NanoChat Python: $(python3 -c 'import sys; print(sys.executable)')"
+echo "  NanoChat Python version: $(python3 -c 'import platform; print(platform.python_version())')"
+echo "  NanoChat PyTorch: $(python3 -c 'import torch; print(torch.__version__)')"
+if ! python3 -c "import torch.nn.functional as F; assert hasattr(F, 'rms_norm')" \
+        >/dev/null 2>&1; then
+    export PYTHONPATH="$SCRIPT_DIR/compat:${PYTHONPATH:-}"
+    echo "  PyTorch F.rms_norm unavailable; enabling compatibility implementation"
+fi
+python3 -c "import torch.nn.functional as F; assert hasattr(F, 'rms_norm')" || {
+    echo "ERROR: unable to enable F.rms_norm compatibility"
+    exit 1
+}
+
 # Auto-detect num_scaling_params from checkpoint meta JSON
 MODEL_INFO=$(python3 "$SCRIPT_DIR/get_model_info.py" \
     --ckpt-dir "$BASE_CKPT_DIR" \
@@ -238,7 +262,11 @@ fi
 
 export OMP_NUM_THREADS=1
 export PYTHONWARNINGS="ignore::UserWarning:torch_npu"
-export WANDB_MODE=offline
+if [ "$NANOCHAT_DISABLE_WANDB" = "1" ]; then
+    export WANDB_MODE=disabled
+else
+    export WANDB_MODE=offline
+fi
 export NANOCHAT_BASE_DIR="$NANOCHAT_RUNTIME_DIR"
 mkdir -p "$NANOCHAT_RUNTIME_DIR/base_checkpoints"
 
@@ -670,6 +698,10 @@ run_mid_training() {
     fi
 
     local NUM_ITERATIONS=$(( (TRAIN_TOKENS + CKPT_TOTAL_BATCH_SIZE - 1) / CKPT_TOTAL_BATCH_SIZE ))
+    local TRACKING_RUN_NAME="$RUN_NAME"
+    if [ "$NANOCHAT_DISABLE_WANDB" = "1" ]; then
+        TRACKING_RUN_NAME="dummy"
+    fi
 
     echo "  Starting mid-training: $RUN_NAME"
     echo "    Data:       $DATA_PATH"
@@ -692,7 +724,7 @@ run_mid_training() {
         --target-param-data-ratio="$TARGET_PARAM_DATA_RATIO" \
         --device-batch-size="$DEVICE_BATCH_SIZE" \
         --total-batch-size="$CKPT_TOTAL_BATCH_SIZE" \
-        --run="$RUN_NAME" \
+        --run="$TRACKING_RUN_NAME" \
         --model-tag="$MODEL_TAG" \
         --core-metric-every="$CORE_METRIC_EVERY" \
         --eval-every="$EVAL_EVERY" \

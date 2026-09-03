@@ -51,6 +51,7 @@ trainer_config:
   model_dir: /home/ma-user/modelarts/inputs/nanochat_model_dir_1
   eval_bundle_dir: /home/ma-user/modelarts/inputs/eval_bundle_dir_6
   skip_eval_download: true
+  disable_wandb: true
   result_dir: /home/ma-user/modelarts/outputs/output_dir_0/nanochat_results
   checkpoint_dir: /home/ma-user/modelarts/outputs/output_dir_0/nanochat_checkpoints
   base_model_tag: d24
