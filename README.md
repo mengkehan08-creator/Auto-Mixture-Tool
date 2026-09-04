@@ -1,5 +1,11 @@
 # Auto-Mixture-Tool — 可插拔的数据配比工具平台
 
+离线资源预检、QuaDMix 参数、自定义采样策略、多人工方案及展示型 UI 见
+[离线训练、采样策略与配置界面说明](docs/OFFLINE_STRATEGIES_AND_UI.md)。
+
+UI 一键提交两个 ModelArts 作业及独立节点配置见
+[UI 两作业自动工作流](docs/TWO_JOB_UI_WORKFLOW.md)。
+
 > **⚠️ Disclaimer**: 本仓库是 QuaDMix 论文的个人 clean-room 实现，并非字节官方发布，仅供教育与研究使用。
 >
 > **Paper**: Fengze Liu, Weidong Zhou, Binbin Liu, et al. (ByteDance, 2025)

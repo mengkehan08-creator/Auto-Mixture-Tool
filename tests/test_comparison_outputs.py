@@ -54,9 +54,9 @@ def test_nanochat_offline_eval_bundle_is_validated() -> None:
         / "run_stem_experiment.sh"
     ).read_text(encoding="utf-8")
     assert 'NANOCHAT_EVAL_BUNDLE_DIR="${NANOCHAT_EVAL_BUNDLE_DIR:-}"' in script
-    assert '"$NANOCHAT_EVAL_BUNDLE_DIR/core.yaml"' in script
-    assert '"$NANOCHAT_EVAL_BUNDLE_DIR/eval_meta_data.csv"' in script
-    assert '"$NANOCHAT_EVAL_BUNDLE_DIR/eval_data"' in script
+    assert 'find "$NANOCHAT_EVAL_BUNDLE_DIR" -mindepth 1' in script
+    assert "prepare_offline_eval_bundle.py" in script
+    assert "nanochat_mid_compare.offline_base_eval" in script
 
 
 def test_nanochat_script_reports_stage_progress() -> None:

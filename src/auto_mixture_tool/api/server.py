@@ -11,11 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from auto_mixture_tool.pipeline import PipelineManager
+from auto_mixture_tool.modelarts import ModelArtsWorkflowManager
 
 app = FastAPI(title="Auto-Mixture-Tool API", version="0.1.0")
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 class InspectRequest(BaseModel):
@@ -53,6 +56,20 @@ class JobRequest(BaseModel):
     full_scan: bool = False
 
 
+class WorkflowRequest(BaseModel):
+    experiment_name: str | None = None
+    input_data_obs_uri: str
+    output_root_obs_uri: str
+    mixing_nodes: int = Field(default=2, ge=1, le=16)
+    training_nodes: int = Field(default=2, ge=1, le=16)
+    full_scan: bool = False
+    strategies: list[dict[str, Any]]
+    training: dict[str, Any]
+    evaluation: dict[str, Any]
+    resources: dict[str, str]
+    poll_interval_seconds: int = Field(default=15, ge=2, le=300)
+
+
 def _manager() -> PipelineManager:
     if not hasattr(app.state, "manager"):
         workspace = app.state.workspace if hasattr(app.state, "workspace") else None
@@ -60,16 +77,41 @@ def _manager() -> PipelineManager:
     return app.state.manager
 
 
+def _workflow_manager() -> ModelArtsWorkflowManager:
+    if not hasattr(app.state, "workflow_manager"):
+        workspace = app.state.workspace if hasattr(app.state, "workspace") else Path.cwd()
+        app.state.workflow_manager = ModelArtsWorkflowManager(Path(workspace))
+    return app.state.workflow_manager
+
+
 @app.on_event("startup")
 def _startup() -> None:
     if not hasattr(app.state, "workspace"):
         app.state.workspace = Path(__file__).resolve().parents[3]
     _manager()
+    _workflow_manager()
 
 
 @app.get("/api/v1/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "auto-mixture-tool"}
+
+
+@app.get("/ui", include_in_schema=False)
+@app.get("/ui/", include_in_schema=False)
+def ui() -> FileResponse:
+    """Serve the experiment configuration and ModelArts workflow UI."""
+    return FileResponse(_STATIC_DIR / "index.html")
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse("/ui")
+
+
+@app.get("/ui/style.css", include_in_schema=False)
+def ui_style() -> FileResponse:
+    return FileResponse(_STATIC_DIR / "style.css", media_type="text/css")
 
 
 @app.get("/api/v1/components")
@@ -110,6 +152,29 @@ def get_job(job_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/workflows", status_code=202)
+def create_workflow(payload: WorkflowRequest) -> dict[str, Any]:
+    try:
+        return _workflow_manager().create(payload.model_dump(exclude_none=True))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/workflows")
+def list_workflows() -> list[dict[str, Any]]:
+    return _workflow_manager().list()
+
+
+@app.get("/api/v1/workflows/{workflow_id}")
+def get_workflow(workflow_id: str) -> dict[str, Any]:
+    try:
+        return _workflow_manager().get(workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 def main() -> None:

@@ -43,9 +43,9 @@ import sys
 import time
 import gc
 import argparse
+import json
 import random
 from collections import Counter, defaultdict
-import json
 import pickle
 import multiprocessing as mp
 from multiprocessing.pool import ThreadPool
@@ -700,7 +700,8 @@ def calibrate_tokens_per_char(prep_files, domain_candidates, domain_names,
 def select_manual_ratio(prep_files, domain_candidates, manual_ratio_map, domain_names,
                         total_tokens, tokenizer_pkl=None, num_workers=None, enc=None, text_col="text",
                         max_char_repeat_ratio=0, domain_col=None,
-                        quality_cols=None, char_count_col=None):
+                        quality_cols=None, char_count_col=None,
+                        strategy_path=None, strategy_config=None, seed=42):
     if domain_names is None:
         raise ValueError("Manual Ratio requires domain_names in schema")
     name_to_id = {name: i for i, name in enumerate(domain_names)}
@@ -742,7 +743,16 @@ def select_manual_ratio(prep_files, domain_candidates, manual_ratio_map, domain_
         if len(cand_doc_ids) == 0:
             print(f"    WARNING: No candidates for domain id={domain_id}, skipping")
             continue
-        perm = np.random.permutation(len(cand_doc_ids))
+        if strategy_path:
+            from auto_mixture_tool.sampling import CandidatePool, StrategyContext, select_indices
+            perm = select_indices(
+                strategy_path,
+                CandidatePool(cand_shard_ids, cand_doc_ids, cand_est_tokens),
+                StrategyContext("manual", int(budget), seed, domain_name),
+                strategy_config,
+            )
+        else:
+            perm = np.random.permutation(len(cand_doc_ids))
         shuffled_est_tokens = cand_est_tokens[perm]
         cumsum = np.cumsum(shuffled_est_tokens)
         if budget <= 0 or len(cumsum) == 0:
@@ -826,6 +836,14 @@ def main():
     parser.add_argument("--manual-ratio", type=str, default=None,
                         help="Manual domain ratio: domain=ratio:domain=ratio "
                              "(e.g. 数学=60:物理=15:化学=12.5:生物学=12.5)")
+    parser.add_argument("--random-strategy", type=str, default=None,
+                        help="Mounted trusted Python strategy for random sampling")
+    parser.add_argument("--random-strategy-config", type=str, default="{}",
+                        help="JSON object passed to the random strategy")
+    parser.add_argument("--manual-strategy", type=str, default=None,
+                        help="Mounted trusted Python strategy for manual sampling")
+    parser.add_argument("--manual-strategy-config", type=str, default="{}",
+                        help="JSON object passed to the manual strategy")
     parser.add_argument("--data-ratio", type=float, default=None,
                         help="Target data:param ratio for token budget calculation")
     parser.add_argument("--num-scaling-params", type=int, default=None,
@@ -853,6 +871,14 @@ def main():
     parser.add_argument("--max-char-repeat-ratio", type=float, default=0.3,
                         help="Skip documents where single char exceeds this ratio (default: 0.3)")
     args = parser.parse_args()
+
+    try:
+        random_strategy_config = json.loads(args.random_strategy_config)
+        manual_strategy_config = json.loads(args.manual_strategy_config)
+    except json.JSONDecodeError as exc:
+        parser.error(f"strategy config must be valid JSON: {exc}")
+    if not isinstance(random_strategy_config, dict) or not isinstance(manual_strategy_config, dict):
+        parser.error("strategy config must decode to a JSON object")
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -990,7 +1016,16 @@ def main():
             print(f"\n  Token budget: no data-ratio specified, using quadmix_total={quadmix_total_est_tokens:,} "
                   f"x 1.1 = {training_budget:,} (multiplier={args.data_multiplier} -> budget_cap={budget_cap:,})")
 
-        perm = np.random.permutation(len(all_doc_ids))
+        if args.random_strategy:
+            from auto_mixture_tool.sampling import CandidatePool, StrategyContext, select_indices
+            perm = select_indices(
+                args.random_strategy,
+                CandidatePool(all_shard_ids, all_doc_ids, all_est_tokens, all_domain_vals),
+                StrategyContext("random", budget_cap, args.seed),
+                random_strategy_config,
+            )
+        else:
+            perm = np.random.permutation(len(all_doc_ids))
         shuffled_est_tokens = all_est_tokens[perm]
         cumsum = np.cumsum(shuffled_est_tokens)
         if budget_cap <= 0 or len(cumsum) == 0:
@@ -1144,7 +1179,9 @@ def main():
             budget_cap, tokenizer_pkl=args.tokenizer_pkl,
             num_workers=args.num_workers, enc=enc, text_col=text_col,
             max_char_repeat_ratio=args.max_char_repeat_ratio, domain_col=domain_col,
-            quality_cols=quality_cols, char_count_col=char_count_col)
+            quality_cols=quality_cols, char_count_col=char_count_col,
+            strategy_path=args.manual_strategy,
+            strategy_config=manual_strategy_config, seed=args.seed)
 
     quality_datasets = {}
     step_num = 5 if do_manual_ratio else 4
@@ -1319,6 +1356,8 @@ def main():
             "char_count_col": char_count_col,
             "text_col": text_col,
             "quality_cols": quality_cols,
+            "random_strategy": args.random_strategy or "builtin:random",
+            "manual_strategy": args.manual_strategy or "builtin:ratio-random",
         }
     }
     if not skip_quadmix:

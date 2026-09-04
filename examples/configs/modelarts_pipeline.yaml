@@ -22,6 +22,14 @@ algorithm_config:
   # Temporary integration setting: each proxy experiment trains for 15 steps.
   tiny_steps: 15
   num_search: 1000
+  # Additional one-click QuaDMix controls.
+  top_k: 10
+  search_mode: r2_weighted
+  block_size: 2048
+  micro_batch_size: 2
+  global_batch_size: 8
+  rank_ref_size: 10000
+  checkpoint_interval: 1000
   seed: 42
   device_type: npu
   npu_devices: 8
@@ -38,11 +46,29 @@ comparison_config:
     - quadmix
     - random
     - manual
-  manual_ratios:
-    数学: 0.60
-    物理: 0.15
-    化学: 0.125
-    生物学: 0.125
+  random_strategy:
+    # Empty means the built-in seeded random strategy. Set this to an OBS-mounted
+    # .py path to use a trusted custom strategy.
+    script_path: ""
+    config: {}
+  manual_plans:
+    - id: default_stem
+      label: Default STEM ratio
+      ratios:
+        数学: 0.60
+        物理: 0.15
+        化学: 0.125
+        生物学: 0.125
+      strategy:
+        script_path: ""
+        config: {}
+    # Add more items here; each plan produces its own dataset, model and report.
+    # - id: quality_first
+    #   label: Quality-first manual ratio
+    #   ratios: {数学: 0.4, 物理: 0.2, 化学: 0.2, 生物学: 0.2}
+    #   strategy:
+    #     script_path: /home/ma-user/modelarts/inputs/strategy_dir_8/manual_quality_first.py
+    #     config: {descending: true}
 
 trainer_config:
   npu_devices: 8

@@ -1,0 +1,167 @@
+"""Entrypoint executed inside each ModelArts job container."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from pathlib import Path
+from typing import Any
+
+from auto_mixture_tool.pipeline import PipelineManager
+
+
+WORKSPACE = Path("/home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool")
+OUTPUT = Path("/home/ma-user/modelarts/outputs/output_dir_0")
+
+
+def _config() -> dict[str, Any]:
+    raw = os.environ.get("AMT_WORKFLOW_CONFIG_JSON", "")
+    if not raw:
+        raise ValueError("AMT_WORKFLOW_CONFIG_JSON is required")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("AMT_WORKFLOW_CONFIG_JSON must contain an object")
+    return value
+
+
+def _comparison(config: dict[str, Any]) -> dict[str, Any]:
+    strategies = config.get("strategies", [])
+    methods: list[str] = []
+    manual_plans: list[dict[str, Any]] = []
+    random_strategy: dict[str, Any] = {"script_path": "", "config": {}}
+    for strategy in strategies:
+        kind = str(strategy.get("type", "")).lower()
+        if kind not in methods:
+            methods.append(kind)
+        if kind == "manual":
+            manual_plans.append({
+                "id": strategy["id"],
+                "label": strategy.get("name") or strategy["id"],
+                "ratios": strategy.get("ratios", {}),
+                "strategy": {
+                    "script_path": strategy.get("local_script_path", ""),
+                    "config": strategy.get("script_config", {}),
+                },
+            })
+        elif kind == "random":
+            random_strategy = {
+                "script_path": strategy.get("local_script_path", ""),
+                "config": strategy.get("script_config", {}),
+            }
+    return {
+        "methods": methods,
+        "manual_plans": manual_plans,
+        "random_strategy": random_strategy,
+    }
+
+
+def run_mixing(config: dict[str, Any]) -> None:
+    quadmix = next(item for item in config["strategies"] if item["type"] == "quadmix")
+    request = {
+        "dataset_uri": "/home/ma-user/modelarts/inputs/data_dir_0",
+        "schema_uri": str(WORKSPACE / "configs/schema_stem_quadmix_parquet.yaml"),
+        "dataset_id": "quadmix",
+        "output_uri": str(OUTPUT / "mixing"),
+        "algorithm_id": "quadmix",
+        "trainer_id": "nanochat",
+        "evaluator_id": "stem",
+        "executor_id": "local",
+        "full_scan": bool(config.get("full_scan", False)),
+        "algorithm_config": {
+            "num_experiments": quadmix.get("proxy_experiments", 16),
+            "tiny_steps": quadmix.get("proxy_steps", 15),
+            "num_search": quadmix.get("search_count", 1000),
+            "seed": quadmix.get("seed", 42),
+            "device_type": "npu",
+            "npu_devices": quadmix.get("devices_per_node", 8),
+            "algorithm_nodes": "auto",
+            "proxy_validation_set": "stem_v2",
+            "proxy_validation_path": (
+                "/home/ma-user/modelarts/inputs/proxy_validation_dir_5/"
+                "stem_v2_tokenized.pt"
+            ),
+            "tokenizer_path": "/home/ma-user/modelarts/inputs/quadmix_tokenizer_dir_4",
+        },
+        "comparison_config": _comparison(config),
+        "trainer_config": {
+            "npu_devices": quadmix.get("devices_per_node", 8),
+            "target_param_data_ratio": config["training"].get(
+                "target_param_data_ratio", 0.5
+            ),
+            "nanochat_repo": "/home/ma-user/modelarts/inputs/nanochat_npu_dir_3",
+            "model_dir": "/home/ma-user/modelarts/inputs/nanochat_model_dir_1",
+            "result_dir": str(OUTPUT / "sampled"),
+            "base_model_tag": config["training"].get("base_model_tag", "d24"),
+            "prepare_only": True,
+            "disable_wandb": True,
+            "mix_general_data": False,
+        },
+        "evaluator_config": {"benchmarks": "stem"},
+        "executor_config": {"device_type": "npu", "device_count": 8},
+    }
+    result = PipelineManager(WORKSPACE).submit(request)
+    if result.get("status") != "SUCCEEDED":
+        raise RuntimeError(result.get("message") or "mixing stage failed")
+
+
+def _prepared_data_dir() -> Path:
+    mounted = Path("/home/ma-user/modelarts/inputs/comparison_data_dir_8")
+    candidates = (mounted / "data", mounted)
+    for candidate in candidates:
+        if (candidate / "dataset_stats.json").is_file():
+            return candidate
+    raise ValueError(
+        "数据格式不符合训练要求: sampled OBS output is missing dataset_stats.json"
+    )
+
+
+def run_training(config: dict[str, Any]) -> None:
+    data_dir = _prepared_data_dir()
+    comparison = _comparison(config)
+    env = os.environ.copy()
+    env.update({
+        "PREPARED_COMPARISON_DATA_DIR": str(data_dir),
+        "COMPARISON_METHODS": ",".join(comparison["methods"]),
+        "MANUAL_PLANS_JSON": json.dumps(
+            comparison["manual_plans"], ensure_ascii=False, separators=(",", ":")
+        ),
+        "NANOCHAT_REPO": "/home/ma-user/modelarts/inputs/nanochat_npu_dir_3",
+        "NANOCHAT_MODEL_DIR": "/home/ma-user/modelarts/inputs/nanochat_model_dir_1",
+        "NANOCHAT_EVAL_BUNDLE_DIR": "/home/ma-user/modelarts/inputs/eval_bundle_dir_6",
+        "NANOCHAT_SKIP_EVAL_DOWNLOAD": "1",
+        "NANOCHAT_DISABLE_WANDB": "1",
+        "NANOCHAT_LOAD_OPTIMIZER": "0",
+        "BASE_MODEL_TAG": str(config["training"].get("base_model_tag", "d24")),
+        "TARGET_PARAM_DATA_RATIO": str(
+            config["training"].get("target_param_data_ratio", 0.5)
+        ),
+        "NUM_NPU": str(config["training"].get("devices_per_node", 8)),
+        "RESULT_DIR": str(OUTPUT / "training/results"),
+        "MID_CHECKPOINTS_OUTPUT_DIR": str(OUTPUT / "training/checkpoints"),
+        "EVAL_BENCHMARKS": ",".join(config["evaluation"].get("datasets", ["stem"])),
+        "MIX_GENERAL_DATA": "0",
+    })
+    subprocess.run(
+        ["bash", str(WORKSPACE / "nanochat_mid_compare/run_stem_experiment.sh")],
+        cwd=WORKSPACE,
+        env=env,
+        check=True,
+    )
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("stage", choices=("mixing", "training"))
+    args = parser.parse_args()
+    config = _config()
+    if args.stage == "mixing":
+        run_mixing(config)
+    else:
+        run_training(config)
+
+
+if __name__ == "__main__":
+    main()

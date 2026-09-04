@@ -7,6 +7,8 @@ at build time, so adding another evaluator does not create another trainer id.
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -46,18 +48,59 @@ class NanoChatTrainer(TrainerAdapter):
             raise ValueError("comparison_config.methods must not contain duplicates")
 
         manual_ratios = comparison.get("manual_ratios", {})
+        manual_plans = comparison.get("manual_plans")
+        if manual_plans is None and manual_ratios:
+            manual_plans = [{"id": "manual_default", "ratios": manual_ratios}]
+        if manual_plans is None:
+            manual_plans = []
         if "manual" in methods:
-            if not isinstance(manual_ratios, dict) or not manual_ratios:
+            if not isinstance(manual_plans, list) or not manual_plans:
                 raise ValueError(
-                    "comparison_config.manual_ratios is required for manual comparison"
+                    "comparison_config.manual_plans is required for manual comparison"
                 )
-            normalized_ratios = {
-                str(domain): float(ratio) for domain, ratio in manual_ratios.items()
-            }
-            if any(not domain or ratio <= 0 for domain, ratio in normalized_ratios.items()):
-                raise ValueError("manual comparison domains and ratios must be positive")
+            normalized_plans = []
+            seen_plan_ids: set[str] = set()
+            for plan in manual_plans:
+                if not isinstance(plan, dict):
+                    raise ValueError("each manual plan must be an object")
+                plan_id = str(plan.get("id", "")).strip()
+                if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}", plan_id):
+                    raise ValueError("manual plan id must use 1-64 letters, digits, _ or -")
+                if plan_id in seen_plan_ids:
+                    raise ValueError(f"duplicate manual plan id: {plan_id}")
+                seen_plan_ids.add(plan_id)
+                ratios = plan.get("ratios", {})
+                if not isinstance(ratios, dict) or not ratios:
+                    raise ValueError(f"manual plan {plan_id} requires ratios")
+                normalized_ratios = {
+                    str(domain): float(ratio) for domain, ratio in ratios.items()
+                }
+                if any(not domain or ratio <= 0 for domain, ratio in normalized_ratios.items()):
+                    raise ValueError(f"manual plan {plan_id} domains and ratios must be positive")
+                strategy = plan.get("strategy", {})
+                if not isinstance(strategy, dict):
+                    raise ValueError(f"manual plan {plan_id} strategy must be an object")
+                strategy_config = strategy.get("config", {})
+                if not isinstance(strategy_config, dict):
+                    raise ValueError(f"manual plan {plan_id} strategy.config must be an object")
+                label = str(plan.get("label") or plan_id)
+                if any(char in label for char in "\t\r\n"):
+                    raise ValueError(f"manual plan {plan_id} label cannot contain tabs or newlines")
+                normalized_plans.append({
+                    "id": plan_id,
+                    "label": label,
+                    "ratios": normalized_ratios,
+                    "strategy_path": str(strategy.get("script_path") or ""),
+                    "strategy_config": strategy_config,
+                })
         else:
-            normalized_ratios = {}
+            normalized_plans = []
+
+        random_strategy = comparison.get("random_strategy", {})
+        if not isinstance(random_strategy, dict):
+            raise ValueError("comparison_config.random_strategy must be an object")
+        if not isinstance(random_strategy.get("config", {}), dict):
+            raise ValueError("comparison_config.random_strategy.config must be an object")
 
         output = request.get("output_uri") or str(
             workspace / "result" / request["job_id"] / "quadmix"
@@ -76,9 +119,29 @@ class NanoChatTrainer(TrainerAdapter):
             "NANOCHAT_DISABLE_WANDB": "1" if config.get("disable_wandb", True) else "0",
             "NANOCHAT_LOAD_OPTIMIZER": "1" if config.get("load_optimizer", False) else "0",
         }
-        if normalized_ratios:
+        if normalized_plans:
+            # The shell keeps backward compatibility with the first manual plan;
+            # MANUAL_PLANS_JSON is the stable contract for multiple plans.
+            normalized_ratios = normalized_plans[0]["ratios"]
             env["MANUAL_RATIO"] = ":".join(
                 f"{domain}={ratio:g}" for domain, ratio in normalized_ratios.items()
+            )
+            env["MANUAL_PLANS_JSON"] = json.dumps(
+                normalized_plans, ensure_ascii=False, separators=(",", ":")
+            )
+            first_strategy = normalized_plans[0]["strategy_path"]
+            if first_strategy:
+                env["MANUAL_STRATEGY_PATH"] = first_strategy
+                env["MANUAL_STRATEGY_CONFIG_JSON"] = json.dumps(
+                    normalized_plans[0]["strategy_config"], ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+        random_script = random_strategy.get("script_path")
+        if random_script:
+            env["RANDOM_STRATEGY_PATH"] = str(random_script)
+            env["RANDOM_STRATEGY_CONFIG_JSON"] = json.dumps(
+                random_strategy.get("config", {}), ensure_ascii=False,
+                separators=(",", ":"),
             )
         if evaluator_id == "stem":
             env["STEM_DATA_DIR"] = request["dataset_uri"]
@@ -90,10 +153,15 @@ class NanoChatTrainer(TrainerAdapter):
             "BASE_MODEL_TAG": config.get("base_model_tag"),
             "RESULT_DIR": config.get("result_dir"),
             "MID_CHECKPOINTS_OUTPUT_DIR": config.get("checkpoint_dir"),
+            "PREPARED_COMPARISON_DATA_DIR": config.get(
+                "prepared_comparison_data_dir"
+            ),
         }
         env.update({key: str(value) for key, value in optional.items() if value})
         if config.get("skip_eval_download"):
             env["NANOCHAT_SKIP_EVAL_DOWNLOAD"] = "1"
+        if config.get("prepare_only"):
+            env["PREPARE_ONLY"] = "1"
         env.update(evaluator_env)
 
         if evaluator_id == "stem":

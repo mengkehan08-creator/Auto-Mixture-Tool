@@ -1,0 +1,57 @@
+<script setup>
+import { Plus, Sparkles } from '@lucide/vue'
+import { createStrategy } from '../../data/defaults'
+import StrategyCard from '../strategy/StrategyCard.vue'
+
+const props = defineProps({
+  strategies: { type: Array, required: true },
+  runtime: { type: Object, required: true },
+})
+
+function addStrategy() {
+  props.strategies.push(createStrategy('manual'))
+}
+
+function changeType(index, type) {
+  props.strategies.splice(index, 1, createStrategy(type))
+}
+
+function useRecommended() {
+  props.strategies.splice(0, props.strategies.length, createStrategy('quadmix'), createStrategy('manual'), createStrategy('random'))
+}
+</script>
+
+<template>
+  <section class="step-panel">
+    <div class="section-title-row">
+      <div><h2>配比策略</h2><p>每项策略相互平行；可只运行一项，也可增加多个策略共同实验。</p></div>
+      <div class="button-row"><button class="button secondary" type="button" @click="useRecommended"><Sparkles :size="16" />推荐配置</button><button class="button primary" type="button" @click="addStrategy"><Plus :size="16" />增加配比策略</button></div>
+    </div>
+
+    <div class="config-block">
+      <h3>数据与作业输出</h3>
+      <div class="form-grid two-cols">
+        <label class="field"><span>实验名称（可选）</span><input v-model="runtime.experimentName" placeholder="留空则按启动时间生成" /></label>
+        <label class="field"><span>配比作业节点数</span><input v-model.number="runtime.mixingNodes" type="number" min="1" max="16" /><small>每节点默认使用 8 张 NPU</small></label>
+        <label class="field"><span>输入 Parquet 数据 OBS 地址</span><input v-model="runtime.inputDataObsUri" placeholder="obs://bucket/path/prepared_parquet/" /></label>
+        <label class="field"><span>实验输出根目录 OBS 地址</span><input v-model="runtime.outputRootObsUri" placeholder="obs://bucket/path/chengchao/" /></label>
+      </div>
+      <p class="path-preview">输出结构：<code>runs/实验名/mixing/</code>、<code>sampled/</code>、<code>training/</code></p>
+    </div>
+
+    <div class="shared-resource">
+      <div><strong>配比作业</strong><small>先校验算法输入，再由所选策略生成全部采样集；成功后自动提交训练评测作业。</small></div>
+      <label class="field"><span>节点数</span><input v-model.number="runtime.mixingNodes" type="number" min="1" max="16" /></label>
+    </div>
+
+    <StrategyCard
+      v-for="(strategy, index) in strategies"
+      :key="strategy.id"
+      :strategy="strategy"
+      :index="index"
+      :removable="strategies.length > 1"
+      @remove="strategies.splice(index, 1)"
+      @change-type="changeType(index, $event)"
+    />
+  </section>
+</template>

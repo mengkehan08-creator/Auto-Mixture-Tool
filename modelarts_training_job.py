@@ -79,6 +79,8 @@ job_data = {
             "export PYTHONPATH=/home/ma-user/modelarts/user-job-dir/"
             "Auto-Mixture-Tool/src:$PY_DEPS:${PYTHONPATH:-}; "
             "$PY311 scripts/modelarts_runtime_check.py; "
+            "$PY311 scripts/offline_resource_check.py "
+            "examples/configs/modelarts_pipeline.yaml; "
             "exec $PY311 -m auto_mixture_tool.cli run "
             "/home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool/"
             "examples/configs/modelarts_pipeline.yaml' modelarts\n"
@@ -99,6 +101,9 @@ job_data = {
             "AMT_EXPECTED_NODES": str(NODE_COUNT),
             "HF_HUB_OFFLINE": "1",
             "TRANSFORMERS_OFFLINE": "1",
+            "HF_DATASETS_OFFLINE": "1",
+            "PIP_NO_INDEX": "1",
+            "WANDB_MODE": "disabled",
         },
         "code_dir": (
             "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/"

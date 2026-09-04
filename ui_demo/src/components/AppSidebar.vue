@@ -1,0 +1,23 @@
+<script setup>
+import { Boxes, FileSliders, FlaskConical, Plus, Settings2 } from '@lucide/vue'
+</script>
+
+<template>
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark"><FlaskConical :size="22" /></span>
+      <span><strong>Auto Mixture</strong><small>数据配比实验平台</small></span>
+    </div>
+
+    <nav class="sidebar-nav" aria-label="主导航">
+      <button class="active" type="button"><Plus :size="17" />创建实验</button>
+      <button type="button"><Boxes :size="17" />组件目录</button>
+      <button type="button"><FileSliders :size="17" />配置模板</button>
+    </nav>
+
+    <div class="environment-card">
+      <span><Settings2 :size="15" />运行环境</span>
+      <strong>ModelArts · cn-south-1</strong>
+    </div>
+  </aside>
+</template>

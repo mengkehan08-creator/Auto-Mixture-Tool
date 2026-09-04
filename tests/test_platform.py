@@ -260,6 +260,27 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertEqual(stage.env["NANOCHAT_SKIP_EVAL_DOWNLOAD"], "1")
 
+    def test_nanochat_can_prepare_or_reuse_comparison_data(self) -> None:
+        request = {
+            "job_id": "0123456789ab",
+            "dataset_uri": str(DATASET),
+            "schema_uri": str(SCHEMA),
+            "evaluator_id": "stem",
+            "trainer_config": {
+                "prepare_only": True,
+                "prepared_comparison_data_dir": "/modelarts/inputs/sampled/data",
+            },
+            "_evaluator_env": {},
+        }
+
+        stage = NanoChatTrainer().build(request, ROOT)[0]
+
+        self.assertEqual(stage.env["PREPARE_ONLY"], "1")
+        self.assertEqual(
+            stage.env["PREPARED_COMPARISON_DATA_DIR"],
+            "/modelarts/inputs/sampled/data",
+        )
+
     def test_quadmix_adapter_passes_proxy_training_steps(self) -> None:
         request = {
             "job_id": "0123456789ab",

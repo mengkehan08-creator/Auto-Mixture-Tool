@@ -142,6 +142,22 @@ EVAL_EVERY="${EVAL_EVERY:--1}"
 EVAL_BENCHMARKS="${EVAL_BENCHMARKS:-stem}"
 NANOCHAT_DISABLE_WANDB="${NANOCHAT_DISABLE_WANDB:-1}"
 NANOCHAT_LOAD_OPTIMIZER="${NANOCHAT_LOAD_OPTIMIZER:-0}"
+RANDOM_STRATEGY_PATH="${RANDOM_STRATEGY_PATH:-}"
+RANDOM_STRATEGY_CONFIG_JSON="${RANDOM_STRATEGY_CONFIG_JSON:-}"
+MANUAL_STRATEGY_PATH="${MANUAL_STRATEGY_PATH:-}"
+MANUAL_STRATEGY_CONFIG_JSON="${MANUAL_STRATEGY_CONFIG_JSON:-}"
+PREPARED_COMPARISON_DATA_DIR="${PREPARED_COMPARISON_DATA_DIR:-}"
+PREPARE_ONLY="${PREPARE_ONLY:-0}"
+[ -n "$RANDOM_STRATEGY_CONFIG_JSON" ] || RANDOM_STRATEGY_CONFIG_JSON='{}'
+[ -n "$MANUAL_STRATEGY_CONFIG_JSON" ] || MANUAL_STRATEGY_CONFIG_JSON='{}'
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+
+# QuaDMix itself may use every node. Once that stage has completed, only rank 0
+# materializes the comparison datasets so ModelArts uploads one consistent copy.
+if [ "$PREPARE_ONLY" = "1" ] && [ "${VC_TASK_INDEX:-0}" != "0" ]; then
+    echo "Sampling-only stage: node ${VC_TASK_INDEX} has no post-QuaDMix work"
+    exit 0
+fi
 
 # ── Anti-forgetting data mixing ──
 # Mix STEM data with ClimbMix general data to prevent catastrophic forgetting.
@@ -165,18 +181,18 @@ MANUAL_RATIO_MODEL_TAG="${MANUAL_RATIO_MODEL_TAG:-}"
 #  VALIDATION
 # ══════════════════════════════════════════════════════════════
 
-if has_method quadmix && [ -z "$QUADMIX_SAMPLED_DATA" ]; then
+if [ -z "$PREPARED_COMPARISON_DATA_DIR" ] && has_method quadmix && [ -z "$QUADMIX_SAMPLED_DATA" ]; then
     echo "ERROR: QUADMIX_SAMPLED_DATA not set"
     echo "  Set via: QUADMIX_SAMPLED_DATA=/path/to/stem_sampled_dataset"
     exit 1
 fi
 
-if has_method quadmix && [ ! -f "$QUADMIX_SAMPLED_DATA" ] && [ ! -d "$QUADMIX_SAMPLED_DATA" ]; then
+if [ -z "$PREPARED_COMPARISON_DATA_DIR" ] && has_method quadmix && [ ! -f "$QUADMIX_SAMPLED_DATA" ] && [ ! -d "$QUADMIX_SAMPLED_DATA" ]; then
     echo "ERROR: QuadMix dataset not found: $QUADMIX_SAMPLED_DATA"
     exit 1
 fi
 
-if [ ! -d "$STEM_DATA_DIR" ]; then
+if [ -z "$PREPARED_COMPARISON_DATA_DIR" ] && [ ! -d "$STEM_DATA_DIR" ]; then
     echo "ERROR: STEM data directory not found: $STEM_DATA_DIR"
     echo "  Set via: STEM_DATA_DIR=/path/to/100B_stem_parquet_filtered"
     exit 1
@@ -187,7 +203,7 @@ if [[ "$SCHEMA_CONFIG" = /* ]]; then
 else
     SCHEMA_PATH="$QUADMIX_DIR/$SCHEMA_CONFIG"
 fi
-if [ ! -f "$SCHEMA_PATH" ]; then
+if [ -z "$PREPARED_COMPARISON_DATA_DIR" ] && [ ! -f "$SCHEMA_PATH" ]; then
     echo "ERROR: Schema config not found: $SCHEMA_PATH"
     exit 1
 fi
@@ -210,11 +226,10 @@ if [ ! -f "$TOKENIZER_DIR/tokenizer.pkl" ]; then
 fi
 
 if [ -n "$NANOCHAT_EVAL_BUNDLE_DIR" ]; then
-    if [ ! -f "$NANOCHAT_EVAL_BUNDLE_DIR/core.yaml" ] || \
-       [ ! -f "$NANOCHAT_EVAL_BUNDLE_DIR/eval_meta_data.csv" ] || \
-       [ ! -d "$NANOCHAT_EVAL_BUNDLE_DIR/eval_data" ]; then
+    if [ ! -d "$NANOCHAT_EVAL_BUNDLE_DIR" ] || \
+       [ -z "$(find "$NANOCHAT_EVAL_BUNDLE_DIR" -mindepth 1 -print -quit)" ]; then
         echo "ERROR: Incomplete NanoChat eval bundle: $NANOCHAT_EVAL_BUNDLE_DIR"
-        echo "  Expected: core.yaml, eval_meta_data.csv, and eval_data/"
+        echo "  Expected a non-empty mounted directory containing selected benchmark assets"
         exit 1
     fi
 fi
@@ -397,7 +412,11 @@ show_progress 5 "configuration validated"
 
 mkdir -p "$RESULT_DIR"
 
-DATA_DIR="$RESULT_DIR/data"
+if [ -n "$PREPARED_COMPARISON_DATA_DIR" ]; then
+    DATA_DIR="$PREPARED_COMPARISON_DATA_DIR"
+else
+    DATA_DIR="$RESULT_DIR/data"
+fi
 
 # ══════════════════════════════════════════════════════════════
 #  STEP 1: DATA PREPARATION
@@ -406,7 +425,15 @@ DATA_DIR="$RESULT_DIR/data"
 echo ""
 echo "╔══ Step 1: Prepare STEM datasets ══╗"
 echo ""
-show_progress 8 "starting comparison dataset preparation"
+if [ -n "$PREPARED_COMPARISON_DATA_DIR" ]; then
+    echo "  Reusing prepared comparison datasets: $DATA_DIR"
+    test -f "$DATA_DIR/dataset_stats.json" || {
+        echo "ERROR: prepared comparison data is missing dataset_stats.json: $DATA_DIR"
+        exit 1
+    }
+    show_progress 25 "prepared comparison datasets validated"
+else
+    show_progress 8 "starting comparison dataset preparation"
 
 PREP_ARGS=(
     --preprocessed-data-dir "$STEM_DATA_DIR"
@@ -428,11 +455,29 @@ if has_method quadmix; then
 fi
 if has_method manual; then
     PREP_ARGS+=(--manual-ratio "$MANUAL_RATIO")
+    if [ -n "$MANUAL_STRATEGY_PATH" ]; then
+        PREP_ARGS+=(--manual-strategy "$MANUAL_STRATEGY_PATH" --manual-strategy-config "$MANUAL_STRATEGY_CONFIG_JSON")
+    fi
+fi
+if has_method random && [ -n "$RANDOM_STRATEGY_PATH" ]; then
+    PREP_ARGS+=(--random-strategy "$RANDOM_STRATEGY_PATH" --random-strategy-config "$RANDOM_STRATEGY_CONFIG_JSON")
 fi
 if ! has_method random; then
     export SKIP_RANDOM=1
 fi
 python3 "$SCRIPT_DIR/prepare_data.py" "${PREP_ARGS[@]}"
+
+if has_method manual && [ -n "${MANUAL_PLANS_JSON:-}" ]; then
+    python3 "$SCRIPT_DIR/prepare_additional_manual_plans.py" \
+        --plans-json "$MANUAL_PLANS_JSON" \
+        --prepare-script "$SCRIPT_DIR/prepare_data.py" \
+        --source "$STEM_DATA_DIR" --output "$DATA_DIR" \
+        --tokenizer "$TOKENIZER_DIR/tokenizer.pkl" --schema "$SCHEMA_PATH" \
+        --file-pattern "$FILE_PATTERN" --data-ratio "$TARGET_PARAM_DATA_RATIO" \
+        --num-scaling-params "$NUM_SCALING_PARAMS" --data-multiplier "$DATA_MULTIPLIER" \
+        --shard-size "$SHARD_SIZE" --val-ratio "$VAL_RATIO" --seed "$SEED" \
+        --max-shards "$MAX_SHARDS" --num-npu "$NUM_NPU"
+fi
 
 # Update dataset_stats.json with experiment metadata
 DATA_DIR="$DATA_DIR" BASE_MODEL_TAG="$BASE_MODEL_TAG" \
@@ -500,10 +545,17 @@ print(f'    Training budget:  {training}')
 print(f'    Target tokens:    {target}')
 print(f'    Data multiplier:  {mult}')
 "
+fi
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
 show_progress 25 "three comparison datasets prepared"
+
+if [ "$PREPARE_ONLY" = "1" ]; then
+    echo "Sampling-only stage complete: $DATA_DIR"
+    show_progress 100 "all selected comparison datasets prepared"
+    exit 0
+fi
 
 # ══════════════════════════════════════════════════════════════
 #  PRE-FLIGHT: DISK SPACE CHECK (before mixing + checkpoint writing)
@@ -516,7 +568,18 @@ echo ""
 CKPT_DIR="${MID_CHECKPOINTS_OUTPUT_DIR}"
 mkdir -p "$CKPT_DIR"
 
-CKPT_NEEDED_GB=60
+MODEL_COUNT=0
+if has_method quadmix; then MODEL_COUNT=$((MODEL_COUNT + 1)); fi
+if has_method random; then MODEL_COUNT=$((MODEL_COUNT + 1)); fi
+if has_method manual; then
+    if [ -n "${MANUAL_PLANS_JSON:-}" ]; then
+        MANUAL_COUNT=$(MANUAL_PLANS_JSON="$MANUAL_PLANS_JSON" python3 -c "import json,os; print(len(json.loads(os.environ['MANUAL_PLANS_JSON'])))")
+    else
+        MANUAL_COUNT=1
+    fi
+    MODEL_COUNT=$((MODEL_COUNT + MANUAL_COUNT))
+fi
+CKPT_NEEDED_GB=$((MODEL_COUNT * 20))
 DATA_SIZE_KB=$(du -sk "$DATA_DIR" 2>/dev/null | awk '{print $1}')
 DATA_SIZE_GB=$((DATA_SIZE_KB / 1024 / 1024))
 
@@ -535,7 +598,7 @@ AVAILABLE_GB=$((AVAILABLE_KB / 1024 / 1024))
 
 echo "  Available space:   ${AVAILABLE_GB}GB"
 echo "  Minimum needed:    ${MIN_REQUIRED_GB}GB"
-echo "    Checkpoints:     ${CKPT_NEEDED_GB}GB (3 × ~20GB)"
+echo "    Checkpoints:     ${CKPT_NEEDED_GB}GB (${MODEL_COUNT} × ~20GB)"
 echo "    STEM data:       ${DATA_SIZE_GB}GB (already on disk)"
 if [ "$MIX_GENERAL_DATA" = "1" ]; then
     echo "    Mixed data:      ${MIXED_GB}GB (= STEM data size)"
@@ -611,8 +674,26 @@ if [ "$MIX_GENERAL_DATA" = "1" ]; then
         RANDOM_DATA="$DATA_DIR/random_mixed"
     fi
     if has_method manual; then
-        mix_one "$MANUAL_RATIO_DATA" "$DATA_DIR/manual_ratio_mixed" "Manual Ratio"
-        MANUAL_RATIO_DATA="$DATA_DIR/manual_ratio_mixed"
+        if [ -f "$DATA_DIR/manual_plans_manifest.json" ]; then
+            MANUAL_MIX_MAP="$DATA_DIR/manual_mixed_paths.tsv"
+            : > "$MANUAL_MIX_MAP"
+            while IFS=$'\t' read -r PLAN_ID PLAN_LABEL PLAN_DATA; do
+                PLAN_MIXED="$DATA_DIR/manual_${PLAN_ID}_mixed"
+                mix_one "$PLAN_DATA" "$PLAN_MIXED" "Manual $PLAN_LABEL"
+                printf '%s\t%s\n' "$PLAN_ID" "$PLAN_MIXED" >> "$MANUAL_MIX_MAP"
+            done < <(python3 -c "import json; p=json.load(open('$DATA_DIR/manual_plans_manifest.json')); [print(x['id'], x['label'], x['data_dir'], sep='\t') for x in p]")
+            DATA_DIR="$DATA_DIR" MANUAL_MIX_MAP="$MANUAL_MIX_MAP" python3 -c "
+import json, os
+path = os.path.join(os.environ['DATA_DIR'], 'manual_plans_manifest.json')
+plans = json.load(open(path))
+mapping = dict(line.rstrip('\\n').split('\\t', 1) for line in open(os.environ['MANUAL_MIX_MAP']))
+for plan in plans: plan['data_dir'] = mapping[plan['id']]
+json.dump(plans, open(path, 'w'), ensure_ascii=False, indent=2)
+"
+        else
+            mix_one "$MANUAL_RATIO_DATA" "$DATA_DIR/manual_ratio_mixed" "Manual Ratio"
+            MANUAL_RATIO_DATA="$DATA_DIR/manual_ratio_mixed"
+        fi
     fi
 
     echo ""
@@ -640,6 +721,8 @@ if [ -n "$MID_CHECKPOINTS_OUTPUT_DIR" ]; then
         install_shared_symlink \
             "$NANOCHAT_EVAL_BUNDLE_DIR" \
             "$NANOCHAT_RUNTIME_DIR/eval_bundle"
+        python3 "$SCRIPT_DIR/prepare_offline_eval_bundle.py" \
+            "$NANOCHAT_EVAL_BUNDLE_DIR" "$NANOCHAT_RUNTIME_DIR"
         echo "  Eval bundle linked: $NANOCHAT_RUNTIME_DIR/eval_bundle"
     fi
     LINK_PATH="$NANOCHAT_RUNTIME_DIR/mid_checkpoints"
@@ -661,7 +744,7 @@ show_progress 35 "NanoChat runtime layout ready"
 # ══════════════════════════════════════════════════════════════
 
 echo ""
-echo "╔══ Pre-flight: Download eval data ══╗"
+echo "╔══ Pre-flight: Validate offline eval data ══╗"
 echo ""
 pushd "$NANOCHAT_REPO" > /dev/null
 # NanoChat imports rustbpe even when it only loads an existing tiktoken-based
@@ -675,14 +758,15 @@ python3 -c "from nanochat.tokenizer import get_tokenizer; get_tokenizer(); print
     echo "  ERROR: NanoChat tokenizer runtime check failed"
     exit 1
 }
-if [ "${NANOCHAT_SKIP_EVAL_DOWNLOAD:-0}" != "1" ]; then
-    python3 -c "from scripts.base_eval import prepare_eval_data; prepare_eval_data('${EVAL_BENCHMARKS:-all}')" || {
-        echo "  ERROR: eval data download failed"
-        exit 1
-    }
-else
-    echo "  Skipping eval download; using data already present in the mounted model directory"
-fi
+test "${NANOCHAT_SKIP_EVAL_DOWNLOAD:-0}" = "1" || {
+    echo "  ERROR: production training forbids evaluation downloads; set skip_eval_download: true"
+    exit 1
+}
+test -n "$NANOCHAT_EVAL_BUNDLE_DIR" || {
+    echo "  ERROR: skip_eval_download requires NANOCHAT_EVAL_BUNDLE_DIR"
+    exit 1
+}
+echo "  Network downloads disabled; using mounted evaluation bundle"
 popd > /dev/null
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
@@ -809,9 +893,25 @@ echo ""
 show_progress 67 "starting manual-ratio dataset training"
 
 MANUAL_RATIO_LOG=""
+MANUAL_RUNS_FILE="$RESULT_DIR/manual_plan_runs.tsv"
+: > "$MANUAL_RUNS_FILE"
 if has_method manual; then
-    MANUAL_RATIO_LOG="$RESULT_DIR/mid_train_manual_ratio.log"
-    run_mid_training "$MANUAL_RATIO_DATA" "$MANUAL_RATIO_MODEL_TAG" "stem_manual_ratio_mid" "$MANUAL_RATIO_LOG" "$MANUAL_RATIO_TOKENS" "$TRAIN_BUDGET"
+    if [ -f "$DATA_DIR/manual_plans_manifest.json" ]; then
+        while IFS=$'\t' read -r PLAN_ID PLAN_LABEL PLAN_DATA PLAN_TOKENS; do
+            PLAN_MODEL_TAG="${BASE_MODEL_TAG}_stem_manual_${PLAN_ID}_${TIMESTAMP}"
+            PLAN_LOG="$RESULT_DIR/mid_train_manual_${PLAN_ID}.log"
+            run_mid_training "$PLAN_DATA" "$PLAN_MODEL_TAG" "stem_manual_${PLAN_ID}_mid" "$PLAN_LOG" "$PLAN_TOKENS" "$TRAIN_BUDGET"
+            printf '%s\t%s\t%s\t%s\t%s\n' "$PLAN_ID" "$PLAN_LABEL" "$PLAN_DATA" "$PLAN_MODEL_TAG" "$PLAN_LOG" >> "$MANUAL_RUNS_FILE"
+            if [ -z "$MANUAL_RATIO_LOG" ]; then
+                MANUAL_RATIO_LOG="$PLAN_LOG"
+                MANUAL_RATIO_MODEL_TAG="$PLAN_MODEL_TAG"
+            fi
+        done < <(python3 -c "import json; p=json.load(open('$DATA_DIR/manual_plans_manifest.json')); [print(x['id'], x['label'], x['data_dir'], x['tokens'], sep='\t') for x in p]")
+    else
+        MANUAL_RATIO_LOG="$RESULT_DIR/mid_train_manual_ratio.log"
+        run_mid_training "$MANUAL_RATIO_DATA" "$MANUAL_RATIO_MODEL_TAG" "stem_manual_ratio_mid" "$MANUAL_RATIO_LOG" "$MANUAL_RATIO_TOKENS" "$TRAIN_BUDGET"
+        printf 'manual_default\tManual Ratio\t%s\t%s\t%s\n' "$MANUAL_RATIO_DATA" "$MANUAL_RATIO_MODEL_TAG" "$MANUAL_RATIO_LOG" >> "$MANUAL_RUNS_FILE"
+    fi
 else
     echo "  Skipped (not selected)"
 fi
@@ -833,7 +933,7 @@ run_eval() {
     echo "  Evaluating: $MODEL_TAG ($MODEL_TYPE)"
 
     pushd "$NANOCHAT_REPO" > /dev/null
-    python3 -m torch.distributed.run "${TORCHRUN_ARGS[@]}" -m scripts.base_eval -- \
+    python3 -m torch.distributed.run "${TORCHRUN_ARGS[@]}" -m nanochat_mid_compare.offline_base_eval -- \
         --eval=core \
         --eval-benchmarks="$EVAL_BENCHMARKS" \
         --device-batch-size=16 \
@@ -866,9 +966,17 @@ show_progress 85 "random model evaluation finished"
 
 MANUAL_RATIO_EVAL_LOG=""
 if has_method manual; then
-    show_progress 88 "evaluating manual-ratio model"
-    MANUAL_RATIO_EVAL_LOG="$RESULT_DIR/eval_manual_ratio.log"
-    run_eval "$MANUAL_RATIO_MODEL_TAG" "mid" "$MANUAL_RATIO_EVAL_LOG"
+    show_progress 88 "evaluating manual-ratio models"
+    MANUAL_EVAL_RUNS_FILE="$RESULT_DIR/manual_plan_evaluations.tsv"
+    : > "$MANUAL_EVAL_RUNS_FILE"
+    while IFS=$'\t' read -r PLAN_ID PLAN_LABEL PLAN_DATA PLAN_MODEL_TAG PLAN_LOG; do
+        PLAN_EVAL_LOG="$RESULT_DIR/eval_manual_${PLAN_ID}.log"
+        run_eval "$PLAN_MODEL_TAG" "mid" "$PLAN_EVAL_LOG"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$PLAN_ID" "$PLAN_LABEL" "$PLAN_DATA" "$PLAN_MODEL_TAG" "$PLAN_LOG" "$PLAN_EVAL_LOG" >> "$MANUAL_EVAL_RUNS_FILE"
+        if [ -z "$MANUAL_RATIO_EVAL_LOG" ]; then
+            MANUAL_RATIO_EVAL_LOG="$PLAN_EVAL_LOG"
+        fi
+    done < "$MANUAL_RUNS_FILE"
 fi
 show_progress 90 "manual-ratio model evaluation finished"
 
@@ -899,6 +1007,12 @@ if has_method manual; then
     REPORT_ARGS+=(--manual-ratio-train-log "$MANUAL_RATIO_LOG" --manual-ratio-eval-log "$MANUAL_RATIO_EVAL_LOG")
 fi
 python3 "$SCRIPT_DIR/generate_report.py" "${REPORT_ARGS[@]}"
+if [ -f "$DATA_DIR/manual_plans_manifest.json" ] && [ -s "$RESULT_DIR/manual_plan_evaluations.tsv" ]; then
+    python3 "$SCRIPT_DIR/generate_manual_plans_report.py" \
+        --manifest "$DATA_DIR/manual_plans_manifest.json" \
+        --runs "$RESULT_DIR/manual_plan_evaluations.tsv" \
+        --output-dir "$RESULT_DIR"
+fi
 show_progress 98 "comparison report generated"
 
 echo ""

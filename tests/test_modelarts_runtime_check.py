@@ -10,6 +10,9 @@ from scripts import modelarts_runtime_check
 
 
 class ModelArtsRuntimeCheckTests(unittest.TestCase):
+    def test_datasets_dependency_is_checked_before_training(self):
+        self.assertIn("datasets", modelarts_runtime_check.REQUIRED_MODULES)
+
     def test_reports_all_import_failures_in_one_run(self) -> None:
         def fake_import(name: str) -> object:
             if name in {"missing_one", "broken_two"}:

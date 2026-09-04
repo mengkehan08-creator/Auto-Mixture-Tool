@@ -65,4 +65,22 @@ class QuadMixAlgorithm(AlgorithmAdapter):
             args.extend(["--seed", str(int(config["seed"]))])
         if config.get("coordination_uri"):
             args.extend(["--coordination-uri", str(config["coordination_uri"])])
+        configurable = {
+            "top_k": ("--top-k", int, 1),
+            "block_size": ("--block-size", int, 1),
+            "micro_batch_size": ("--micro-batch-size", int, 1),
+            "global_batch_size": ("--global-batch-size", int, 1),
+            "rank_ref_size": ("--rank-ref-size", int, 1),
+            "checkpoint_interval": ("--checkpoint-interval", int, 1),
+            "coordination_timeout": ("--coordination-timeout", float, 0),
+        }
+        for key, (flag, converter, minimum) in configurable.items():
+            if config.get(key) is None:
+                continue
+            value = converter(config[key])
+            if value < minimum:
+                raise ValueError(f"quadmix {key} must be >= {minimum}")
+            args.extend([flag, str(value)])
+        if config.get("search_mode"):
+            args.extend(["--search-mode", str(config["search_mode"])])
         return [CommandSpec("quadmix-selection", "python", args, cwd=str(workspace))]

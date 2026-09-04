@@ -25,6 +25,7 @@ REQUIRED_MODULES = (
     "torch_npu",
     "transformers",
     "tokenizers",
+    "datasets",
     "tiktoken",
     "filelock",
     "requests",
