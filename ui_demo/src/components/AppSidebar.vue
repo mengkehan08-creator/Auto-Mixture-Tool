@@ -1,5 +1,7 @@
 <script setup>
 import { Boxes, FileSliders, FlaskConical, Plus, Settings2 } from '@lucide/vue'
+defineProps({ page: String })
+defineEmits(['navigate'])
 </script>
 
 <template>
@@ -10,7 +12,8 @@ import { Boxes, FileSliders, FlaskConical, Plus, Settings2 } from '@lucide/vue'
     </div>
 
     <nav class="sidebar-nav" aria-label="主导航">
-      <button class="active" type="button"><Plus :size="17" />创建实验</button>
+      <button :class="{ active: page === 'create' }" type="button" @click="$emit('navigate', 'create')"><Plus :size="17" />创建实验</button>
+      <button :class="{ active: page === 'jobs' }" type="button" @click="$emit('navigate', 'jobs')"><Boxes :size="17" />实验作业</button>
       <button type="button" disabled><Boxes :size="17" />组件目录（未开放）</button>
       <button type="button" disabled><FileSliders :size="17" />配置模板（未开放）</button>
     </nav>

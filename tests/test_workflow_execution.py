@@ -69,6 +69,11 @@ def test_ui_parameters_and_credentials_are_isolated(manager):
         assert "test-secret-value" not in json.dumps(payload)
     assert manager._client(record).headers["Authorization"] == "test-secret-value"
     assert "test-secret-value" not in json.dumps(public)
+    copied = manager.copy_configuration(public['id'])
+    assert 'authorization' not in copied['modelarts']
+    assert 'request_id' not in copied
+    copied['training']['base_model_tag'] = 'changed'
+    assert record['config']['training'].get('base_model_tag') != 'changed'
     assert "test-secret-value" not in (manager.directory / f"{public['id']}.json").read_text(encoding="utf-8")
     assert "REPLACE_ME_AUTHORIZATION" in (manager.workspace / "modelarts_training_job.py").read_text(encoding="utf-8")
     restored = ModelArtsWorkflowManager(manager.workspace)

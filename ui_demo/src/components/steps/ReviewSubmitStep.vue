@@ -3,7 +3,7 @@ import { CheckCircle2, LoaderCircle, Rocket } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { strategyOptions } from '../../data/defaults'
 import { apiRequest } from '../../api'
-import { fieldLabels, hasProgress, submissionFailed } from '../../workflow-state'
+import { fieldLabels, submissionFailed } from '../../workflow-state'
 
 const props = defineProps({ strategies: Array, training: Object, evaluation: Object, runtime: Object })
 const status = ref('idle')
@@ -11,14 +11,8 @@ const error = ref('')
 const workflows = ref([])
 const connectionError = ref('')
 const validation = ref(null)
-const detailId = ref('')
 const pendingId = ref('')
-const emit = defineEmits(['detail-change'])
-function openDetail(id) {
-  detailId.value = id
-  emit('detail-change', Boolean(id))
-}
-const visibleWorkflows = computed(() => detailId.value ? workflows.value.filter(w => w.id === detailId.value) : workflows.value)
+const emit = defineEmits(['created'])
 let requestId = ''
 let submittedBody = ''
 let timer = null
@@ -37,7 +31,7 @@ function normalizedStrategies() {
     devices_per_node: item.devicesPerNode,
     ratios: item.ratios,
     script_obs_uri: item.source === 'script' ? item.scriptObsUri : '',
-    script_config: {},
+    script_config: item.scriptConfig || {},
   }))
 }
 
@@ -81,7 +75,7 @@ async function loadWorkflows() {
     } else if (pending?.jobs.some(job => job.id)) {
       pendingId.value = ''
       status.value = 'success'
-      openDetail(pending.id)
+      emit('created', pending.id)
     }
   } catch (reason) { connectionError.value = reason.message }
 }
@@ -123,23 +117,12 @@ async function submit() {
   }
 }
 
-async function renewAuthorization(workflow) {
-  try {
-    await apiRequest(`workflows/${workflow.id}/authorization`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ authorization: props.runtime.modelarts.authorization }),
-    })
-    await loadWorkflows()
-  } catch (reason) { error.value = reason.message }
-}
-
 onMounted(() => { loadWorkflows(); timer = window.setInterval(loadWorkflows, 3000) })
 onBeforeUnmount(() => window.clearInterval(timer))
 </script>
 
 <template>
   <section class="step-panel">
-    <template v-if="!detailId">
     <div class="section-title-row"><div><h2>确认并提交</h2><p>一次实验提交两个作业；配比作业成功后，平台自动提交训练评测作业。</p></div></div>
     <h3>ModelArts 作业配置</h3>
     <p class="path-preview">以下参数替代脚本中的 REPLACE_ME，无需编辑或再次运行脚本。请使用可信的 ModelArts 创建作业 API 地址。Authorization 仅保存在本次页面及后端进程内存，不写回脚本或工作流文件；服务重启后需要重新提供。</p>
@@ -162,27 +145,6 @@ onBeforeUnmount(() => window.clearInterval(timer))
     </button>
     <p v-if="error" class="error-message">{{ error }}</p>
     <article v-if="status === 'success'" class="submit-result"><CheckCircle2 :size="25" /><div><strong>实验已受理</strong><span>第二个作业将在第一个成功后自动提交。</span></div></article>
-    </template>
-    <template v-else>
-      <h2>实验运行详情</h2>
-      <button class="button secondary" type="button" @click="openDetail('')">返回配置（保留已填内容）</button>
-    </template>
-
-    <div class="workflow-list">
-      <h3>{{ detailId ? '作业状态与输出' : '实验记录' }}</h3>
-      <p v-if="connectionError" class="error-message">状态服务连接失败：{{ connectionError }}。已显示的记录可能不是最新状态。</p>
-      <article v-for="workflow in visibleWorkflows" :key="workflow.id" class="workflow-card">
-        <header><div><strong>{{ workflow.name }}</strong><small>{{ workflow.id }} · {{ workflow.stage }}</small></div><b v-if="detailId && hasProgress(workflow)">阶段进度 {{ workflow.progress }}%</b></header>
-        <button v-if="!detailId && workflow.jobs.some(job => job.id)" type="button" class="button secondary" @click="openDetail(workflow.id)">查看运行详情</button>
-        <div v-if="detailId && hasProgress(workflow)" class="progress-track"><span :style="{ width: `${workflow.progress}%` }"></span></div>
-        <div class="job-grid">
-          <div v-for="job in workflow.jobs" :key="job.name"><span>{{ job.module === 'mixing' ? '配比与采样' : '训练与评测' }}</span><strong>{{ job.name }}</strong><small>{{ job.status }}<template v-if="job.id"> · {{ job.id }}</template></small><a v-if="job.url" :href="job.url" target="_blank" rel="noopener noreferrer">打开 ModelArts 作业详情</a><small v-else-if="job.id">平台未返回网页链接；可按作业编号在 ModelArts 查询。</small></div>
-        </div>
-        <p v-if="workflow.message" class="error-message">{{ workflow.message }}</p>
-        <button type="button" class="button secondary" @click="renewAuthorization(workflow)">使用上方 Authorization 更新该实验凭据</button>
-        <div class="output-paths"><span>配比结果：{{ workflow.outputs.mixing }}</span><span>采样集：{{ workflow.outputs.sampled }}</span><span>训练结果：{{ workflow.outputs.training }}</span></div>
-      </article>
-      <p v-if="!workflows.length" class="empty-state">尚未提交实验。</p>
-    </div>
+    <p v-if="connectionError" class="error-message">状态服务连接失败：{{ connectionError }}。请在左侧实验作业核对提交结果，勿重复提交。</p>
   </section>
 </template>

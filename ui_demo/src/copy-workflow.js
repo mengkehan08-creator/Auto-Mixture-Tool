@@ -1,0 +1,33 @@
+import { createRuntimeConfig, createTrainingConfig, createEvaluationConfig, createStrategy } from './data/defaults.js'
+
+export function copyWorkflow(config) {
+  const runtime = createRuntimeConfig()
+  const training = createTrainingConfig()
+  const evaluation = createEvaluationConfig()
+  const resources = config.resources || {}
+  Object.assign(runtime, {
+    experimentName: config.experiment_name || '', inputDataObsUri: config.input_data_obs_uri,
+    outputRootObsUri: config.output_root_obs_uri, mixingNodes: config.mixing_nodes,
+    codeObsUri: resources.code_obs_uri, quadmixTokenizerObsUri: resources.quadmix_tokenizer_obs_uri,
+    proxyValidationObsUri: resources.proxy_validation_obs_uri, evalBundleObsUri: resources.eval_bundle_obs_uri,
+    pythonWheelsObsUri: resources.python_wheels_obs_uri,
+    modelarts: { ...runtime.modelarts, ...config.modelarts, authorization: '' },
+  })
+  Object.assign(training, {
+    nodes: config.training_nodes, frameworkObsUri: resources.nanochat_repo_obs_uri,
+    modelObsUri: resources.nanochat_model_obs_uri, model: config.training.model || 'NanoChat-Base',
+    baseModelTag: config.training.base_model_tag || 'd24',
+    targetParamDataRatio: config.training.target_param_data_ratio,
+    devicesPerNode: config.training.devices_per_node,
+  })
+  evaluation.dataset = { enabled: Boolean(config.evaluation.datasets.length), source: 'obs',
+    names: [...config.evaluation.datasets], obsUri: resources.eval_bundle_obs_uri }
+  const strategies = config.strategies.map(item => ({ ...createStrategy(item.type),
+    name: item.name, seed: item.seed ?? 42, proxyExperiments: item.proxy_experiments,
+    proxySteps: item.proxy_steps, searchCount: item.search_count, devicesPerNode: item.devices_per_node,
+    ratios: item.ratios ? { ...item.ratios } : undefined,
+    source: item.script_obs_uri ? 'script' : 'builtin', scriptObsUri: item.script_obs_uri || '',
+    scriptConfig: structuredClone(item.script_config || {}),
+  }))
+  return { runtime, training, evaluation, strategies }
+}

@@ -202,6 +202,14 @@ def get_workflow(workflow_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/v1/workflows/{workflow_id}/configuration")
+def workflow_configuration(workflow_id: str) -> dict[str, Any]:
+    try:
+        return _workflow_manager().copy_configuration(workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 def main() -> None:
     import argparse
     import uvicorn

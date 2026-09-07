@@ -300,6 +300,14 @@ class ModelArtsWorkflowManager:
         value.pop("config", None)
         return value
 
+    def copy_configuration(self, workflow_id: str) -> dict[str, Any]:
+        self.get(workflow_id)
+        value = copy.deepcopy(self.records[workflow_id]["config"])
+        value.pop("request_id", None)
+        if value.get("modelarts"):
+            value["modelarts"].pop("authorization", None)
+        return value
+
     @staticmethod
     def _job_record(module: str, nodes: int, stamp: str) -> dict[str, Any]:
         return {
