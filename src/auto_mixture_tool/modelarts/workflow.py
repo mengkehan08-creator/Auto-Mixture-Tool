@@ -17,10 +17,16 @@ from types import SimpleNamespace
 from urllib.parse import quote, urlencode, urlsplit
 
 import requests
+from .config_transport import write_config
 
 
 SUCCESS_STATES = {"completed", "succeeded", "success"}
 FAILURE_STATES = {"failed", "canceled", "cancelled", "terminated"}
+RESOURCE_INPUTS = {
+    'code_obs_uri': 'code_dir', 'quadmix_tokenizer_obs_uri': 'quadmix_tokenizer_dir',
+    'proxy_validation_obs_uri': 'proxy_validation_dir', 'eval_bundle_obs_uri': 'eval_bundle_dir',
+    'python_wheels_obs_uri': 'python_wheels_dir',
+}
 
 
 def _remote_error(data: Any) -> str:
@@ -278,6 +284,11 @@ class ModelArtsWorkflowManager:
             "config": normalized,
             "message": "",
         }
+        for section, output, suffix in (("training", "models", "checkpoints"), ("evaluation", "reports", "results")):
+            root = normalized[section].get("output_obs_uri")
+            record["outputs"][output] = (
+                f"{root}/runs/{experiment}/" if root else f"{run_root}/training/{suffix}/"
+            )
         self._store(record)
         self._start(workflow_id)
         return self.public(record)
@@ -322,10 +333,12 @@ class ModelArtsWorkflowManager:
 
     def _validate(self, config: dict[str, Any]) -> dict[str, Any]:
         value = copy.deepcopy(config)
+        for section in ("training", "evaluation"):
+            uri = value.get(section, {}).get("output_obs_uri")
+            if uri:
+                value[section]["output_obs_uri"] = _clean_obs_uri(uri)
         entries = value.get('offline_resources')
-        roles = {'code_obs_uri': 'code_dir', 'quadmix_tokenizer_obs_uri': 'quadmix_tokenizer_dir',
-                 'proxy_validation_obs_uri': 'proxy_validation_dir', 'eval_bundle_obs_uri': 'eval_bundle_dir',
-                 'python_wheels_obs_uri': 'python_wheels_dir'}
+        roles = RESOURCE_INPUTS
         if entries is not None:
             names, seen_roles = set(), set()
             for entry in entries:
@@ -467,9 +480,6 @@ class ModelArtsWorkflowManager:
         env = payload["algorithm"]["environments"]
         env["AMT_RUN_ID"] = record["name"]
         env["AMT_EXPECTED_NODES"] = str(job["nodes"])
-        env["AMT_WORKFLOW_CONFIG_JSON"] = json.dumps(
-            config, ensure_ascii=False, separators=(",", ":")
-        )
         env["AMT_RUN_OBS_URI"] = f"{record['run_root_obs_uri']}/mixing/coordination"
         payload["algorithm"]["command"] = config.get("commands", {}).get(stage, self._command(stage))
 
@@ -501,9 +511,7 @@ class ModelArtsWorkflowManager:
         for item in payload["algorithm"]["inputs"]:
             item["remote"]["obs"]["obs_url"] = mapping[item["name"]]
         if config.get('offline_resources') is not None:
-            roles = {'code_obs_uri': 'code_dir', 'quadmix_tokenizer_obs_uri': 'quadmix_tokenizer_dir',
-                     'proxy_validation_obs_uri': 'proxy_validation_dir', 'eval_bundle_obs_uri': 'eval_bundle_dir',
-                     'python_wheels_obs_uri': 'python_wheels_dir'}
+            roles = RESOURCE_INPUTS
             entries = config['offline_resources']
             by_role = {entry.get('role'): entry for entry in entries if entry.get('role')}
             reverse = {name: role for role, name in roles.items()}
@@ -542,35 +550,30 @@ class ModelArtsWorkflowManager:
                 "name": f"strategy_{index}", "local_dir": local_dir,
                 "access_method": "env", "remote": {"obs": {"obs_url": _clean_obs_uri(obs_uri)}},
             })
-        env["AMT_WORKFLOW_CONFIG_JSON"] = json.dumps(
-            config, ensure_ascii=False, separators=(",", ":")
-        )
+        runtime_config = copy.deepcopy(config)
+        runtime_config.pop('commands', None)
+        runtime_config.pop('offline_resources', None)
+        write_config(env, runtime_config)
+        for name, item in env.items():
+            if len(str(item).encode('utf-8')) > 4096:
+                raise ValueError(f'环境变量 {name} 超过 4096 字节，请减少该变量内容')
         payload["algorithm"]["outputs"][0]["remote"]["obs"]["obs_url"] = (
             record["run_root_obs_uri"] + "/"
         )
+        if stage == "training":
+            for section, output in (("training", "models"), ("evaluation", "reports")):
+                if config[section].get("output_obs_uri"):
+                    payload["algorithm"]["outputs"].append({
+                        "name": f"{output}_output", "local_dir": f"/home/ma-user/modelarts/outputs/{output}_output",
+                        "access_method": "env", "remote": {"obs": {"obs_url": record["outputs"][output]}},
+                    })
         return payload
 
     @staticmethod
     def _command(stage: str) -> str:
-        return (
-            "/bin/bash -c 'set -euo pipefail; "
-            "PY311=$(command -v python3.11 || command -v python3 || true); "
-            "test -n \"$PY311\" || { echo \"ERROR: Python not found\"; exit 2; }; "
-            "PY_DEPS=/tmp/auto-mixture-python-packages; mkdir -p $PY_DEPS; "
-            ": > $PY_DEPS/dask.py; "
-            "if [ ! -d $PY_DEPS/lightgbm ]; then $PY311 -m pip install --no-index "
-            "--no-deps --target $PY_DEPS /home/ma-user/modelarts/inputs/"
-            "python_wheels_dir_7/lightgbm-4.6.0-py3-none-manylinux2014_aarch64.whl; fi; "
-            "cd /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool; "
-            "export PYTHONPATH=$PWD/src:$PY_DEPS:${PYTHONPATH:-}; "
-            "export AMT_PYTHON_EXECUTABLE=$PY311; "
-            "mkdir -p /tmp/auto-mixture-python; "
-            "ln -sf $PY311 /tmp/auto-mixture-python/python; "
-            "ln -sf $PY311 /tmp/auto-mixture-python/python3; "
-            "export PATH=/tmp/auto-mixture-python:$PATH; "
-            "$PY311 scripts/modelarts_runtime_check.py; "
-            f"exec $PY311 -m auto_mixture_tool.modelarts.stage_runner {stage}' modelarts\n"
-        )
+        if stage not in {'mixing', 'training'}:
+            raise ValueError('Unknown ModelArts stage')
+        return f"/bin/bash /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool/scripts/run_modelarts_stage.sh {stage}"
 
     def _run(self, workflow_id: str) -> None:
         record = self.records[workflow_id]

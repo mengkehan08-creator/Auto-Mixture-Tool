@@ -1,0 +1,10 @@
+{
+  "endpoint": "https://csbgw.roma.huawei.com/csb/projects/com.huawei.aifm.lmdt.exp/vendors/huaweicloud-china/resourcetypes/modelarts/regions/cn-south-1/projects/2ed7ec8d920a4aefbeb323765ab9f22f/v2/2ed7ec8d920a4aefbeb323765ab9f22f/training-jobs",
+  "region": "cn-south-1",
+  "workspace_id": "988f2e20e80a4fee9bc959a57e0bb391",
+  "workspace_name": "aifm-lmdt-exp_MA_workspace",
+  "image_url": "swr-aifm-exp-e8vz2k.swr-pro.myhuaweicloud.com/aifm.lmdt.exp/train_910b-pytorch_2.9.0-cann_8.5.1.b010-py_3.11-hce_2.0.2509-aarch64-snt9b23-20260204:1.0.12",
+  "image_repo_id": "57b648e2-646f-11f1-a949-0255ac100255",
+  "flavor_id": "modelarts.pool.visual.8xlarge",
+  "pool_id": "pool-7a419575-77ad-49bf-b4ed-91bd50551e33"
+}

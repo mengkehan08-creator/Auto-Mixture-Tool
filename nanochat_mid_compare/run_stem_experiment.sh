@@ -773,6 +773,10 @@ test -n "$NANOCHAT_EVAL_BUNDLE_DIR" || {
     exit 1
 }
 echo "  Network downloads disabled; using mounted evaluation bundle"
+if [ "$EVALUATION_ENABLED" = "1" ] || [ "$CORE_METRIC_EVERY" != "-1" ]; then
+    python3 "$SCRIPT_DIR/eval_assets.py" --base "$NANOCHAT_RUNTIME_DIR" \
+        --repo "$NANOCHAT_REPO" --benchmarks "$EVAL_BENCHMARKS"
+fi
 popd > /dev/null
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""

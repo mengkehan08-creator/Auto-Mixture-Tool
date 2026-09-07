@@ -8,7 +8,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from auto_mixture_tool.pipeline import PipelineManager
+from .config_transport import read_config
+from .preflight import check_mounted_assets
 
 
 WORKSPACE = Path("/home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool")
@@ -16,13 +17,7 @@ OUTPUT = Path("/home/ma-user/modelarts/outputs/output_dir_0")
 
 
 def _config() -> dict[str, Any]:
-    raw = os.environ.get("AMT_WORKFLOW_CONFIG_JSON", "")
-    if not raw:
-        raise ValueError("AMT_WORKFLOW_CONFIG_JSON is required")
-    value = json.loads(raw)
-    if not isinstance(value, dict):
-        raise ValueError("AMT_WORKFLOW_CONFIG_JSON must contain an object")
-    return value
+    return read_config(os.environ)
 
 
 def _comparison(config: dict[str, Any]) -> dict[str, Any]:
@@ -57,6 +52,7 @@ def _comparison(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_mixing(config: dict[str, Any]) -> None:
+    from auto_mixture_tool.pipeline import PipelineManager
     quadmix = next(item for item in config["strategies"] if item["type"] == "quadmix")
     request = {
         "dataset_uri": "/home/ma-user/modelarts/inputs/data_dir_0",
@@ -152,8 +148,8 @@ def run_training(config: dict[str, Any]) -> None:
         "DEVICE_BATCH_SIZE": str(config["training"].get("device_batch_size", 1)),
         "EVAL_EVERY": str(config["training"].get("eval_every", -1)),
         "CORE_METRIC_EVERY": str(config["training"].get("core_metric_every", -1)),
-        "RESULT_DIR": str(OUTPUT / "training/results"),
-        "MID_CHECKPOINTS_OUTPUT_DIR": str(OUTPUT / "training/checkpoints"),
+        "RESULT_DIR": str(OUTPUT.parent / "reports_output" if config["evaluation"].get("output_obs_uri") else OUTPUT / "training/results"),
+        "MID_CHECKPOINTS_OUTPUT_DIR": str(OUTPUT.parent / "models_output" if config["training"].get("output_obs_uri") else OUTPUT / "training/checkpoints"),
         "EVAL_BENCHMARKS": ",".join(config["evaluation"].get("datasets", ["stem"])),
         "EVALUATION_ENABLED": "1" if config["evaluation"].get("datasets", ["stem"]) else "0",
         "MIX_GENERAL_DATA": "0",
@@ -173,6 +169,7 @@ def main() -> None:
     parser.add_argument("stage", choices=("mixing", "training"))
     args = parser.parse_args()
     config = _config()
+    check_mounted_assets(config, args.stage)
     if args.stage == "mixing":
         run_mixing(config)
     else:

@@ -33,6 +33,10 @@ def materialize(source: Path, runtime: Path) -> None:
         if marker.exists():
             continue
         with zipfile.ZipFile(archive) as handle:
+            for member in handle.infolist():
+                target = (runtime / member.filename).resolve()
+                if not target.is_relative_to(runtime.resolve()) or (member.external_attr >> 16) & 0o170000 == 0o120000:
+                    raise ValueError(f'unsafe evaluation archive member: {member.filename}; extract the bundle to a separate OBS directory first')
             handle.extractall(runtime)
         marker.write_text(str(archive), encoding="utf-8")
     os.environ["NANOCHAT_BASE_DIR"] = str(runtime)

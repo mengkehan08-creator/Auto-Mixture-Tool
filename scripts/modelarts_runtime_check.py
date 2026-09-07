@@ -55,7 +55,7 @@ def main() -> int:
         except Exception as exc:  # report incompatible imports as well as missing ones
             failures.append(f"{name}: {type(exc).__name__}: {exc}")
 
-    for name in ("torch", "torch_npu", "lightgbm"):
+    for name in modules:
         module = loaded.get(name)
         if module is not None:
             print(f"{name} version: {getattr(module, '__version__', 'unknown')}")
@@ -82,6 +82,8 @@ def main() -> int:
         print("ERROR: ModelArts runtime check found these problems:", file=sys.stderr)
         for failure in failures:
             print(f"  - {failure}", file=sys.stderr)
+        print('Prepare compatible Python 3.11/aarch64 wheels in OBS or rebuild the image. '
+              'No online installation was attempted; do not replace torch/torch_npu independently of CANN.', file=sys.stderr)
         return 1
 
     print("ModelArts runtime dependencies OK")

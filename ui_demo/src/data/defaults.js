@@ -53,6 +53,7 @@ export function createStrategy(type = 'quadmix') {
 }
 
 export const createTrainingConfig = () => ({
+  outputObsUri: `${obsRoot}chengchao/models/`,
   frameworkSource: 'builtin',
   framework: 'NanoChat',
   frameworkObsUri: `${obsRoot}backup_0810/work/nanochat-npu/`,
@@ -70,6 +71,7 @@ export const createTrainingConfig = () => ({
 })
 
 export const createEvaluationConfig = () => ({
+  outputObsUri: `${obsRoot}chengchao/reports/`,
   dataset: {
     enabled: true,
     source: 'builtin',

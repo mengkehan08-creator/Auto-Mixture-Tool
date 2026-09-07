@@ -17,6 +17,7 @@ function toggleDataset(config, name) {
   <section class="step-panel">
     <div class="section-title-row"><div><h2>评测配置</h2><p>使用 OBS 中已准备的评测资源。stem 为默认组合；自动评估 API 尚未接入。</p></div></div>
 
+    <div class="config-block"><label class="field"><span>评测与对比报告输出 OBS 目录</span><input v-model="config.outputObsUri" placeholder="留空沿用实验输出目录" /><small>保存指标与对比报告，自动追加 runs/实验名称/。目标目录需具备写入权限。</small></label></div>
     <div class="method-grid">
       <article :class="['method-card', { enabled: config.dataset.enabled }]">
         <header><span class="method-icon"><Database :size="20" /></span><span><strong>评测集评测</strong><small>使用内置评测集或已上传的 OBS 目录</small></span><label class="switch"><input v-model="config.dataset.enabled" type="checkbox" /><span></span></label></header>

@@ -49,6 +49,26 @@ def test_custom_output_and_idempotency(manager):
     assert second["outputs"][0]["remote"]["obs"]["obs_url"] == current["run_root_obs_uri"] + "/"
 
 
+def test_separate_model_and_report_outputs(manager):
+    body = config()
+    body['training']['output_obs_uri'] = 'obs://models-bucket/checkpoints/'
+    body['evaluation']['output_obs_uri'] = 'obs://reports-bucket/comparisons/'
+    with patch.object(manager, '_start'):
+        created = manager.create(body)
+    record = manager.records[created['id']]
+    outputs = manager._payload(record, 'training')['algorithm']['outputs']
+    for name, root in [('models', 'obs://models-bucket/checkpoints'), ('reports', 'obs://reports-bucket/comparisons')]:
+        target = next(item for item in outputs if item['name'] == name + '_output')
+        assert target['remote']['obs']['obs_url'] == f"{root}/runs/{created['name']}/"
+        assert target['remote']['obs']['obs_url'] == created['outputs'][name]
+        assert target['local_dir'].endswith('/' + name + '_output')
+    assert len(manager._payload(record, 'mixing')['algorithm']['outputs']) == 1
+    assert manager.copy_configuration(created['id'])['training']['output_obs_uri'] == 'obs://models-bucket/checkpoints'
+    body['evaluation']['output_obs_uri'] = '/tmp/reports'
+    with pytest.raises(ValueError):
+        manager.create(body)
+
+
 def test_ui_parameters_and_credentials_are_isolated(manager):
     body = config()
     body["modelarts"] = {

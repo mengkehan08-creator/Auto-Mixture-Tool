@@ -64,7 +64,7 @@ onBeforeUnmount(() => clearInterval(timer))
           <strong>{{ job.name }}</strong><small>{{ job.status }} · {{ job.id || '尚未创建' }}</small>
           <a v-if="job.url" :href="job.url" target="_blank" rel="noopener noreferrer">打开 ModelArts 作业详情</a>
         </div></div>
-        <div class="output-paths"><span>配比结果：{{ selected.outputs.mixing }}</span><span>采样集：{{ selected.outputs.sampled }}</span><span>训练结果：{{ selected.outputs.training }}</span></div>
+        <div class="output-paths"><span>配比结果：{{ selected.outputs.mixing }}</span><span>采样集：{{ selected.outputs.sampled }}</span><span>模型输出：{{ selected.outputs.models || selected.outputs.training }}</span><span>评测与对比报告：{{ selected.outputs.reports || selected.outputs.training }}</span></div>
         <button type="button" class="button secondary" @click="copy(selected.id)">复制并调整参数</button>
         <label class="field"><span>更新身份认证凭据</span><input v-model="credential" type="password" autocomplete="off" /></label>
         <button type="button" class="button secondary" @click="renew">更新此实验凭据</button>

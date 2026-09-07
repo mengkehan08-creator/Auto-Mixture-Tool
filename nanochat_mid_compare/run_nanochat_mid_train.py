@@ -198,6 +198,9 @@ def patch_distributed_adamw() -> None:
 def main() -> None:
     # The wrapper is launched while cwd is the mounted NanoChat repository.
     sys.path.insert(0, os.getcwd())
+    if os.environ.get('NANOCHAT_SKIP_EVAL_DOWNLOAD') == '1':
+        from nanochat_mid_compare.offline_base_eval import install_offline_eval
+        install_offline_eval()
     patch_distributed_adamw()
     runpy.run_module("scripts.mid_train", run_name="__main__")
 

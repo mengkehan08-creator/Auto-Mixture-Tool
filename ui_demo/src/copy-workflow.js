@@ -15,6 +15,7 @@ export function copyWorkflow(config) {
     modelarts: { ...runtime.modelarts, ...config.modelarts, authorization: '' },
   })
   Object.assign(training, {
+    outputObsUri: config.training.output_obs_uri || '',
     nodes: config.training_nodes, frameworkObsUri: resources.nanochat_repo_obs_uri,
     modelObsUri: resources.nanochat_model_obs_uri, model: config.training.model || 'NanoChat-Base',
     baseModelTag: config.training.base_model_tag || 'd24',
@@ -27,6 +28,7 @@ export function copyWorkflow(config) {
   })
   runtime.offlineResources = config.offline_resources ? structuredClone(config.offline_resources) :
     runtime.offlineResources.map(item => ({ ...item, uri: resources[item.role] || item.uri }))
+  evaluation.outputObsUri = config.evaluation.output_obs_uri || ''
   evaluation.dataset = { enabled: Boolean(config.evaluation.datasets.length), source: 'obs',
     names: [...config.evaluation.datasets], obsUri: resources.eval_bundle_obs_uri }
   const strategies = config.strategies.map(item => ({ ...createStrategy(item.type),

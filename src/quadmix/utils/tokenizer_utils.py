@@ -32,6 +32,8 @@ def get_tokenizer(tokenizer_path: str, use_cache: bool = True):
     elif os.path.isfile(tokenizer_path):
         tok = Tokenizer.from_file(tokenizer_path)
     else:
+        if any(os.environ.get(key) == '1' for key in ('HF_HUB_OFFLINE', 'TRANSFORMERS_OFFLINE')):
+            raise FileNotFoundError(f'离线 Tokenizer 不存在：{tokenizer_path}；请上传并挂载 tokenizer.json')
         tok = Tokenizer.from_pretrained(tokenizer_path)
     if use_cache:
         _cache[tokenizer_path] = tok

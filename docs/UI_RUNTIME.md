@@ -84,6 +84,10 @@ obs://bucket/experiments/team-a/runs/<实验名称-时间-唯一编号>/
 
 ## 5. 前端维护与验收边界
 
+ModelArts 的单个环境变量值限制为 4096 字符。长配置压缩后以每段最多 4000 个 ASCII 字符传输，容器入口还原并核对摘要；短配置兼容旧的单变量方式。命令和离线挂载列表不重复塞入运行配置。工具另外设有 1 MiB 原始配置安全上限，该值不是 ModelArts 的额度声明。升级时后端与 OBS 工具代码必须同时更新，旧入口无法读取新编码。分段不绕过平台的环境变量总量或请求总大小限制。
+
+最新非敏感参数来自 `configs/modelarts_ui_defaults.json`，与提供的提交脚本核对后填写。页面只补充空字段，不覆盖已编辑的值；Authorization 永不从默认文件返回。默认 command 缩短为调用 `scripts/run_modelarts_stage.sh`。复制旧实验时可点击“恢复默认命令”使用新启动流程。详细离线资源与验收边界见 `docs/RUNTIME_HARDENING.md`。
+
 发布包已包含构建后的界面，开发环境只运行后端即可。修改 Vue 源码时，在有 Node.js 和前端依赖的机器运行：
 
 ```bash
@@ -95,3 +99,8 @@ npm run build
 构建会更新后端 `src/auto_mixture_tool/api/static/index.html`。不要只上传 `ui_demo` 或双击 HTML 来启动系统。
 
 本地自动化测试覆盖接口、工作流衔接、失败阻断、恢复与路径处理；真实 ModelArts、OBS 权限、NPU 通信和多节点训练仍需在目标环境验收。不能将本地测试通过等同于远程训练已成功。
+# 模型与评测输出地址
+
+训练配置中的“模型输出 OBS 目录”和评测配置中的“评测与对比报告输出 OBS 目录”可分别编辑，对应 `training.output_obs_uri` 和 `evaluation.output_obs_uri`。只接受有写入权限的 OBS 目录，不接受本地路径或控制台网页链接。留空时沿用实验输出目录。
+
+自定义目录下自动追加 `runs/实验名称/`，各次运行相互隔离。第二个作业通过独立输出映射分别上传检查点与报告；实验作业详情显示最终地址。自定义 command 必须保留 stage_runner 的输出路径约定。部署时同步更新 OBS 工具代码及开发环境后端。

@@ -80,6 +80,8 @@ def _sha256_verify(local_path: str, expected_hash: str) -> bool:
 
 def _hf_remote_size(repo_id: str, filename: str) -> int:
     """Get remote file size from HuggingFace via HEAD request. Returns 0 if failed."""
+    if os.environ.get('HF_HUB_OFFLINE') == '1':
+        return 0
     url = f"{HF_ENDPOINT}/datasets/{repo_id}/resolve/main/{filename}"
     try:
         ctx = ssl._create_unverified_context()
@@ -93,6 +95,8 @@ def _hf_remote_size(repo_id: str, filename: str) -> int:
 
 def _download_hf_file(repo_id: str, filename: str, local_path: str) -> bool:
     """Download a file from HuggingFace. Returns True on success."""
+    if os.environ.get('HF_HUB_OFFLINE') == '1':
+        raise FileNotFoundError(f'离线模式禁止下载，请上传验证文件并挂载：{local_path}')
     url = HF_RESOLVE.format(repo=repo_id, file=filename)
     if HF_ENDPOINT != "https://huggingface.co":
         print(f"[Setup] Using HF mirror: {HF_ENDPOINT}")
@@ -122,6 +126,13 @@ def _ensure_hf_data(val_path: str, hf_dataset: str, hf_filename: str,
         prepare_script_name: Filename of the prepare script (e.g. "prepare_core_bmk_v5.py")
                              located in scripts/validation_set/. Required if eval_bundle is set.
     """
+    if os.environ.get('HF_HUB_OFFLINE') == '1':
+        if not os.path.isfile(val_path) or os.path.getsize(val_path) == 0:
+            raise FileNotFoundError(f'离线验证文件缺失或为空：{val_path}')
+        expected = VAL_SHA256.get(hf_filename)
+        if expected and not _sha256_verify(val_path, expected):
+            raise ValueError(f'离线验证文件校验失败：{val_path}')
+        return val_path
     os.makedirs(os.path.dirname(val_path), exist_ok=True)
 
     local_size = os.path.getsize(val_path) if os.path.exists(val_path) else 0

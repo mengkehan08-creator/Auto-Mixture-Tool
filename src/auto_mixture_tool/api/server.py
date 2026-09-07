@@ -185,8 +185,12 @@ def validate_workflow(payload: WorkflowRequest) -> dict[str, Any]:
 
 @app.get("/api/v1/workflow-defaults")
 def workflow_defaults() -> dict[str, Any]:
-    return {"commands": {stage: ModelArtsWorkflowManager._command(stage)
-                         for stage in ("mixing", "training")}}
+    defaults_path = _workflow_manager().workspace / 'configs/modelarts_ui_defaults.json'
+    import json
+    settings = json.loads(defaults_path.read_text(encoding='utf-8')) if defaults_path.is_file() else {}
+    allowed = {'endpoint', 'region', 'workspace_id', 'workspace_name', 'image_url', 'image_repo_id', 'flavor_id', 'pool_id'}
+    return {"modelarts": {key: value for key, value in settings.items() if key in allowed},
+            "commands": {stage: ModelArtsWorkflowManager._command(stage) for stage in ("mixing", "training")}}
 
 
 @app.post("/api/v1/workflows/{workflow_id}/authorization")
