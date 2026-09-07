@@ -86,7 +86,9 @@ obs://bucket/experiments/team-a/runs/<实验名称-时间-唯一编号>/
 
 ModelArts 的单个环境变量值限制为 4096 字符。长配置压缩后以每段最多 4000 个 ASCII 字符传输，容器入口还原并核对摘要；短配置兼容旧的单变量方式。命令和离线挂载列表不重复塞入运行配置。工具另外设有 1 MiB 原始配置安全上限，该值不是 ModelArts 的额度声明。升级时后端与 OBS 工具代码必须同时更新，旧入口无法读取新编码。分段不绕过平台的环境变量总量或请求总大小限制。
 
-最新非敏感参数来自 `configs/modelarts_ui_defaults.json`，与提供的提交脚本核对后填写。页面只补充空字段，不覆盖已编辑的值；Authorization 永不从默认文件返回。默认 command 缩短为调用 `scripts/run_modelarts_stage.sh`。复制旧实验时可点击“恢复默认命令”使用新启动流程。详细离线资源与验收边界见 `docs/RUNTIME_HARDENING.md`。
+最新非敏感参数来自 `configs/modelarts_ui_defaults.json`，与提供的提交脚本核对后填写。页面只补充空字段，不覆盖已编辑的值；Authorization 永不从默认文件返回。默认 command 为完整可编辑的内联命令。复制旧实验时可点击“恢复默认命令”使用新启动流程。详细离线资源与验收边界见 `docs/RUNTIME_HARDENING.md`。
+
+提交后端仅校验 OBS 地址格式并将地址交给 ModelArts，不读取 OBS 数据或检查远程对象是否存在。内置目录输入统一以 `/` 结尾，自定义资源保留用户填写的目录末尾 `/`，策略脚本文件不追加 `/`。ModelArts 返回的对象不存在错误仍需结合实际对象路径与作业访问权限排查。
 
 发布包已包含构建后的界面，开发环境只运行后端即可。修改 Vue 源码时，在有 Node.js 和前端依赖的机器运行：
 

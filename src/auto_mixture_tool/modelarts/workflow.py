@@ -7,6 +7,7 @@ import importlib.util
 import json
 import math
 import re
+import shlex
 import threading
 import time
 import uuid
@@ -348,7 +349,8 @@ class ModelArtsWorkflowManager:
                         or re.fullmatch(r'strategy_\d+', name)):
                     raise ValueError('资源 name 必须唯一，以字母开头且仅含字母、数字、下划线，不能使用系统保留名称')
                 names.add(name)
-                entry['uri'] = _clean_obs_uri(entry.get('uri', ''))
+                raw_uri = entry.get('uri', '').strip()
+                entry['uri'] = _clean_obs_uri(raw_uri) + ('/' if raw_uri.endswith('/') else '')
                 if role:
                     if role not in roles or role in seen_roles:
                         raise ValueError('默认资源角色无效或重复')
@@ -509,7 +511,7 @@ class ModelArtsWorkflowManager:
             if item["name"] in needed_inputs
         ]
         for item in payload["algorithm"]["inputs"]:
-            item["remote"]["obs"]["obs_url"] = mapping[item["name"]]
+            item["remote"]["obs"]["obs_url"] = mapping[item["name"]].rstrip('/') + '/'
         if config.get('offline_resources') is not None:
             roles = RESOURCE_INPUTS
             entries = config['offline_resources']
@@ -522,7 +524,7 @@ class ModelArtsWorkflowManager:
                     if role not in by_role:
                         continue
                     item['name'] = by_role[role]['name']
-                    item['remote']['obs']['obs_url'] = by_role[role]['uri']
+                    item['remote']['obs']['obs_url'] = by_role[role]['uri'].rstrip('/') + '/'
                 inputs.append(item)
             for entry in entries:
                 if not entry.get('role'):
@@ -573,7 +575,33 @@ class ModelArtsWorkflowManager:
     def _command(stage: str) -> str:
         if stage not in {'mixing', 'training'}:
             raise ValueError('Unknown ModelArts stage')
-        return f"/bin/bash /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool/scripts/run_modelarts_stage.sh {stage}"
+        command = '''set -euo pipefail
+cd /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool
+PY311="${AMT_PYTHON_EXECUTABLE:-$(command -v python3.11 || command -v python3 || true)}"
+test -n "$PY311" || { echo "ERROR: Python 3.11 is required"; exit 2; }
+"$PY311" -c 'import sys; assert sys.version_info[:2] == (3, 11), "Python 3.11 required"'
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+export HF_HUB_DISABLE_TELEMETRY=1 PIP_NO_INDEX=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+export NANOCHAT_SKIP_EVAL_DOWNLOAD=1 NANOCHAT_DISABLE_WANDB=1
+PY_DEPS=/tmp/auto-mixture-python-packages
+mkdir -p "$PY_DEPS" /tmp/auto-mixture-python
+: > "$PY_DEPS/dask.py"
+export PYTHONPATH="$PWD:$PWD/src:$PY_DEPS:${PYTHONPATH:-}"
+if ! "$PY311" -c 'import lightgbm' >/dev/null 2>&1; then
+  WHEEL=/home/ma-user/modelarts/inputs/python_wheels_dir_7/lightgbm-4.6.0-py3-none-manylinux2014_aarch64.whl
+  if [ -f "$WHEEL" ]; then
+    "$PY311" -m pip install --no-index --no-deps --upgrade --target "$PY_DEPS" "$WHEEL"
+  else
+    echo "Missing offline LightGBM wheel: $WHEEL"
+  fi
+fi
+export AMT_PYTHON_EXECUTABLE="$PY311"
+ln -sf "$PY311" /tmp/auto-mixture-python/python
+ln -sf "$PY311" /tmp/auto-mixture-python/python3
+export PATH="/tmp/auto-mixture-python:$PATH"
+"$PY311" scripts/modelarts_runtime_check.py
+exec "$PY311" -m auto_mixture_tool.modelarts.stage_runner ''' + stage
+        return '/bin/bash -c ' + shlex.quote(command) + ' modelarts'
 
     def _run(self, workflow_id: str) -> None:
         record = self.records[workflow_id]

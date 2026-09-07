@@ -3,7 +3,7 @@
 ## 本次已落实
 
 - 从提供的脚本提取区域、工作空间、镜像、资源规格与资源池等非敏感默认值，统一放在 `configs/modelarts_ui_defaults.json`，页面默认填写且可编辑。认证凭据仍手动输入，仅在内存保留。
-- 启动环境检查从长 command 移入 `scripts/run_modelarts_stage.sh`，页面仍允许覆盖命令。
+- 页面默认 command 直接包含可编辑的环境配置、离线安装和启动命令，不再调用 shell 启动文件。
 - 长配置采用压缩、分段和摘要校验；清除旧分段，避免旧数据混入。缺段、损坏和超限明确失败。
 - 默认启动路径强制 Python 3.11，依赖从镜像或 OBS wheel 获取，不访问 PyPI。仅自动安装已有的离线 LightGBM wheel；不擅自替换 torch、torch_npu 或 CANN。
 - 启动检查列出依赖版本、缺失及不兼容模块。容器在配比/训练前检查模型、Tokenizer、验证文件与数据挂载，汇总缺项。

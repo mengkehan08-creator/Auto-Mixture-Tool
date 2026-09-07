@@ -48,11 +48,15 @@ def test_evaluator_declarations_do_not_execute_code(tmp_path):
     assert task_definitions(tmp_path) == ([], ['arc_easy'])
 
 
-def test_default_commands_short_and_no_bootstrap_duplication():
+def test_default_commands_are_editable_inline_shell():
     for stage in ('mixing', 'training'):
         command = ModelArtsWorkflowManager._command(stage)
-        assert len(command) < 200
-        assert command.endswith('run_modelarts_stage.sh ' + stage)
+        import shlex
+        args = shlex.split(command)
+        assert args[:2] == ['/bin/bash', '-c']
+        assert 'run_modelarts_stage.sh' not in command
+        assert args[2].endswith('stage_runner ' + stage)
+        assert '--no-index --no-deps' in args[2]
 
 
 def test_missing_tokenizer_never_downloads_in_offline_mode(tmp_path):
