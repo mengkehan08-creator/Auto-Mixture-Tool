@@ -28,6 +28,50 @@ defineProps({ config: { type: Object, required: true }, runtime: { type: Object,
       <label class="field"><span>验证损失检查间隔</span><input v-model.number="config.evalEvery" type="number" min="-1" step="1" /><small>单位：训练步数。-1：关闭；正整数：每隔指定步数检查验证损失。</small></label>
       <label class="field"><span>任务评测间隔</span><input v-model.number="config.coreMetricEvery" type="number" min="-1" step="1" /><small>单位：训练步数。-1：关闭；正整数：每隔指定步数运行任务评测。与训练结束后的评测独立。</small></label>
     </div></div>
-    <div class="config-block"><h3>离线运行资源</h3><div class="form-grid two-cols"><label class="field"><span>工具代码 OBS 地址</span><input v-model="runtime.codeObsUri" /></label><label class="field"><span>QuaDMix Tokenizer OBS 地址</span><input v-model="runtime.quadmixTokenizerObsUri" /></label><label class="field"><span>代理验证集 OBS 地址</span><input v-model="runtime.proxyValidationObsUri" /></label><label class="field"><span>内置评测资源 OBS 地址</span><input v-model="runtime.evalBundleObsUri" /></label><label class="field"><span>离线 Python wheels OBS 地址</span><input v-model="runtime.pythonWheelsObsUri" /></label></div></div>
+    <div class="config-block"><h3>离线运行资源</h3>
+      <div v-for="(resource, index) in runtime.offlineResources" :key="index" class="resource-row">
+        <label class="field"><span>name</span><input v-model="resource.name" placeholder="自定义资源名称" /></label>
+        <label class="field"><span>OBS 地址</span><input v-model="resource.uri" /></label>
+        <button class="resource-action resource-delete" type="button" :aria-label="`删除 ${resource.name || '未命名项'}`" @click="runtime.offlineResources.splice(index, 1)">删除</button>
+      </div>
+      <button class="resource-action resource-add" type="button" @click="runtime.offlineResources.push({ name: '', uri: '' })">＋ 增加</button>
+    </div>
   </section>
 </template>
+
+<style scoped>
+.resource-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(0, 2.4fr) auto;
+  align-items: end;
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+  border: 1px solid #e5eaf5;
+  border-radius: 10px;
+  background: #f8faff;
+}
+.resource-row .field { min-width: 0; margin: 0; }
+.resource-action {
+  min-height: 34px;
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.resource-delete { color: #a33b48; background: #fff0f2; border-color: #f3d8dd; margin-bottom: 3px; }
+.resource-delete:hover { background: #ffe3e8; border-color: #e8b7c1; }
+.resource-add { color: #355bb6; background: #edf3ff; border-color: #d4e0fa; }
+.resource-add:hover { background: #dfeaff; border-color: #b3c9f5; }
+.resource-action:focus-visible { outline: 2px solid #5379dc; outline-offset: 3px; }
+@media (max-width: 640px) {
+  .resource-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .resource-row .field { grid-column: 1 / -1; }
+  .resource-delete { grid-column: 2; margin-bottom: 0; }
+}
+</style>

@@ -11,7 +11,7 @@ export const stepOptions = [
   { id: 1, label: '配比策略' },
   { id: 2, label: '训练配置' },
   { id: 3, label: '评测配置' },
-  { id: 4, label: '确认提交' },
+  { id: 4, label: '任务配置' },
 ]
 
 export function createStrategy(type = 'quadmix') {
@@ -85,6 +85,14 @@ export const createEvaluationConfig = () => ({
 })
 
 export const createRuntimeConfig = () => ({
+  offlineResources: [
+    { role: 'code_obs_uri', name: 'code_dir', uri: `${obsRoot}Auto-Mixture-Tool/` },
+    { role: 'quadmix_tokenizer_obs_uri', name: 'quadmix_tokenizer_dir', uri: `${obsRoot}gpt-neox-tokenizer/` },
+    { role: 'proxy_validation_obs_uri', name: 'proxy_validation_dir', uri: `${obsRoot}AMT_old/data/` },
+    { role: 'eval_bundle_obs_uri', name: 'eval_bundle_dir', uri: `${obsRoot}eval_bundle/` },
+    { role: 'python_wheels_obs_uri', name: 'python_wheels_dir', uri: `${obsRoot}python_wheels/` },
+  ],
+  commands: null,
   modelarts: { endpoint: '', region: '', authorization: '', workspace_id: '', workspace_name: 'aifm-lmdt-exp_MA_workspace', image_url: '', image_repo_id: '', flavor_id: 'modelarts.pool.visual.8xlarge', pool_id: '' },
   experimentName: '',
   inputDataObsUri: `${obsRoot}chengchao/prepared_parquet_57ffce0ca0a2/`,

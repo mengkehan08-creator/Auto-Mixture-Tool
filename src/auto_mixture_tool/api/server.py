@@ -68,6 +68,8 @@ class WorkflowRequest(BaseModel):
     training: dict[str, Any]
     evaluation: dict[str, Any]
     resources: dict[str, str]
+    commands: dict[str, str] | None = None
+    offline_resources: list[dict[str, str]] | None = None
     modelarts: dict[str, str] | None = None
     poll_interval_seconds: int = Field(default=15, ge=2, le=300)
 
@@ -179,6 +181,12 @@ def validate_workflow(payload: WorkflowRequest) -> dict[str, Any]:
         return _workflow_manager().preview(payload.model_dump(exclude_none=True))
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/v1/workflow-defaults")
+def workflow_defaults() -> dict[str, Any]:
+    return {"commands": {stage: ModelArtsWorkflowManager._command(stage)
+                         for stage in ("mixing", "training")}}
 
 
 @app.post("/api/v1/workflows/{workflow_id}/authorization")

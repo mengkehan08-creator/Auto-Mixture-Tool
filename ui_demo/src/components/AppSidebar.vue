@@ -8,7 +8,7 @@ defineEmits(['navigate'])
   <aside class="sidebar">
     <div class="brand">
       <span class="brand-mark"><FlaskConical :size="22" /></span>
-      <span><strong>Auto Mixture</strong><small>数据配比实验平台</small></span>
+      <span><strong>Auto Mixture</strong><small>数据配比实验工具</small></span>
     </div>
 
     <nav class="sidebar-nav" aria-label="主导航">

@@ -41,7 +41,7 @@ const runtime = reactive(createRuntimeConfig())
     <main class="main-content">
       <header class="topbar">
         <div><h1>{{ page === 'jobs' ? '实验作业管理' : '创建配比实验' }}</h1><p>配置算法、训练与评测后提交至 ModelArts</p></div>
-        <span class="user-chip"><span>研</span>研究用户</span>
+        <span class="user-chip"><span>配</span>配比用户</span>
       </header>
 
       <WorkflowJobs v-if="page === 'jobs'" :selected-id="selectedId" @select="selectedId = $event" @copy="copyJob" />

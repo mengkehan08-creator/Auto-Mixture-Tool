@@ -6,6 +6,7 @@ export function copyWorkflow(config) {
   const evaluation = createEvaluationConfig()
   const resources = config.resources || {}
   Object.assign(runtime, {
+    commands: config.commands ? { ...config.commands } : null,
     experimentName: config.experiment_name || '', inputDataObsUri: config.input_data_obs_uri,
     outputRootObsUri: config.output_root_obs_uri, mixingNodes: config.mixing_nodes,
     codeObsUri: resources.code_obs_uri, quadmixTokenizerObsUri: resources.quadmix_tokenizer_obs_uri,
@@ -24,6 +25,8 @@ export function copyWorkflow(config) {
     evalEvery: config.training.eval_every ?? -1,
     coreMetricEvery: config.training.core_metric_every ?? -1,
   })
+  runtime.offlineResources = config.offline_resources ? structuredClone(config.offline_resources) :
+    runtime.offlineResources.map(item => ({ ...item, uri: resources[item.role] || item.uri }))
   evaluation.dataset = { enabled: Boolean(config.evaluation.datasets.length), source: 'obs',
     names: [...config.evaluation.datasets], obsUri: resources.eval_bundle_obs_uri }
   const strategies = config.strategies.map(item => ({ ...createStrategy(item.type),

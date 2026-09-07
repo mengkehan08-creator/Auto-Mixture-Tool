@@ -322,6 +322,36 @@ class ModelArtsWorkflowManager:
 
     def _validate(self, config: dict[str, Any]) -> dict[str, Any]:
         value = copy.deepcopy(config)
+        entries = value.get('offline_resources')
+        roles = {'code_obs_uri': 'code_dir', 'quadmix_tokenizer_obs_uri': 'quadmix_tokenizer_dir',
+                 'proxy_validation_obs_uri': 'proxy_validation_dir', 'eval_bundle_obs_uri': 'eval_bundle_dir',
+                 'python_wheels_obs_uri': 'python_wheels_dir'}
+        if entries is not None:
+            names, seen_roles = set(), set()
+            for entry in entries:
+                name, role = entry.get('name', ''), entry.get('role', '')
+                if (not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,63}', name) or name in names
+                        or name in {'data_dir', 'comparison_data_dir', 'nanochat_model_dir', 'nanochat_npu_dir'}
+                        or re.fullmatch(r'strategy_\d+', name)):
+                    raise ValueError('资源 name 必须唯一，以字母开头且仅含字母、数字、下划线，不能使用系统保留名称')
+                names.add(name)
+                entry['uri'] = _clean_obs_uri(entry.get('uri', ''))
+                if role:
+                    if role not in roles or role in seen_roles:
+                        raise ValueError('默认资源角色无效或重复')
+                    seen_roles.add(role)
+                    value['resources'][role] = entry['uri']
+            if set(roles) - seen_roles:
+                commands = value.get('commands') or {}
+                if any(commands.get(stage, self._command(stage)) == self._command(stage) for stage in ('mixing', 'training')):
+                    raise ValueError('已删除默认运行资源，请恢复资源或为两个作业配置不依赖这些资源的自定义 command')
+        commands = value.get("commands")
+        if commands is not None:
+            if not isinstance(commands, dict) or set(commands) != {"mixing", "training"}:
+                raise ValueError("command 必须分别提供配比和训练作业的启动命令")
+            for command in commands.values():
+                if not isinstance(command, str) or not command.strip() or "\x00" in command or len(command) > 32768:
+                    raise ValueError("command 不能为空、包含空字符或超过 32768 字符")
         settings = value.get("modelarts")
         if settings:
             allowed = {"endpoint", "region", "authorization", "workspace_id", "workspace_name", "image_url",
@@ -441,7 +471,7 @@ class ModelArtsWorkflowManager:
             config, ensure_ascii=False, separators=(",", ":")
         )
         env["AMT_RUN_OBS_URI"] = f"{record['run_root_obs_uri']}/mixing/coordination"
-        payload["algorithm"]["command"] = self._command(stage)
+        payload["algorithm"]["command"] = config.get("commands", {}).get(stage, self._command(stage))
 
         resources = config["resources"]
         payload["algorithm"]["code_dir"] = (
@@ -470,6 +500,27 @@ class ModelArtsWorkflowManager:
         ]
         for item in payload["algorithm"]["inputs"]:
             item["remote"]["obs"]["obs_url"] = mapping[item["name"]]
+        if config.get('offline_resources') is not None:
+            roles = {'code_obs_uri': 'code_dir', 'quadmix_tokenizer_obs_uri': 'quadmix_tokenizer_dir',
+                     'proxy_validation_obs_uri': 'proxy_validation_dir', 'eval_bundle_obs_uri': 'eval_bundle_dir',
+                     'python_wheels_obs_uri': 'python_wheels_dir'}
+            entries = config['offline_resources']
+            by_role = {entry.get('role'): entry for entry in entries if entry.get('role')}
+            reverse = {name: role for role, name in roles.items()}
+            inputs = []
+            for item in payload['algorithm']['inputs']:
+                role = reverse.get(item['name'])
+                if role:
+                    if role not in by_role:
+                        continue
+                    item['name'] = by_role[role]['name']
+                    item['remote']['obs']['obs_url'] = by_role[role]['uri']
+                inputs.append(item)
+            for entry in entries:
+                if not entry.get('role'):
+                    inputs.append({'name': entry['name'], 'local_dir': '/home/ma-user/modelarts/inputs/custom/' + entry['name'],
+                                   'access_method': 'env', 'remote': {'obs': {'obs_url': entry['uri']}}})
+            payload['algorithm']['inputs'] = inputs
         if stage == "training":
             payload["algorithm"]["inputs"].append({
                 "name": "comparison_data_dir",

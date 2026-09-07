@@ -147,6 +147,52 @@ def test_training_controls_saved_for_copy(manager):
     assert copied['training']['device_batch_size'] == 2
 
 
+def test_custom_commands_are_used_and_copied(manager):
+    body = config()
+    body['commands'] = {'mixing': 'bash custom_mix.sh', 'training': 'bash custom_train.sh'}
+    with patch.object(manager, '_start'):
+        created = manager.create(body)
+    record = manager.records[created['id']]
+    for stage in ('mixing', 'training'):
+        assert manager._payload(record, stage)['algorithm']['command'] == body['commands'][stage]
+    assert manager.copy_configuration(created['id'])['commands'] == body['commands']
+
+
+@pytest.mark.parametrize('commands', [{}, {'mixing': 'x'}, {'mixing': '', 'training': 'y'},
+                                     {'mixing': 'x', 'training': 'bad\x00command'}])
+def test_invalid_commands_rejected(manager, commands):
+    body = config()
+    body['commands'] = commands
+    with pytest.raises(ValueError, match='command'):
+        manager._validate(body)
+
+
+def test_command_defaults_match_runtime():
+    from auto_mixture_tool.api.server import workflow_defaults
+    assert workflow_defaults()['commands'] == {
+        stage: ModelArtsWorkflowManager._command(stage) for stage in ('mixing', 'training')
+    }
+
+
+def test_offline_resources_custom_names_and_mounts(manager):
+    body = config()
+    roles = ['code_obs_uri', 'quadmix_tokenizer_obs_uri', 'proxy_validation_obs_uri', 'eval_bundle_obs_uri', 'python_wheels_obs_uri']
+    body['offline_resources'] = [{'role': role, 'name': 'resource_' + str(i), 'uri': body['resources'][role]}
+                                 for i, role in enumerate(roles)]
+    body['offline_resources'].append({'name': 'extra_data', 'uri': 'obs://extra-bucket/data'})
+    with patch.object(manager, '_start'):
+        created = manager.create(body)
+    inputs = manager._payload(manager.records[created['id']], 'mixing')['algorithm']['inputs']
+    renamed = next(item for item in inputs if item['name'] == 'resource_2')
+    assert renamed['local_dir'].endswith('proxy_validation_dir_5')
+    extra = next(item for item in inputs if item['name'] == 'extra_data')
+    assert extra['local_dir'].endswith('/custom/extra_data')
+    assert manager.copy_configuration(created['id'])['offline_resources'] == manager._validate(body)['offline_resources']
+    body['offline_resources'] = []
+    with pytest.raises(ValueError, match='删除默认'):
+        manager._validate(body)
+
+
 @pytest.mark.parametrize("uri", ["https://console.example/obs", "obs://", "obs://bucket/a?token=x", "obs://bucket/../x"])
 def test_invalid_obs_rejected_before_submission(manager, uri):
     body = config()

@@ -37,7 +37,9 @@ function normalizedStrategies() {
 
 function requestBody() {
   return {
+    ...(props.runtime.commands ? { commands: props.runtime.commands } : {}),
     modelarts: props.runtime.modelarts,
+    offline_resources: props.runtime.offlineResources,
     experiment_name: props.runtime.experimentName || null,
     input_data_obs_uri: props.runtime.inputDataObsUri,
     output_root_obs_uri: props.runtime.outputRootObsUri,
@@ -63,6 +65,7 @@ function requestBody() {
       proxy_validation_obs_uri: props.runtime.proxyValidationObsUri,
       eval_bundle_obs_uri: props.evaluation.dataset.source === 'obs' ? props.evaluation.dataset.obsUri : props.runtime.evalBundleObsUri,
       python_wheels_obs_uri: props.runtime.pythonWheelsObsUri,
+      ...Object.fromEntries(props.runtime.offlineResources.filter(r => r.role).map(r => [r.role, r.uri])),
     },
   }
 }
@@ -88,6 +91,7 @@ async function checkConfiguration() {
   error.value = ''
   validation.value = null
   try {
+    if (!props.runtime.commands) throw new Error('启动命令尚未加载，请点击重新加载默认命令。')
     validation.value = await apiRequest('workflows/validate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody()),
     })
@@ -121,13 +125,20 @@ async function submit() {
   }
 }
 
-onMounted(() => { loadWorkflows(); timer = window.setInterval(loadWorkflows, 3000) })
+async function loadCommands() {
+  try {
+    const defaults = await apiRequest('workflow-defaults')
+    props.runtime.commands = defaults.commands
+    error.value = ''
+  } catch (reason) { error.value = `加载启动命令失败：${reason.message}` }
+}
+onMounted(() => { if (!props.runtime.commands) loadCommands(); loadWorkflows(); timer = window.setInterval(loadWorkflows, 3000) })
 onBeforeUnmount(() => window.clearInterval(timer))
 </script>
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>确认并提交</h2><p>一次实验提交两个作业；配比作业成功后，平台自动提交训练评测作业。</p></div></div>
+    <div class="section-title-row"><div><h2>任务配置</h2><p>一次实验提交两个作业；配比作业成功后，平台自动提交训练评测作业。</p></div></div>
     <h3>ModelArts 作业配置</h3>
     <p class="path-preview">以下参数替代脚本中的 REPLACE_ME，无需编辑或再次运行脚本。请使用可信的 ModelArts 创建作业 API 地址。Authorization 仅保存在本次页面及后端进程内存，不写回脚本或工作流文件；服务重启后需要重新提供。</p>
     <div class="form-grid two-cols">
@@ -138,6 +149,15 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ runtime.mixingNodes }} 节点 · 先校验再生成全部采样集</small></article>
       <article><span>训练评测作业</span><strong>{{ training.framework }}</strong><small>{{ training.nodes }} 节点 · 依次处理全部采样集</small></article>
       <article><span>输出根目录</span><strong class="break-path">{{ runtime.outputRootObsUri }}</strong><small>按实验名称隔离 mixing / sampled / training</small></article>
+    </div>
+    <div class="config-block">
+      <h3>command</h3>
+      <p>默认显示当前后端实际使用的命令，可直接编辑。修改将替换对应作业的启动命令；请保留必要的环境初始化、阶段入口和输出约定，否则可能无法衔接后续任务。不要在命令中填写认证凭据，命令会随实验配置保存。</p>
+      <template v-if="runtime.commands">
+        <label class="field"><span>command（配比作业）</span><textarea v-model="runtime.commands.mixing" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
+        <label class="field"><span>command（训练评测作业）</span><textarea v-model="runtime.commands.training" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
+      </template>
+      <button v-else class="button secondary" type="button" @click="loadCommands">重新加载默认命令</button>
     </div>
 
     <p class="path-preview">提交将使用管理员配置的 ModelArts 资源并产生计算费用。输入地址须为 obs:// 地址，而非 OBS 控制台网址。输出目录由您指定，系统自动创建独立实验子目录。</p>
