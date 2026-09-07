@@ -14,13 +14,61 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from types import SimpleNamespace
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import requests
 
 
 SUCCESS_STATES = {"completed", "succeeded", "success"}
 FAILURE_STATES = {"failed", "canceled", "cancelled", "terminated"}
+
+
+def _remote_error(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+    code = data.get("error_code") or data.get("error_name")
+    message = data.get("error_msg") or data.get("error_message")
+    return "；".join(str(item)[:1500] for item in (code, message) if item)
+
+
+class ModelArtsRejected(RuntimeError):
+    """The service explicitly rejected a request."""
+
+
+def _response_data(response):
+    try:
+        data = response.json()
+    except ValueError:
+        raise RuntimeError(f"ModelArts 返回非 JSON 响应（HTTP {response.status_code}），请检查 API 地址或网关") from None
+    detail = _remote_error(data)
+    if response.status_code >= 400 or detail:
+        raise ModelArtsRejected(f"ModelArts 请求失败（HTTP {response.status_code}）：{detail or '服务端未提供错误详情'}")
+    return data
+
+
+def _console_url(data: Any) -> str:
+    if not isinstance(data, dict):
+        return ""
+    for source in (data, data.get("metadata", {})):
+        if isinstance(source, dict):
+            for key in ("console_url", "job_url"):
+                value = str(source.get(key, ""))
+                parsed = urlsplit(value)
+                if parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.query:
+                    return value
+    return ""
+
+
+def training_console_url(job_id: str, region: str, workspace_name: str = "") -> str:
+    """Build the same console route as the standalone submission script."""
+    if not job_id or not region or "REPLACE_ME" in region:
+        return ""
+    result = ("https://console.huaweicloud.com/modelarts/?" +
+              urlencode({"locale": "zh-cn", "region": region}) +
+              "#/training/detail/" + quote(str(job_id), safe=""))
+    if workspace_name:
+        result += "?" + urlencode({"workspaceName": workspace_name})
+    return result
 
 
 def _clean_obs_uri(value: str) -> str:
@@ -63,15 +111,13 @@ class ModelArtsClient:
         response = requests.post(
             self.url, headers=self.headers, json=payload, verify=False, timeout=60
         )
-        response.raise_for_status()
-        return response.json()
+        return _response_data(response)
 
     def get(self, job_id: str) -> dict[str, Any]:
         response = requests.get(
             f"{self.url}/{job_id}", headers=self.headers, verify=False, timeout=60
         )
-        response.raise_for_status()
-        return response.json()
+        return _response_data(response)
 
 
 class ModelArtsWorkflowManager:
@@ -215,7 +261,7 @@ class ModelArtsWorkflowManager:
             "id": workflow_id,
             "name": experiment,
             "status": "QUEUED",
-            "progress": 5,
+            "progress": 0,
             "stage": "等待提交配比作业",
             "run_root_obs_uri": run_root,
             "outputs": {
@@ -268,7 +314,7 @@ class ModelArtsWorkflowManager:
         value = copy.deepcopy(config)
         settings = value.get("modelarts")
         if settings:
-            allowed = {"endpoint", "region", "authorization", "workspace_id", "image_url",
+            allowed = {"endpoint", "region", "authorization", "workspace_id", "workspace_name", "image_url",
                        "image_repo_id", "flavor_id", "pool_id"}
             if set(settings) - allowed or any(not isinstance(v, str) for v in settings.values()):
                 raise ValueError("ModelArts 配置字段无效")
@@ -471,6 +517,7 @@ class ModelArtsWorkflowManager:
         except Exception as exc:
             uncertain = any(job["status"] == "SUBMITTING" and not job["id"] for job in record["jobs"])
             record["status"] = "NEEDS_ATTENTION" if uncertain else "FAILED"
+            record["progress"] = 0
             record["stage"] = "提交结果待人工核对，请勿重复提交" if uncertain else "工作流失败"
             message = str(exc)
             for secret in self._authorizations.values():
@@ -497,12 +544,24 @@ class ModelArtsWorkflowManager:
             payload = self._payload(record, stage)
             job["status"] = "SUBMITTING"
             self._store(record)
-            response = self._client(record).submit(payload)
+            try:
+                response = self._client(record).submit(payload)
+            except ModelArtsRejected:
+                job["status"] = "FAILED"
+                raise
+            if _remote_error(response):
+                job["status"] = "FAILED"
+                raise RuntimeError("ModelArts 创建作业失败：" + _remote_error(response))
             metadata = response.get("metadata", {})
             job_id = metadata.get("id") or response.get("id")
             if not job_id:
                 raise RuntimeError("ModelArts 创建响应未包含作业 ID，请到平台核对，不要自动重试")
             job.update(id=str(job_id), status="SUBMITTED")
+            job["url"] = _console_url(response)
+        if not job.get("url"):
+            settings = record["config"].get("modelarts") or {}
+            region = settings.get("region") or self._template().headers.get("region", "")
+            job["url"] = training_console_url(str(job_id), region, settings.get("workspace_name", ""))
         record.update(status=f"{stage.upper()}_RUNNING", progress=submitted_progress,
                       stage=f"{job['name']} 已提交")
         self._store(record)
@@ -517,6 +576,7 @@ class ModelArtsWorkflowManager:
                 self._store(record)
                 continue
             record["message"] = ""
+            job["url"] = _console_url(response) or job.get("url", "")
             status = _state(response).strip()
             normalized = status.lower()
             job["status"] = status or "RUNNING"
@@ -527,7 +587,8 @@ class ModelArtsWorkflowManager:
                 job["status"] = "SUCCEEDED"
                 return True
             if normalized in FAILURE_STATES:
-                raise RuntimeError(f"{job['name']} failed with status {status}")
+                raise RuntimeError(f"作业 {job['name']} 运行失败（状态 {status}）：" +
+                                   (_remote_error(response) or "平台未返回失败原因，请查看 ModelArts 作业日志"))
 
     def _store(self, record: dict[str, Any]) -> None:
         with self._lock:

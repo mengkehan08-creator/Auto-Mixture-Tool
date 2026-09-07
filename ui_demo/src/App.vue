@@ -10,6 +10,7 @@ import TrainingConfigStep from './components/steps/TrainingConfigStep.vue'
 import { createEvaluationConfig, createRuntimeConfig, createStrategy, createTrainingConfig, stepOptions } from './data/defaults'
 
 const currentStep = ref(1)
+const showingDetail = ref(false)
 const strategies = reactive([createStrategy('quadmix'), createStrategy('manual'), createStrategy('random')])
 const training = reactive(createTrainingConfig())
 const evaluation = reactive(createEvaluationConfig())
@@ -26,14 +27,14 @@ const runtime = reactive(createRuntimeConfig())
         <span class="user-chip"><span>研</span>研究用户</span>
       </header>
 
-      <StepNavigation :current-step="currentStep" @change="currentStep = $event" />
+      <StepNavigation v-if="!showingDetail" :current-step="currentStep" @change="currentStep = $event" />
 
       <MixingStrategyStep v-if="currentStep === 1" :strategies="strategies" :runtime="runtime" />
       <TrainingConfigStep v-else-if="currentStep === 2" :config="training" :runtime="runtime" />
       <EvaluationConfigStep v-else-if="currentStep === 3" :config="evaluation" />
-      <ReviewSubmitStep v-else :strategies="strategies" :training="training" :evaluation="evaluation" :runtime="runtime" />
+      <ReviewSubmitStep v-else :strategies="strategies" :training="training" :evaluation="evaluation" :runtime="runtime" @detail-change="showingDetail = $event" />
 
-      <footer class="page-actions">
+      <footer v-if="!showingDetail" class="page-actions">
         <button v-if="currentStep > 1" class="button secondary" type="button" @click="currentStep--"><ChevronLeft :size="16" />上一步</button>
         <span v-else></span>
         <button v-if="currentStep < 4" class="button primary" type="button" @click="currentStep++">下一步：{{ stepOptions[currentStep].label }}<ChevronRight :size="16" /></button>

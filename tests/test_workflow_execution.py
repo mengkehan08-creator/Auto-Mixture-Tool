@@ -90,6 +90,38 @@ def test_ui_rejects_unsafe_endpoint_and_header(manager):
         manager.preview(body)
 
 
+def test_remote_error_details_clear_progress(manager):
+    manager.client.submit = lambda payload: {"error_code": "ModelArts.2788", "error_msg": "镜像仓库不存在"}
+    with patch("auto_mixture_tool.modelarts.workflow.time.sleep"):
+        result = finish(manager, manager.create(config()))
+    assert result["status"] == "FAILED"
+    assert result["progress"] == 0
+    assert "ModelArts.2788" in result["message"]
+    assert "镜像仓库不存在" in result["message"]
+    assert result["outputs"]["sampled"]
+
+
+def test_response_console_link_and_http_error():
+    from auto_mixture_tool.modelarts.workflow import _console_url, _response_data, ModelArtsRejected
+    assert _console_url({"metadata": {"console_url": "https://console.example/jobs/123"}}) == "https://console.example/jobs/123"
+    assert not _console_url({"job_url": "javascript:alert(1)"})
+    response = requests.Response()
+    response.status_code = 400
+    response._content = b'{"error_code":"BadImage","error_msg":"image not found"}'
+    with pytest.raises(ModelArtsRejected, match="BadImage.*image not found"):
+        _response_data(response)
+
+
+def test_training_console_url():
+    from auto_mixture_tool.modelarts.workflow import training_console_url
+    url = training_console_url("32359996-89c0-4a4d-bf2c-3e18c896fe13", "cn-south-1", "aifm-lmdt-exp_MA_workspace")
+    assert url == ("https://console.huaweicloud.com/modelarts/?locale=zh-cn&region=cn-south-1"
+                   "#/training/detail/32359996-89c0-4a4d-bf2c-3e18c896fe13?workspaceName=aifm-lmdt-exp_MA_workspace")
+    assert training_console_url("", "cn-south-1") == ""
+    assert "workspaceName" not in training_console_url("job1", "cn-south-1")
+    assert "workspaceName=a%26b" in training_console_url("job1", "cn-south-1", "a&b")
+
+
 @pytest.mark.parametrize("uri", ["https://console.example/obs", "obs://", "obs://bucket/a?token=x", "obs://bucket/../x"])
 def test_invalid_obs_rejected_before_submission(manager, uri):
     body = config()
