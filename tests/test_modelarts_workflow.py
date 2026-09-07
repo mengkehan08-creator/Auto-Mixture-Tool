@@ -1,4 +1,5 @@
 import tempfile
+import shutil
 import threading
 import unittest
 from pathlib import Path
@@ -61,6 +62,8 @@ class WorkflowTests(unittest.TestCase):
     def test_second_job_is_submitted_only_after_first_succeeds(self, _sleep):
         fake = FakeClient()
         with tempfile.TemporaryDirectory() as directory:
+            shutil.copyfile(Path(__file__).resolve().parents[1] / "modelarts_training_job.py",
+                            Path(directory) / "modelarts_training_job.py")
             manager = ModelArtsWorkflowManager(Path(directory), fake)
             created = manager.create(config())
             for _ in range(100):

@@ -1,0 +1,175 @@
+import copy
+import json
+import shutil
+import threading
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+import requests
+
+from test_modelarts_workflow import FakeClient, config
+from auto_mixture_tool.modelarts.workflow import ModelArtsWorkflowManager
+from auto_mixture_tool.sampling.artifacts import manual_plans
+
+
+@pytest.fixture
+def manager(tmp_path):
+    shutil.copyfile(Path(__file__).resolve().parents[1] / "modelarts_training_job.py",
+                    tmp_path / "modelarts_training_job.py")
+    result = ModelArtsWorkflowManager(tmp_path, FakeClient())
+    yield result
+    result.close()
+
+
+def finish(manager, record):
+    for _ in range(500):
+        value = manager.get(record["id"])
+        if value["status"] in {"SUCCEEDED", "FAILED", "NEEDS_ATTENTION"} and record["id"] not in manager._active:
+            return value
+        threading.Event().wait(0.002)
+    raise AssertionError("workflow did not finish")
+
+
+def test_custom_output_and_idempotency(manager):
+    body = config()
+    body["request_id"] = "test-request-1234"
+    body["output_root_obs_uri"] = "obs://other-bucket/custom-output/"
+    with patch("auto_mixture_tool.modelarts.workflow.time.sleep"):
+        created = manager.create(body)
+        current = finish(manager, created)
+        again = manager.create(body)
+    assert current["status"] == "SUCCEEDED"
+    assert again["id"] == created["id"]
+    assert len(manager.client.submissions) == 2
+    assert current["outputs"]["sampled"].startswith("obs://other-bucket/custom-output/runs/")
+    second = manager.client.submissions[1]["algorithm"]
+    sampled = next(x for x in second["inputs"] if x["name"] == "comparison_data_dir")
+    assert sampled["remote"]["obs"]["obs_url"] == current["outputs"]["sampled"]
+    assert second["outputs"][0]["remote"]["obs"]["obs_url"] == current["run_root_obs_uri"] + "/"
+
+
+def test_ui_parameters_and_credentials_are_isolated(manager):
+    body = config()
+    body["modelarts"] = {
+        "endpoint": "https://modelarts.example/jobs", "region": "test-region",
+        "authorization": "test-secret-value", "workspace_id": "workspace-ui",
+        "image_url": "registry/image:version", "image_repo_id": "image-ui",
+        "flavor_id": "flavor-ui", "pool_id": "pool-ui",
+    }
+    assert manager.preview(body)["ready"]
+    with patch.object(manager, "_start"):
+        public = manager.create(body)
+    record = manager.records[public["id"]]
+    for stage in ("mixing", "training"):
+        payload = manager._payload(record, stage)
+        assert payload["metadata"]["workspace_id"] == "workspace-ui"
+        assert payload["algorithm"]["engine"]["image_repo_id"] == "image-ui"
+        assert payload["spec"]["resource"]["pool_id"] == "pool-ui"
+        assert "test-secret-value" not in json.dumps(payload)
+    assert manager._client(record).headers["Authorization"] == "test-secret-value"
+    assert "test-secret-value" not in json.dumps(public)
+    assert "test-secret-value" not in (manager.directory / f"{public['id']}.json").read_text(encoding="utf-8")
+    assert "REPLACE_ME_AUTHORIZATION" in (manager.workspace / "modelarts_training_job.py").read_text(encoding="utf-8")
+    restored = ModelArtsWorkflowManager(manager.workspace)
+    restored.resume()
+    assert restored.get(public["id"])["status"] == "WAITING_AUTH"
+    with patch.object(restored, "_start") as start:
+        restored.renew_authorization(public["id"], "replacement-secret")
+        start.assert_called_once_with(public["id"])
+    restored.close()
+
+
+def test_ui_rejects_unsafe_endpoint_and_header(manager):
+    body = config()
+    body["modelarts"] = {"endpoint": "https://example.com/jobs?token=secret"}
+    with pytest.raises(ValueError, match="HTTPS"):
+        manager.preview(body)
+    body["modelarts"] = {"endpoint": "https://example.com/jobs", "authorization": "x\nInjected: y"}
+    with pytest.raises(ValueError, match="换行"):
+        manager.preview(body)
+
+
+@pytest.mark.parametrize("uri", ["https://console.example/obs", "obs://", "obs://bucket/a?token=x", "obs://bucket/../x"])
+def test_invalid_obs_rejected_before_submission(manager, uri):
+    body = config()
+    body["output_root_obs_uri"] = uri
+    with pytest.raises(ValueError):
+        manager.create(body)
+    assert manager.client.submissions == []
+
+
+def test_failed_mixing_never_starts_training(manager):
+    manager.client.get = lambda _: {"status": "Failed"}
+    with patch("auto_mixture_tool.modelarts.workflow.time.sleep"):
+        result = finish(manager, manager.create(config()))
+    assert result["status"] == "FAILED"
+    assert len(manager.client.submissions) == 1
+
+
+def test_transient_query_does_not_resubmit(manager):
+    with patch.object(manager.client, "get", side_effect=[requests.ConnectionError(), {"status": "Completed"}, {"status": "Completed"}]), patch("auto_mixture_tool.modelarts.workflow.time.sleep"):
+        result = finish(manager, manager.create(config()))
+    assert result["status"] == "SUCCEEDED"
+    assert len(manager.client.submissions) == 2
+
+
+def test_resume_uses_existing_job_id(manager):
+    with patch.object(manager, "_start"):
+        created = manager.create(config())
+    record = manager.records[created["id"]]
+    record["jobs"][0].update(id="existing-job", status="RUNNING")
+    record["status"] = "MIXING_RUNNING"
+    manager._store(record)
+    restored = ModelArtsWorkflowManager(manager.workspace, FakeClient())
+    with patch("auto_mixture_tool.modelarts.workflow.time.sleep"):
+        restored.resume()
+        result = finish(restored, created)
+    assert result["status"] == "SUCCEEDED"
+    assert len(restored.client.submissions) == 1
+    assert restored.client.events[0] == "get:existing-job"
+    restored.close()
+
+
+def test_uncertain_create_is_not_retried(manager):
+    with patch.object(manager.client, "submit", side_effect=requests.Timeout()), patch("auto_mixture_tool.modelarts.workflow.time.sleep"):
+        result = finish(manager, manager.create(config()))
+    assert result["status"] == "NEEDS_ATTENTION"
+    restored = ModelArtsWorkflowManager(manager.workspace, FakeClient())
+    restored.resume()
+    assert restored.client.submissions == []
+
+
+def test_preview_reports_missing_configuration_without_creating(manager):
+    result = manager.preview(config())
+    assert not result["ready"]
+    assert "Authorization" in result["missing_settings"]
+    assert manager.client.submissions == []
+    assert "REPLACE_ME" not in json.dumps(result)
+
+
+def test_manual_manifest_relocates_between_jobs(tmp_path):
+    data = tmp_path / "manual_ratio_data"
+    data.mkdir()
+    (data / "part.parquet").write_bytes(b"test fixture")
+    manifest = [{"id": "manual_a", "label": "A", "tokens": 100,
+                 "data_dir": "/home/ma-user/modelarts/outputs/output_dir_0/sampled/data/manual_ratio_data"}]
+    (tmp_path / "manual_plans_manifest.json").write_text(json.dumps(manifest))
+    assert manual_plans(tmp_path)[0]["data_dir"] == str(data.resolve())
+
+
+def test_api_validation_and_submission_use_real_routes(manager):
+    from fastapi.testclient import TestClient
+    from auto_mixture_tool.api.server import app
+    with patch.object(app.state, "workflow_manager", manager, create=True), TestClient(app) as client:
+        assert client.get("/ui").status_code == 200
+        checked = client.post("/api/v1/workflows/validate", json=config())
+        assert checked.status_code == 200
+        assert not checked.json()["ready"]
+        assert manager.client.submissions == []
+        with patch("auto_mixture_tool.modelarts.workflow.time.sleep"):
+            response = client.post("/api/v1/workflows", json=config())
+            assert response.status_code == 202
+            completed = finish(manager, response.json())
+        assert completed["status"] == "SUCCEEDED"
+        assert client.get("/api/v1/workflows").json()[0]["id"] == completed["id"]

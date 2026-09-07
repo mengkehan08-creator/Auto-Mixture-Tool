@@ -11,13 +11,13 @@ import { Boxes, FileSliders, FlaskConical, Plus, Settings2 } from '@lucide/vue'
 
     <nav class="sidebar-nav" aria-label="主导航">
       <button class="active" type="button"><Plus :size="17" />创建实验</button>
-      <button type="button"><Boxes :size="17" />组件目录</button>
-      <button type="button"><FileSliders :size="17" />配置模板</button>
+      <button type="button" disabled><Boxes :size="17" />组件目录（未开放）</button>
+      <button type="button" disabled><FileSliders :size="17" />配置模板（未开放）</button>
     </nav>
 
     <div class="environment-card">
       <span><Settings2 :size="15" />运行环境</span>
-      <strong>ModelArts · cn-south-1</strong>
+      <strong>ModelArts · 以服务端配置为准</strong>
     </div>
   </aside>
 </template>

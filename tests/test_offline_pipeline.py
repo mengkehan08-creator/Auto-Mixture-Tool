@@ -20,8 +20,8 @@ def test_modelarts_runs_resource_preflight_before_pipeline() -> None:
     assert check < run
 
 
-def test_ui_is_explicitly_display_only() -> None:
+def test_ui_is_connected_to_workflow_backend() -> None:
     html = (ROOT / "src" / "auto_mixture_tool" / "api" / "static" / "index.html").read_text(encoding="utf-8")
-    assert "提交功能将在后续版本接入" in html
+    assert "提交到 ModelArts" in html
     assert "代理实验数" in html
-    assert "人工配比 × 2" in html
+    assert "检查配置" in html

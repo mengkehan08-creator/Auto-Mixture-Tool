@@ -140,6 +140,7 @@ NUM_NPU="${NUM_NPU:-8}"
 CORE_METRIC_EVERY="${CORE_METRIC_EVERY:--1}"
 EVAL_EVERY="${EVAL_EVERY:--1}"
 EVAL_BENCHMARKS="${EVAL_BENCHMARKS:-stem}"
+EVALUATION_ENABLED="${EVALUATION_ENABLED:-1}"
 NANOCHAT_DISABLE_WANDB="${NANOCHAT_DISABLE_WANDB:-1}"
 NANOCHAT_LOAD_OPTIMIZER="${NANOCHAT_LOAD_OPTIMIZER:-0}"
 RANDOM_STRATEGY_PATH="${RANDOM_STRATEGY_PATH:-}"
@@ -681,7 +682,7 @@ if [ "$MIX_GENERAL_DATA" = "1" ]; then
                 PLAN_MIXED="$DATA_DIR/manual_${PLAN_ID}_mixed"
                 mix_one "$PLAN_DATA" "$PLAN_MIXED" "Manual $PLAN_LABEL"
                 printf '%s\t%s\n' "$PLAN_ID" "$PLAN_MIXED" >> "$MANUAL_MIX_MAP"
-            done < <(python3 -c "import json; p=json.load(open('$DATA_DIR/manual_plans_manifest.json')); [print(x['id'], x['label'], x['data_dir'], sep='\t') for x in p]")
+            done < <(python3 -m auto_mixture_tool.sampling.artifacts "$DATA_DIR" --short)
             DATA_DIR="$DATA_DIR" MANUAL_MIX_MAP="$MANUAL_MIX_MAP" python3 -c "
 import json, os
 path = os.path.join(os.environ['DATA_DIR'], 'manual_plans_manifest.json')
@@ -906,7 +907,7 @@ if has_method manual; then
                 MANUAL_RATIO_LOG="$PLAN_LOG"
                 MANUAL_RATIO_MODEL_TAG="$PLAN_MODEL_TAG"
             fi
-        done < <(python3 -c "import json; p=json.load(open('$DATA_DIR/manual_plans_manifest.json')); [print(x['id'], x['label'], x['data_dir'], x['tokens'], sep='\t') for x in p]")
+        done < <(python3 -m auto_mixture_tool.sampling.artifacts "$DATA_DIR")
     else
         MANUAL_RATIO_LOG="$RESULT_DIR/mid_train_manual_ratio.log"
         run_mid_training "$MANUAL_RATIO_DATA" "$MANUAL_RATIO_MODEL_TAG" "stem_manual_ratio_mid" "$MANUAL_RATIO_LOG" "$MANUAL_RATIO_TOKENS" "$TRAIN_BUDGET"
@@ -926,6 +927,10 @@ echo ""
 # ══════════════════════════════════════════════════════════════
 
 run_eval() {
+    if [ "$EVALUATION_ENABLED" != "1" ]; then
+        echo "Evaluation disabled by workflow configuration"
+        return 0
+    fi
     local MODEL_TAG="$1"
     local MODEL_TYPE="$2"
     local LOG_FILE="$3"
@@ -933,7 +938,7 @@ run_eval() {
     echo "  Evaluating: $MODEL_TAG ($MODEL_TYPE)"
 
     pushd "$NANOCHAT_REPO" > /dev/null
-    python3 -m torch.distributed.run "${TORCHRUN_ARGS[@]}" -m nanochat_mid_compare.offline_base_eval -- \
+    python3 -m torch.distributed.run "${TORCHRUN_ARGS[@]}" -m nanochat_mid_compare.offline_base_eval \
         --eval=core \
         --eval-benchmarks="$EVAL_BENCHMARKS" \
         --device-batch-size=16 \
@@ -949,7 +954,7 @@ echo ""
 show_progress 77 "starting model evaluations"
 
 QUADMIX_EVAL_LOG=""
-if has_method quadmix; then
+if [ "$EVALUATION_ENABLED" = "1" ] && has_method quadmix; then
     show_progress 78 "evaluating QuaDMix model"
     QUADMIX_EVAL_LOG="$RESULT_DIR/eval_quadmix.log"
     run_eval "$QUADMIX_MODEL_TAG" "mid" "$QUADMIX_EVAL_LOG"
@@ -957,7 +962,7 @@ fi
 show_progress 80 "QuaDMix model evaluation finished"
 
 RANDOM_EVAL_LOG=""
-if has_method random; then
+if [ "$EVALUATION_ENABLED" = "1" ] && has_method random; then
     show_progress 83 "evaluating random model"
     RANDOM_EVAL_LOG="$RESULT_DIR/eval_random.log"
     run_eval "$RANDOM_MODEL_TAG" "mid" "$RANDOM_EVAL_LOG"
@@ -965,7 +970,7 @@ fi
 show_progress 85 "random model evaluation finished"
 
 MANUAL_RATIO_EVAL_LOG=""
-if has_method manual; then
+if [ "$EVALUATION_ENABLED" = "1" ] && has_method manual; then
     show_progress 88 "evaluating manual-ratio models"
     MANUAL_EVAL_RUNS_FILE="$RESULT_DIR/manual_plan_evaluations.tsv"
     : > "$MANUAL_EVAL_RUNS_FILE"

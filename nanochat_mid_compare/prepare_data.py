@@ -748,7 +748,7 @@ def select_manual_ratio(prep_files, domain_candidates, manual_ratio_map, domain_
             perm = select_indices(
                 strategy_path,
                 CandidatePool(cand_shard_ids, cand_doc_ids, cand_est_tokens),
-                StrategyContext("manual", int(budget), seed, domain_name),
+                StrategyContext("manual", int(budget), seed, domain_names[domain_id]),
                 strategy_config,
             )
         else:
@@ -758,7 +758,7 @@ def select_manual_ratio(prep_files, domain_candidates, manual_ratio_map, domain_
         if budget <= 0 or len(cumsum) == 0:
             cutoff = 0
         else:
-            cutoff = min(int(np.searchsorted(cumsum, budget, side='left')) + 1, len(cand_doc_ids))
+            cutoff = min(int(np.searchsorted(cumsum, budget, side='left')) + 1, len(perm))
         domain_selected = list(zip(
             cand_shard_ids[perm[:cutoff]].tolist(),
             cand_doc_ids[perm[:cutoff]].tolist(),
@@ -1016,16 +1016,7 @@ def main():
             print(f"\n  Token budget: no data-ratio specified, using quadmix_total={quadmix_total_est_tokens:,} "
                   f"x 1.1 = {training_budget:,} (multiplier={args.data_multiplier} -> budget_cap={budget_cap:,})")
 
-        if args.random_strategy:
-            from auto_mixture_tool.sampling import CandidatePool, StrategyContext, select_indices
-            perm = select_indices(
-                args.random_strategy,
-                CandidatePool(all_shard_ids, all_doc_ids, all_est_tokens, all_domain_vals),
-                StrategyContext("random", budget_cap, args.seed),
-                random_strategy_config,
-            )
-        else:
-            perm = np.random.permutation(len(all_doc_ids))
+        perm = np.random.permutation(len(all_doc_ids))
         shuffled_est_tokens = all_est_tokens[perm]
         cumsum = np.cumsum(shuffled_est_tokens)
         if budget_cap <= 0 or len(cumsum) == 0:
@@ -1118,13 +1109,22 @@ def main():
     random_actual_tokens = 0
     if not skip_random:
         print(f"\n[3] Random sampling (target: {budget_cap:,} tokens)...")
-        perm = np.random.permutation(len(all_doc_ids))
+        if args.random_strategy:
+            from auto_mixture_tool.sampling import CandidatePool, StrategyContext, select_indices
+            perm = select_indices(
+                args.random_strategy,
+                CandidatePool(all_shard_ids, all_doc_ids, all_est_tokens, all_domain_vals),
+                StrategyContext("random", budget_cap, args.seed),
+                random_strategy_config,
+            )
+        else:
+            perm = np.random.permutation(len(all_doc_ids))
         shuffled_est_tokens = all_est_tokens[perm]
         cumsum = np.cumsum(shuffled_est_tokens)
         if budget_cap <= 0 or len(cumsum) == 0:
             cutoff = 0
         else:
-            cutoff = min(int(np.searchsorted(cumsum, budget_cap, side='left')) + 1, len(all_doc_ids))
+            cutoff = min(int(np.searchsorted(cumsum, budget_cap, side='left')) + 1, len(perm))
         selected = list(zip(
             all_shard_ids[perm[:cutoff]].tolist(),
             all_doc_ids[perm[:cutoff]].tolist(),

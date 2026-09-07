@@ -78,7 +78,7 @@ def main() -> None:
         manifest.append({
             "id": plan_id,
             "label": plan.get("label", plan_id),
-            "data_dir": str(plan_dir),
+            "data_dir": plan_dir.relative_to(output).as_posix(),
             "tokens": stats["tokens"],
             "ratios": plan["ratios"],
             "strategy_path": plan.get("strategy_path", ""),

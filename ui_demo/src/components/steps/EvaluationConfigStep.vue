@@ -2,19 +2,20 @@
 import { Bot, Database } from '@lucide/vue'
 
 defineProps({ config: { type: Object, required: true } })
-const datasets = ['stem', 'gsm8k', 'mmlu_stem', 'arc_easy']
+const datasets = ['stem', 'gsm8k_cot', 'mmlu_stem', 'arc_easy', 'arc_challenge', 'gpqa_diamond', 'math_cot_500']
 
 function toggleDataset(config, name) {
   const selected = config.dataset.names
   const index = selected.indexOf(name)
   if (index >= 0) selected.splice(index, 1)
-  else selected.push(name)
+  else if (name === 'stem') config.dataset.names = ['stem']
+  else config.dataset.names = [...selected.filter(item => item !== 'stem'), name]
 }
 </script>
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>评测配置</h2><p>评测集评测与自动评估 API 相互平行，可启用一种或同时启用。</p></div></div>
+    <div class="section-title-row"><div><h2>评测配置</h2><p>使用 OBS 中已准备的评测资源。stem 为默认组合；自动评估 API 尚未接入。</p></div></div>
 
     <div class="method-grid">
       <article :class="['method-card', { enabled: config.dataset.enabled }]">

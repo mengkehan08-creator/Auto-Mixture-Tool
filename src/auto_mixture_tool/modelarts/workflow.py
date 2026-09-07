@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import copy
+import importlib.util
 import json
+import math
 import re
 import threading
 import time
@@ -11,6 +13,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import requests
 
@@ -21,8 +25,11 @@ FAILURE_STATES = {"failed", "canceled", "cancelled", "terminated"}
 
 def _clean_obs_uri(value: str) -> str:
     value = value.strip().rstrip("/")
-    if not value.startswith("obs://"):
-        raise ValueError("OBS paths must start with obs://")
+    uri = urlsplit(value)
+    if (uri.scheme != "obs" or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", uri.netloc)
+            or uri.query or uri.fragment or any(c.isspace() for c in value)
+            or any(part in {".", ".."} for part in uri.path.split("/"))):
+        raise ValueError("请输入有效的 obs://桶名/目录 地址，不接受 OBS 控制台网页地址、空格或查询参数")
     return value
 
 
@@ -42,10 +49,10 @@ def _state(value: Any) -> str:
 
 
 class ModelArtsClient:
-    def __init__(self) -> None:
-        from modelarts_training_job import headers, url
+    def __init__(self, template) -> None:
+        headers, url = template.headers, template.url
 
-        if "REPLACE_ME" in url or any("REPLACE_ME" in str(v) for v in headers.values()):
+        if not headers.get("Authorization") or "REPLACE_ME" in url or any("REPLACE_ME" in str(v) for v in headers.values()):
             raise ValueError(
                 "请先在 modelarts_training_job.py 中填写 ModelArts API 地址、区域和 Authorization"
             )
@@ -74,16 +81,135 @@ class ModelArtsWorkflowManager:
         self.client = client
         self.records: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
+        self._create_lock = threading.Lock()
+        self._template_cache = None
+        self._authorizations: dict[str, str] = {}
+        self._active: set[str] = set()
+        self._stopping = threading.Event()
+
+    def resume(self) -> None:
+        """Resume monitoring known jobs; never repeat an ambiguous POST."""
+        self._load_disk()
+        for record in list(self.records.values()):
+            if record["status"] not in {"SUCCEEDED", "FAILED", "NEEDS_ATTENTION"}:
+                if record["config"].get("modelarts"):
+                    record.update(status="WAITING_AUTH", stage="请在页面重新提供 Authorization 以恢复监控")
+                    self._store(record)
+                    continue
+                self._start(record["id"])
+
+    def close(self) -> None:
+        self._stopping.set()
+
+    def renew_authorization(self, workflow_id: str, authorization: str) -> dict[str, Any]:
+        self.get(workflow_id)
+        record = self.records[workflow_id]
+        if not record["config"].get("modelarts"):
+            raise ValueError("该实验使用服务端脚本配置")
+        if not authorization.strip() or "\n" in authorization or "\r" in authorization:
+            raise ValueError("Authorization 不能为空或包含换行")
+        self._authorizations[workflow_id] = authorization
+        if record["status"] == "WAITING_AUTH":
+            record.update(status="QUEUED", message="")
+            self._start(workflow_id)
+        return self.public(record)
+
+    def _start(self, workflow_id: str) -> None:
+        with self._lock:
+            if workflow_id in self._active:
+                return
+            self._active.add(workflow_id)
+        threading.Thread(target=self._run, args=(workflow_id,), daemon=True).start()
+
+    def _template(self):
+        if self._template_cache is None:
+            source = self.workspace / "modelarts_training_job.py"
+            if not source.is_file():
+                raise ValueError(f"工作区缺少 ModelArts 请求模板：{source}")
+            spec = importlib.util.spec_from_file_location("_amt_modelarts_template", source)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            self._template_cache = module
+        return self._template_cache
+
+    def _configured_template(self, settings=None, authorization=""):
+        source = self._template()
+        template = SimpleNamespace(url=source.url, headers=dict(source.headers),
+                                   job_data=copy.deepcopy(source.job_data))
+        if not settings:
+            return template
+        template.url = settings.get("endpoint", "")
+        template.headers.update(region=settings.get("region", ""), Authorization=authorization)
+        template.job_data["metadata"]["workspace_id"] = settings.get("workspace_id", "")
+        for key in ("image_url", "image_repo_id"):
+            template.job_data["algorithm"]["engine"][key] = settings.get(key, "")
+        for key in ("flavor_id", "pool_id"):
+            template.job_data["spec"]["resource"][key] = settings.get(key, "")
+        return template
+
+    def preview(self, config: dict[str, Any]) -> dict[str, Any]:
+        value = self._validate(config)
+        missing = []
+        try:
+            settings = value.get("modelarts")
+            template = self._configured_template(settings, (settings or {}).get("authorization", ""))
+            fields = {
+                "url": template.url,
+                "region": template.headers.get("region"),
+                "Authorization": template.headers.get("Authorization"),
+                "workspace_id": template.job_data["metadata"].get("workspace_id"),
+                **{key: template.job_data["algorithm"]["engine"].get(key)
+                   for key in ("image_url", "image_repo_id")},
+                **{key: template.job_data["spec"]["resource"].get(key)
+                   for key in ("flavor_id", "pool_id")},
+            }
+            missing = [key for key, item in fields.items()
+                       if not item or "REPLACE_ME" in str(item)]
+        except (OSError, ValueError, AttributeError, KeyError) as exc:
+            raise ValueError("无法读取工作区的 ModelArts 请求模板，请联系管理员检查配置") from exc
+        return {
+            "ready": not missing,
+            "missing_settings": missing,
+            "jobs": [
+                {"module": "mixing", "nodes": value["mixing_nodes"]},
+                {"module": "training-evaluation", "nodes": value["training_nodes"]},
+            ],
+            "input_data_obs_uri": value["input_data_obs_uri"],
+            "output_root_obs_uri": value["output_root_obs_uri"],
+            "message": "仅检查配置及服务端模板；不提交任务，也不验证 OBS 文件及权限。",
+        }
 
     def create(self, config: dict[str, Any]) -> dict[str, Any]:
+        with self._create_lock:
+            return self._create(config)
+
+    def _create(self, config: dict[str, Any]) -> dict[str, Any]:
         normalized = self._validate(config)
+        authorization = normalized.get("modelarts", {}).pop("authorization", "")
+        self._load_disk()
+        request_id = normalized.get("request_id")
+        if request_id:
+            for existing in self.records.values():
+                if existing["config"].get("request_id") == request_id:
+                    if existing["config"] != normalized:
+                        raise ValueError("重复请求标识对应的配置不同，请重新检查配置后提交")
+                    return self.public(existing)
+        if self.client is None:
+            readiness = self.preview(config)
+            if not readiness["ready"]:
+                raise ValueError("管理员尚未配置：" + "、".join(readiness["missing_settings"]))
         # Fail the HTTP request immediately when the server-side ModelArts
         # endpoint or Authorization template has not been configured.
-        self._client()
+        if normalized.get("modelarts"):
+            ModelArtsClient(self._configured_template(normalized["modelarts"], authorization))
+        else:
+            self._client()
         workflow_id = uuid.uuid4().hex[:12]
+        if authorization:
+            self._authorizations[workflow_id] = authorization
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
         prefix = normalized.get("experiment_name") or "experiment"
-        experiment = f"{prefix}-{stamp}"
+        experiment = f"{prefix}-{stamp}-{workflow_id[:6]}"
         run_root = f"{_clean_obs_uri(normalized['output_root_obs_uri'])}/runs/{experiment}"
         record = {
             "id": workflow_id,
@@ -105,8 +231,7 @@ class ModelArtsWorkflowManager:
             "message": "",
         }
         self._store(record)
-        thread = threading.Thread(target=self._run, args=(workflow_id,), daemon=True)
-        thread.start()
+        self._start(workflow_id)
         return self.public(record)
 
     def list(self) -> list[dict[str, Any]]:
@@ -141,6 +266,20 @@ class ModelArtsWorkflowManager:
 
     def _validate(self, config: dict[str, Any]) -> dict[str, Any]:
         value = copy.deepcopy(config)
+        settings = value.get("modelarts")
+        if settings:
+            allowed = {"endpoint", "region", "authorization", "workspace_id", "image_url",
+                       "image_repo_id", "flavor_id", "pool_id"}
+            if set(settings) - allowed or any(not isinstance(v, str) for v in settings.values()):
+                raise ValueError("ModelArts 配置字段无效")
+            endpoint = urlsplit(settings.get("endpoint", ""))
+            if (endpoint.scheme != "https" or not endpoint.hostname or endpoint.username
+                    or endpoint.password or endpoint.query or endpoint.fragment):
+                raise ValueError("ModelArts API 地址须为无鉴权参数的 HTTPS 创建作业地址")
+            if any("\n" in v or "\r" in v for v in settings.values()):
+                raise ValueError("ModelArts 配置不能包含换行")
+        if value.get("request_id") and not re.fullmatch(r"[a-zA-Z0-9_-]{8,80}", value["request_id"]):
+            raise ValueError("request_id 格式不正确")
         experiment_name = str(value.get("experiment_name") or "").strip()
         if experiment_name and not re.fullmatch(
             r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,47}", experiment_name
@@ -163,6 +302,11 @@ class ModelArtsWorkflowManager:
         if kinds.count("quadmix") > 1 or kinds.count("random") > 1:
             raise ValueError("only one quadmix and one random strategy are supported")
         for index, strategy in enumerate(strategies):
+            script = str(strategy.get("script_obs_uri") or "").strip()
+            if script:
+                strategy["script_obs_uri"] = _clean_obs_uri(script)
+                if not script.lower().endswith(".py"):
+                    raise ValueError("自定义采样策略必须指向 OBS 中的 .py 文件")
             if strategy.get("type") not in {"quadmix", "manual", "random"}:
                 raise ValueError(f"unsupported strategy at index {index}")
             if strategy.get("type") == "manual":
@@ -173,7 +317,7 @@ class ModelArtsWorkflowManager:
                     ratios = {str(domain).strip(): float(ratio) for domain, ratio in ratios.items()}
                 except (TypeError, ValueError) as exc:
                     raise ValueError("manual strategy ratios must be numeric") from exc
-                if any(not domain or ratio <= 0 for domain, ratio in ratios.items()):
+                if any(not domain or not math.isfinite(ratio) or ratio <= 0 for domain, ratio in ratios.items()):
                     raise ValueError("manual strategy domains and ratios must be positive")
                 strategy["ratios"] = ratios
             if strategy.get("type") == "quadmix":
@@ -190,10 +334,17 @@ class ModelArtsWorkflowManager:
             raise ValueError("training devices_per_node must be between 1 and 8")
         training["devices_per_node"] = devices
         ratio = float(training.get("target_param_data_ratio", 0.5))
-        if ratio <= 0:
+        if not math.isfinite(ratio) or ratio <= 0:
             raise ValueError("training target_param_data_ratio must be positive")
         training["target_param_data_ratio"] = ratio
         value["training"] = training
+        evaluation = value.setdefault("evaluation", {"datasets": ["stem"]})
+        allowed = {"stem", "core", "all", "arc_easy", "arc_challenge", "mmlu_stem",
+                   "gpqa_diamond", "gsm8k_cot", "math_cot_500", "mmlu_zeroshot"}
+        datasets = evaluation.get("datasets", ["stem"])
+        if not isinstance(datasets, list) or any(item not in allowed for item in datasets):
+            raise ValueError("评测任务名称无效，请选择当前 NanoChat 支持的评测项")
+        evaluation["datasets"] = list(dict.fromkeys(datasets))
         for key in (
             "code_obs_uri", "nanochat_repo_obs_uri", "nanochat_model_obs_uri",
             "quadmix_tokenizer_obs_uri", "proxy_validation_obs_uri",
@@ -202,16 +353,18 @@ class ModelArtsWorkflowManager:
             value["resources"][key] = _clean_obs_uri(value["resources"][key])
         return value
 
-    def _client(self) -> ModelArtsClient:
+    def _client(self, record=None) -> ModelArtsClient:
+        if record and record["config"].get("modelarts"):
+            return ModelArtsClient(self._configured_template(
+                record["config"]["modelarts"], self._authorizations.get(record["id"], "")))
         if self.client is None:
-            self.client = ModelArtsClient()
+            self.client = ModelArtsClient(self._template())
         return self.client
 
     def _payload(self, record: dict[str, Any], stage: str) -> dict[str, Any]:
-        from modelarts_training_job import job_data
-
-        payload = copy.deepcopy(job_data)
+        payload = self._configured_template(record["config"].get("modelarts")).job_data
         config = copy.deepcopy(record["config"])
+        config.pop("modelarts", None)
         job = record["jobs"][0 if stage == "mixing" else 1]
         payload["metadata"]["name"] = job["name"]
         payload["metadata"]["description"] = f"Auto-Mixture {stage} stage"
@@ -295,6 +448,10 @@ class ModelArtsWorkflowManager:
             "cd /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool; "
             "export PYTHONPATH=$PWD/src:$PY_DEPS:${PYTHONPATH:-}; "
             "export AMT_PYTHON_EXECUTABLE=$PY311; "
+            "mkdir -p /tmp/auto-mixture-python; "
+            "ln -sf $PY311 /tmp/auto-mixture-python/python; "
+            "ln -sf $PY311 /tmp/auto-mixture-python/python3; "
+            "export PATH=/tmp/auto-mixture-python:$PATH; "
             "$PY311 scripts/modelarts_runtime_check.py; "
             f"exec $PY311 -m auto_mixture_tool.modelarts.stage_runner {stage}' modelarts\n"
         )
@@ -302,36 +459,64 @@ class ModelArtsWorkflowManager:
     def _run(self, workflow_id: str) -> None:
         record = self.records[workflow_id]
         try:
-            self._submit_and_wait(record, 0, "mixing", 15, 45)
+            if not self._submit_and_wait(record, 0, "mixing", 15, 45):
+                return
             record["status"] = "MIXING_SUCCEEDED"
             record["progress"] = 50
             record["stage"] = "配比完成，正在自动提交训练评测作业"
             self._store(record)
-            self._submit_and_wait(record, 1, "training", 60, 95)
+            if not self._submit_and_wait(record, 1, "training", 60, 95):
+                return
             record.update(status="SUCCEEDED", progress=100, stage="全部作业完成")
         except Exception as exc:
-            record["status"] = "FAILED"
-            record["stage"] = "工作流失败"
-            record["message"] = str(exc)
-        self._store(record)
+            uncertain = any(job["status"] == "SUBMITTING" and not job["id"] for job in record["jobs"])
+            record["status"] = "NEEDS_ATTENTION" if uncertain else "FAILED"
+            record["stage"] = "提交结果待人工核对，请勿重复提交" if uncertain else "工作流失败"
+            message = str(exc)
+            for secret in self._authorizations.values():
+                message = message.replace(secret, "[REDACTED]")
+            record["message"] = message
+        finally:
+            self._store(record)
+            with self._lock:
+                self._active.discard(workflow_id)
 
     def _submit_and_wait(
         self, record: dict[str, Any], index: int, stage: str,
         submitted_progress: int, running_progress: int,
-    ) -> None:
+    ) -> bool:
         job = record["jobs"][index]
-        response = self._client().submit(self._payload(record, stage))
-        metadata = response.get("metadata", {})
-        job_id = metadata.get("id") or response.get("id")
+        if job["status"] == "SUCCEEDED":
+            return True
+        if self._stopping.is_set():
+            return False
+        job_id = job.get("id")
         if not job_id:
-            raise RuntimeError(f"{stage} job response did not contain an id: {response}")
-        job.update(id=str(job_id), status="SUBMITTED")
+            if job["status"] == "SUBMITTING":
+                raise RuntimeError("上次创建请求未记录作业 ID，请先在 ModelArts 核对作业是否已创建")
+            payload = self._payload(record, stage)
+            job["status"] = "SUBMITTING"
+            self._store(record)
+            response = self._client(record).submit(payload)
+            metadata = response.get("metadata", {})
+            job_id = metadata.get("id") or response.get("id")
+            if not job_id:
+                raise RuntimeError("ModelArts 创建响应未包含作业 ID，请到平台核对，不要自动重试")
+            job.update(id=str(job_id), status="SUBMITTED")
         record.update(status=f"{stage.upper()}_RUNNING", progress=submitted_progress,
                       stage=f"{job['name']} 已提交")
         self._store(record)
         while True:
             time.sleep(float(record["config"].get("poll_interval_seconds", 15)))
-            response = self._client().get(str(job_id))
+            if self._stopping.is_set():
+                return False
+            try:
+                response = self._client(record).get(str(job_id))
+            except requests.RequestException:
+                record["message"] = "远程状态查询暂不可用，将继续重试；不重复创建作业。请检查网络及鉴权有效期。"
+                self._store(record)
+                continue
+            record["message"] = ""
             status = _state(response).strip()
             normalized = status.lower()
             job["status"] = status or "RUNNING"
@@ -340,7 +525,7 @@ class ModelArtsWorkflowManager:
             self._store(record)
             if normalized in SUCCESS_STATES:
                 job["status"] = "SUCCEEDED"
-                return
+                return True
             if normalized in FAILURE_STATES:
                 raise RuntimeError(f"{job['name']} failed with status {status}")
 

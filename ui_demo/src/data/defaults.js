@@ -80,6 +80,7 @@ export const createEvaluationConfig = () => ({
 })
 
 export const createRuntimeConfig = () => ({
+  modelarts: { endpoint: '', region: '', authorization: '', workspace_id: '', image_url: '', image_repo_id: '', flavor_id: 'modelarts.pool.visual.8xlarge', pool_id: '' },
   experimentName: '',
   inputDataObsUri: 'obs://bucket/path/prepared_parquet/',
   outputRootObsUri: 'obs://bucket/path/chengchao/',

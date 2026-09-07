@@ -119,6 +119,17 @@ def _prepared_data_dir() -> Path:
 def run_training(config: dict[str, Any]) -> None:
     data_dir = _prepared_data_dir()
     comparison = _comparison(config)
+    # Validate every selected subset before paying for any model training.
+    for method in comparison["methods"]:
+        if method in {"quadmix", "random"}:
+            path = data_dir / f"{method}_data"
+            if not path.is_dir() or not any(path.glob("*.parquet")):
+                raise ValueError(f"数据格式不符合训练要求：缺少 {method} 的 Parquet 采样集")
+        elif method == "manual":
+            from auto_mixture_tool.sampling.artifacts import manual_plans
+            plans = manual_plans(data_dir)
+            if {p["id"] for p in plans} != {p["id"] for p in comparison["manual_plans"]}:
+                raise ValueError("人工采样清单与本次所选方案不一致")
     env = os.environ.copy()
     env.update({
         "PREPARED_COMPARISON_DATA_DIR": str(data_dir),
@@ -140,6 +151,7 @@ def run_training(config: dict[str, Any]) -> None:
         "RESULT_DIR": str(OUTPUT / "training/results"),
         "MID_CHECKPOINTS_OUTPUT_DIR": str(OUTPUT / "training/checkpoints"),
         "EVAL_BENCHMARKS": ",".join(config["evaluation"].get("datasets", ["stem"])),
+        "EVALUATION_ENABLED": "1" if config["evaluation"].get("datasets", ["stem"]) else "0",
         "MIX_GENERAL_DATA": "0",
     })
     subprocess.run(

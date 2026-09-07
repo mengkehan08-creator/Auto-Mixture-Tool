@@ -57,6 +57,7 @@ class JobRequest(BaseModel):
 
 
 class WorkflowRequest(BaseModel):
+    request_id: str | None = None
     experiment_name: str | None = None
     input_data_obs_uri: str
     output_root_obs_uri: str
@@ -67,6 +68,7 @@ class WorkflowRequest(BaseModel):
     training: dict[str, Any]
     evaluation: dict[str, Any]
     resources: dict[str, str]
+    modelarts: dict[str, str] | None = None
     poll_interval_seconds: int = Field(default=15, ge=2, le=300)
 
 
@@ -89,7 +91,13 @@ def _startup() -> None:
     if not hasattr(app.state, "workspace"):
         app.state.workspace = Path(__file__).resolve().parents[3]
     _manager()
-    _workflow_manager()
+    _workflow_manager().resume()
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    if hasattr(app.state, "workflow_manager"):
+        app.state.workflow_manager.close()
 
 
 @app.get("/api/v1/health")
@@ -106,7 +114,7 @@ def ui() -> FileResponse:
 
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
-    return RedirectResponse("/ui")
+    return RedirectResponse("ui")
 
 
 @app.get("/ui/style.css", include_in_schema=False)
@@ -162,6 +170,23 @@ def create_workflow(payload: WorkflowRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/workflows/validate")
+def validate_workflow(payload: WorkflowRequest) -> dict[str, Any]:
+    """Validate configuration without creating or querying a paid cloud job."""
+    try:
+        return _workflow_manager().preview(payload.model_dump(exclude_none=True))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/workflows/{workflow_id}/authorization")
+def renew_workflow_authorization(workflow_id: str, payload: dict[str, str]) -> dict[str, Any]:
+    try:
+        return _workflow_manager().renew_authorization(workflow_id, payload.get("authorization", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/v1/workflows")
