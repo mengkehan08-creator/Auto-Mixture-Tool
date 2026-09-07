@@ -22,6 +22,12 @@ defineProps({ config: { type: Object, required: true }, runtime: { type: Object,
 
     <div class="config-block"><h3>训练参数</h3><div class="form-grid three-cols"><label class="field"><span>目标参数/数据比例</span><input v-model.number="config.targetParamDataRatio" type="number" min="0.01" step="0.01" /></label><label class="field"><span>每节点 NPU 数</span><input v-model.number="config.devicesPerNode" type="number" min="1" max="8" /></label><label class="field"><span>训练评测作业节点数</span><input v-model.number="config.nodes" type="number" min="1" max="16" /><small>与配比作业独立配置</small></label></div></div>
 
+    <div class="config-block"><h3>训练步数与批量</h3><div class="form-grid two-cols">
+      <label class="field"><span>训练步数</span><input v-model.number="config.numIterations" type="number" min="0" step="1" /><small>0：按数据预算自动计算；正整数：每种配比模型均使用指定步数。不会改变配比采样量。</small></label>
+      <label class="field"><span>单卡批量大小</span><input v-model.number="config.deviceBatchSize" type="number" min="1" step="1" /><small>默认 1。增大会增加显存占用，需与模型和全局批量兼容。</small></label>
+      <label class="field"><span>验证损失检查间隔</span><input v-model.number="config.evalEvery" type="number" min="-1" step="1" /><small>单位：训练步数。-1：关闭；正整数：每隔指定步数检查验证损失。</small></label>
+      <label class="field"><span>任务评测间隔</span><input v-model.number="config.coreMetricEvery" type="number" min="-1" step="1" /><small>单位：训练步数。-1：关闭；正整数：每隔指定步数运行任务评测。与训练结束后的评测独立。</small></label>
+    </div></div>
     <div class="config-block"><h3>离线运行资源</h3><div class="form-grid two-cols"><label class="field"><span>工具代码 OBS 地址</span><input v-model="runtime.codeObsUri" /></label><label class="field"><span>QuaDMix Tokenizer OBS 地址</span><input v-model="runtime.quadmixTokenizerObsUri" /></label><label class="field"><span>代理验证集 OBS 地址</span><input v-model="runtime.proxyValidationObsUri" /></label><label class="field"><span>内置评测资源 OBS 地址</span><input v-model="runtime.evalBundleObsUri" /></label><label class="field"><span>离线 Python wheels OBS 地址</span><input v-model="runtime.pythonWheelsObsUri" /></label></div></div>
   </section>
 </template>

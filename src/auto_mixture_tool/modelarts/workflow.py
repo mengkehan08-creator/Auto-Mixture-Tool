@@ -74,6 +74,8 @@ def training_console_url(job_id: str, region: str, workspace_name: str = "") -> 
 def _clean_obs_uri(value: str) -> str:
     value = value.strip().rstrip("/")
     uri = urlsplit(value)
+    if value.startswith("obs://bucket/path") or "REPLACE_ME" in value:
+        raise ValueError("OBS 地址仍为示例占位路径，请填写实际的桶和目录")
     if (uri.scheme != "obs" or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", uri.netloc)
             or uri.query or uri.fragment or any(c.isspace() for c in value)
             or any(part in {".", ".."} for part in uri.path.split("/"))):
@@ -391,6 +393,13 @@ class ModelArtsWorkflowManager:
         if not math.isfinite(ratio) or ratio <= 0:
             raise ValueError("training target_param_data_ratio must be positive")
         training["target_param_data_ratio"] = ratio
+        for key, default, minimum in (("num_iterations", 0, 0), ("device_batch_size", 1, 1),
+                                      ("eval_every", -1, -1), ("core_metric_every", -1, -1)):
+            number = training.get(key, default)
+            if (isinstance(number, bool) or not isinstance(number, int) or number < minimum
+                    or (key.endswith("every") and number == 0)):
+                raise ValueError(f"训练参数 {key} 无效：必须为合法整数；间隔仅支持 -1 或正整数")
+            training[key] = number
         value["training"] = training
         evaluation = value.setdefault("evaluation", {"datasets": ["stem"]})
         allowed = {"stem", "core", "all", "arc_easy", "arc_challenge", "mmlu_stem",
@@ -404,6 +413,8 @@ class ModelArtsWorkflowManager:
             "quadmix_tokenizer_obs_uri", "proxy_validation_obs_uri",
             "eval_bundle_obs_uri", "python_wheels_obs_uri",
         ):
+            if not value["resources"].get(key):
+                raise ValueError(f"请填写资源 OBS 地址：{key}；代理验证集须指向包含 stem_v2_tokenized.pt 的目录")
             value["resources"][key] = _clean_obs_uri(value["resources"][key])
         return value
 
@@ -435,7 +446,7 @@ class ModelArtsWorkflowManager:
         resources = config["resources"]
         payload["algorithm"]["code_dir"] = (
             resources.get("code_obs_uri") or payload["algorithm"]["code_dir"]
-        )
+        ).rstrip("/") + "/"
         mapping = {
             "data_dir": config["input_data_obs_uri"],
             "nanochat_model_dir": resources["nanochat_model_obs_uri"],

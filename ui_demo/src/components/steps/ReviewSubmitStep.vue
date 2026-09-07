@@ -49,6 +49,10 @@ function requestBody() {
       base_model_tag: props.training.baseModelTag,
       target_param_data_ratio: props.training.targetParamDataRatio,
       devices_per_node: props.training.devicesPerNode,
+      num_iterations: props.training.numIterations,
+      device_batch_size: props.training.deviceBatchSize,
+      eval_every: props.training.evalEvery,
+      core_metric_every: props.training.coreMetricEvery,
     },
     evaluation: { datasets: props.evaluation.dataset.enabled ? props.evaluation.dataset.names : [] },
     resources: {

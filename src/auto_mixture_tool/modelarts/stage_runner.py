@@ -148,6 +148,10 @@ def run_training(config: dict[str, Any]) -> None:
             config["training"].get("target_param_data_ratio", 0.5)
         ),
         "NUM_NPU": str(config["training"].get("devices_per_node", 8)),
+        "TRAIN_NUM_ITERATIONS": str(config["training"].get("num_iterations", 0)),
+        "DEVICE_BATCH_SIZE": str(config["training"].get("device_batch_size", 1)),
+        "EVAL_EVERY": str(config["training"].get("eval_every", -1)),
+        "CORE_METRIC_EVERY": str(config["training"].get("core_metric_every", -1)),
         "RESULT_DIR": str(OUTPUT / "training/results"),
         "MID_CHECKPOINTS_OUTPUT_DIR": str(OUTPUT / "training/checkpoints"),
         "EVAL_BENCHMARKS": ",".join(config["evaluation"].get("datasets", ["stem"])),

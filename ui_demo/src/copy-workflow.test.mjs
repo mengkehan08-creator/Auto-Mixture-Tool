@@ -1,6 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { copyWorkflow } from './copy-workflow.js'
+import { createRuntimeConfig, createTrainingConfig } from './data/defaults.js'
+test('OBS defaults match deployed script resources including proxy validation', () => {
+  const runtime = createRuntimeConfig()
+  assert.equal(runtime.codeObsUri, 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/Auto-Mixture-Tool/')
+  assert.ok(runtime.inputDataObsUri.endsWith('chengchao/prepared_parquet_57ffce0ca0a2/'))
+  assert.equal(runtime.proxyValidationObsUri, 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/AMT_old/data/')
+  assert.ok(createTrainingConfig().modelObsUri.includes('backup_0810/work/'))
+})
 test('copy restores settings but never credentials or job identifiers', () => {
   const source = { request_id: 'old-request', experiment_name: 'experiment', mixing_nodes: 3, training_nodes: 4,
     input_data_obs_uri: 'obs://bucket/input', output_root_obs_uri: 'obs://bucket/output',

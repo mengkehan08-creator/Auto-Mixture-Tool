@@ -19,6 +19,10 @@ export function copyWorkflow(config) {
     baseModelTag: config.training.base_model_tag || 'd24',
     targetParamDataRatio: config.training.target_param_data_ratio,
     devicesPerNode: config.training.devices_per_node,
+    numIterations: config.training.num_iterations ?? 0,
+    deviceBatchSize: config.training.device_batch_size ?? 1,
+    evalEvery: config.training.eval_every ?? -1,
+    coreMetricEvery: config.training.core_metric_every ?? -1,
   })
   evaluation.dataset = { enabled: Boolean(config.evaluation.datasets.length), source: 'obs',
     names: [...config.evaluation.datasets], obsUri: resources.eval_bundle_obs_uri }

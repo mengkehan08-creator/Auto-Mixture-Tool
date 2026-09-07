@@ -1,4 +1,5 @@
 let nextId = 1
+const obsRoot = 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/'
 
 export const strategyOptions = [
   { value: 'quadmix', label: 'QuaDMix 算法', description: '内置算法 · 可独立运行' },
@@ -54,12 +55,16 @@ export function createStrategy(type = 'quadmix') {
 export const createTrainingConfig = () => ({
   frameworkSource: 'builtin',
   framework: 'NanoChat',
-  frameworkObsUri: 'obs://bucket/path/nanochat-npu/',
+  frameworkObsUri: `${obsRoot}backup_0810/work/nanochat-npu/`,
   modelSource: 'builtin',
   model: 'NanoChat-Base',
-  modelObsUri: 'obs://bucket/path/nanochat_model_dir/',
+  modelObsUri: `${obsRoot}backup_0810/work/nanochat_model_dir/`,
   baseModelTag: 'd24',
   targetParamDataRatio: 0.5,
+  numIterations: 0,
+  deviceBatchSize: 1,
+  evalEvery: -1,
+  coreMetricEvery: -1,
   devicesPerNode: 8,
   nodes: 2,
 })
@@ -69,7 +74,7 @@ export const createEvaluationConfig = () => ({
     enabled: true,
     source: 'builtin',
     names: ['stem'],
-    obsUri: '',
+    obsUri: `${obsRoot}eval_bundle/`,
   },
   api: {
     enabled: false,
@@ -82,12 +87,12 @@ export const createEvaluationConfig = () => ({
 export const createRuntimeConfig = () => ({
   modelarts: { endpoint: '', region: '', authorization: '', workspace_id: '', workspace_name: 'aifm-lmdt-exp_MA_workspace', image_url: '', image_repo_id: '', flavor_id: 'modelarts.pool.visual.8xlarge', pool_id: '' },
   experimentName: '',
-  inputDataObsUri: 'obs://bucket/path/prepared_parquet/',
-  outputRootObsUri: 'obs://bucket/path/chengchao/',
+  inputDataObsUri: `${obsRoot}chengchao/prepared_parquet_57ffce0ca0a2/`,
+  outputRootObsUri: `${obsRoot}chengchao/`,
   mixingNodes: 2,
-  codeObsUri: 'obs://bucket/path/Auto-Mixture-Tool/',
-  quadmixTokenizerObsUri: 'obs://bucket/path/gpt-neox-tokenizer/',
-  proxyValidationObsUri: 'obs://bucket/path/proxy_validation/',
-  evalBundleObsUri: 'obs://bucket/path/eval_bundle/',
-  pythonWheelsObsUri: 'obs://bucket/path/python_wheels/',
+  codeObsUri: `${obsRoot}Auto-Mixture-Tool/`,
+  quadmixTokenizerObsUri: `${obsRoot}gpt-neox-tokenizer/`,
+  proxyValidationObsUri: `${obsRoot}AMT_old/data/`,
+  evalBundleObsUri: `${obsRoot}eval_bundle/`,
+  pythonWheelsObsUri: `${obsRoot}python_wheels/`,
 })

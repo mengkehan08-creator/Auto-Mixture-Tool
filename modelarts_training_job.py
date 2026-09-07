@@ -182,7 +182,7 @@ job_data = {
                 "local_dir": "/home/ma-user/modelarts/inputs/proxy_validation_dir_5",
                 "access_method": "env",
                 "remote": {
-                    "obs": {"obs_url": "REPLACE_ME_PROXY_VALIDATION_OBS_URL"}
+                    "obs": {"obs_url": "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/AMT_old/data/"}
                 },
             },
             {
@@ -304,7 +304,7 @@ def main():
         for i in job_data["algorithm"]["inputs"]
         if i["name"] == "proxy_validation_dir"
     )
-    item["remote"]["obs"]["obs_url"] = "REPLACE_ME_PROXY_VALIDATION_OBS_URL"
+    item["remote"]["obs"]["obs_url"] = "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/AMT_old/data/"
 
     item = next(
         i

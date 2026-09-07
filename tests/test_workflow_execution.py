@@ -127,6 +127,26 @@ def test_training_console_url():
     assert "workspaceName=a%26b" in training_console_url("job1", "cn-south-1", "a&b")
 
 
+@pytest.mark.parametrize("key,value", [("num_iterations", -1), ("num_iterations", 1.5),
+                                      ("device_batch_size", 0), ("eval_every", 0),
+                                      ("core_metric_every", -2)])
+def test_invalid_training_controls(manager, key, value):
+    body = config()
+    body["training"][key] = value
+    with pytest.raises(ValueError, match=key):
+        manager._validate(body)
+
+
+def test_training_controls_saved_for_copy(manager):
+    body = config()
+    body['training'].update(num_iterations=15, device_batch_size=2, eval_every=10, core_metric_every=-1)
+    with patch.object(manager, '_start'):
+        created = manager.create(body)
+    copied = manager.copy_configuration(created['id'])
+    assert copied['training']['num_iterations'] == 15
+    assert copied['training']['device_batch_size'] == 2
+
+
 @pytest.mark.parametrize("uri", ["https://console.example/obs", "obs://", "obs://bucket/a?token=x", "obs://bucket/../x"])
 def test_invalid_obs_rejected_before_submission(manager, uri):
     body = config()

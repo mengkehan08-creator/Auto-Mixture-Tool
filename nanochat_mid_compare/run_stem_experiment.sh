@@ -136,6 +136,11 @@ TARGET_PARAM_DATA_RATIO="${TARGET_PARAM_DATA_RATIO:-0.5}"
 DATA_MULTIPLIER="${DATA_MULTIPLIER:-2.5}"
 LOADER="${LOADER:-flat}"
 DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-1}"
+TRAIN_NUM_ITERATIONS="${TRAIN_NUM_ITERATIONS:-0}"
+if ! [[ "$TRAIN_NUM_ITERATIONS" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: TRAIN_NUM_ITERATIONS must be a non-negative integer"
+    exit 2
+fi
 NUM_NPU="${NUM_NPU:-8}"
 CORE_METRIC_EVERY="${CORE_METRIC_EVERY:--1}"
 EVAL_EVERY="${EVAL_EVERY:--1}"
@@ -791,6 +796,10 @@ run_mid_training() {
     fi
 
     local NUM_ITERATIONS=$(( (TRAIN_TOKENS + CKPT_TOTAL_BATCH_SIZE - 1) / CKPT_TOTAL_BATCH_SIZE ))
+    if [ "$TRAIN_NUM_ITERATIONS" -gt 0 ]; then
+        NUM_ITERATIONS="$TRAIN_NUM_ITERATIONS"
+        echo "    Using configured training steps: $NUM_ITERATIONS (overrides automatic budget steps)"
+    fi
     local TRACKING_RUN_NAME="$RUN_NAME"
     if [ "$NANOCHAT_DISABLE_WANDB" = "1" ]; then
         TRACKING_RUN_NAME="dummy"
