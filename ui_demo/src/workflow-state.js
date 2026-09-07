@@ -1,8 +1,8 @@
 export const fieldLabels = {
-  url: '创建训练作业接口地址', endpoint: '创建训练作业接口地址', region: '区域',
-  Authorization: '身份认证凭据', authorization: '身份认证凭据', workspace_id: '工作空间编号',
-  workspace_name: '工作空间名称（用于任务网页链接，可选）',
-  image_url: '训练镜像地址', image_repo_id: '镜像仓库编号', flavor_id: '资源规格编号', pool_id: '资源池编号',
+  url: 'url', endpoint: 'url', region: 'region',
+  Authorization: 'Authorization', authorization: 'Authorization', workspace_id: 'workspace_id',
+  workspace_name: 'workspaceName',
+  image_url: 'image_url', image_repo_id: 'image_repo_id', flavor_id: 'flavor_id', pool_id: 'pool_id',
 }
 export function hasProgress(workflow) {
   return Boolean(workflow.jobs?.some(job => job.id)) &&

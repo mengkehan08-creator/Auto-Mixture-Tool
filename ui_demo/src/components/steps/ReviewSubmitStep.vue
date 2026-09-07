@@ -128,7 +128,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
     <p class="path-preview">以下参数替代脚本中的 REPLACE_ME，无需编辑或再次运行脚本。请使用可信的 ModelArts 创建作业 API 地址。Authorization 仅保存在本次页面及后端进程内存，不写回脚本或工作流文件；服务重启后需要重新提供。</p>
     <div class="form-grid two-cols">
       <label v-for="key in ['endpoint', 'region', 'workspace_id', 'workspace_name', 'image_url', 'image_repo_id', 'flavor_id', 'pool_id']" :key="key" class="field"><span>{{ fieldLabels[key] }}</span><input v-model="runtime.modelarts[key]" autocomplete="off" /></label>
-      <label class="field"><span>身份认证凭据</span><input v-model="runtime.modelarts.authorization" type="password" autocomplete="off" /><small>填写完整 Authorization 值。请通过受信任的 HTTPS 页面填写，不要分享或截图凭据。</small></label>
+      <label class="field"><span>Authorization</span><input v-model="runtime.modelarts.authorization" type="password" autocomplete="off" /><small>填写完整 Authorization 值。请通过受信任的 HTTPS 页面填写，不要分享或截图凭据。</small></label>
     </div>
     <div class="review-grid">
       <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ runtime.mixingNodes }} 节点 · 先校验再生成全部采样集</small></article>
