@@ -4,7 +4,7 @@
 
 ## 开发环境配置
 
-也支持直接把原始 `iam_token_provider_test.py` 的完整内容粘贴到仓库外的 `iam_token_provider.py`。加载器只通过 AST 读取末尾的 `auth = {...}` 字面量字典，不执行 imports、类定义、Token 请求或 print。无须修改原脚本函数；实际鉴权由工具内的安全实现负责。旧字典的 `endpoint` 若为项目 API 基地址，会追加 `/training-jobs`，须与 UI 的创建作业地址一致；不要沿用不匹配区域或项目的示例地址。仍使用 JWT account/secret，不使用旧脚本的静态 token 或密码认证分支。
+也支持直接把原始 `iam_token_provider_test.py` 的完整内容粘贴到仓库外的 `iam_token_provider.py`。加载器只通过 AST 读取末尾的 `auth = {...}` 字面量字典，不执行 imports、类定义、Token 请求或 print。无须修改原脚本函数；实际鉴权由工具内的安全实现负责。旧字典的 `endpoint/region/project_id` 不参与 JWT 请求，也不会被用来推导或限制 UI 作业地址。仍使用 JWT account/secret，不使用旧脚本的静态 token 或密码认证分支。
 
 旧脚本的 `verify=False`、全局代理修改和打印行为不会生效；如需要内部 CA，向 `auth` 字典补充 `ca_bundle`。文件替换后重启后端，保留 `AMT_IAM_PROVIDER` 设置即可。不要单独执行私有原脚本，因为它自身仍会打印 Token。
 
@@ -20,7 +20,7 @@ chmod 600 /home/ma-user/work/private_auth/iam_token_provider.py
 仅编辑仓库外的私有副本，在 `AUTH_CONFIG` 中填写：
 
 - `account / secret / project / enterprise`：你的 IAM JWT 认证信息。
-- `modelarts_endpoint`：完整的创建训练作业 API 地址，与 UI 的 endpoint 完全一致（允许末尾 `/` 差异）。不是控制台网页地址。后端拒绝向其他地址发送自动获取的 Token。
+- `modelarts_endpoint`：可选的独立目标地址限制；留空使用可信 `csbgw.roma.huawei.com` 网关、当前 account 路径和 ModelArts 作业路由限制，不锁定旧脚本的区域或项目。若使用其他网关，明确填写与 UI `url` 相同的完整创建作业 API 地址。它不是 IAM 取 Token 地址，也不是原脚本里无关的 `endpoint`。
 - `authorization_prefix`：默认空字符串，表示直接使用 access_token。只有网关明确要求时才改成 `Bearer `（末尾有空格）。
 - `ca_bundle`：默认空，使用系统信任证书。内部 CA 不被系统信任时填写可信 CA PEM 文件绝对路径，用于 IAM 及 ModelArts HTTPS 校验，不要关闭证书验证。
 
@@ -30,7 +30,8 @@ chmod 600 /home/ma-user/work/private_auth/iam_token_provider.py
 
 ```bash
 cd /home/ma-user/work/Auto-Mixture-Tool
-source .venv/bin/activate
+# 只有已创建该虚拟环境时才激活；否则使用已安装依赖的 Python。
+if [ -f .venv/bin/activate ]; then source .venv/bin/activate; fi
 export PYTHONPATH="$PWD:$PWD/src:${PYTHONPATH:-}"
 export AMT_IAM_PROVIDER=/home/ma-user/work/private_auth/iam_token_provider.py
 python -m auto_mixture_tool.cli --workspace "$PWD" serve --host 0.0.0.0 --port 8080

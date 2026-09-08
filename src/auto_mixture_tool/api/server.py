@@ -61,9 +61,9 @@ class WorkflowRequest(BaseModel):
     experiment_name: str | None = None
     input_data_obs_uri: str
     output_root_obs_uri: str
-    priority: int = Field(default=1, ge=1, le=3)
-    mixing_nodes: int = Field(default=2, ge=1, le=16)
-    training_nodes: int = Field(default=2, ge=1, le=16)
+    priority: int = Field(default=1, ge=1, le=3, strict=True)
+    mixing_nodes: int = Field(default=2, ge=1, le=16, strict=True)
+    training_nodes: int = Field(default=2, ge=1, le=16, strict=True)
     full_scan: bool = False
     strategies: list[dict[str, Any]]
     training: dict[str, Any]

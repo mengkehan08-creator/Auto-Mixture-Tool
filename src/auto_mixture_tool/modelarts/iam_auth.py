@@ -2,6 +2,7 @@
 
 import ast
 import os
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -19,17 +20,29 @@ class IamTokenProvider:
         self._expires_at = None
 
     def validate_endpoint(self, endpoint):
-        for key in ('account', 'secret', 'project', 'enterprise', 'modelarts_endpoint'):
+        for key in ('account', 'secret', 'project', 'enterprise'):
             value = self.config.get(key)
             if not isinstance(value, str) or not value.strip() or 'REPLACE_ME' in value:
                 raise ValueError(f'IAM 私有配置缺少有效的 {key}')
-        allowed = self.config['modelarts_endpoint'].rstrip('/')
-        parsed = urlsplit(allowed)
+        target = endpoint.rstrip('/')
+        parsed = urlsplit(target)
         if (parsed.scheme != 'https' or not parsed.hostname or parsed.username
-                or parsed.password or parsed.query or parsed.fragment):
-            raise ValueError('IAM 私有配置中的 ModelArts 地址必须为 HTTPS 作业 API 地址')
-        if endpoint.rstrip('/') != allowed:
-            raise ValueError('当前 ModelArts API 地址不在 IAM 私有配置授权范围内')
+                or parsed.password or parsed.query or parsed.fragment
+                or any(c.isspace() for c in target)):
+            raise ValueError('ModelArts 地址必须为无鉴权参数的 HTTPS 作业 API 地址')
+        allowed = self.config.get('modelarts_endpoint', '')
+        if allowed and 'REPLACE_ME' not in allowed:
+            if target != allowed.rstrip('/'):
+                raise ValueError('当前 ModelArts API 地址不在独立配置的授权范围内')
+        else:
+            # Legacy auth.endpoint is unused by JWT acquisition. Never derive a
+            # job URL from it. Allow only this known gateway and account scope.
+            route = (r'/csb/projects/' + re.escape(self.config['account'])
+                     + r'/vendors/huaweicloud-china/resourcetypes/modelarts/regions/'
+                     + r'[a-z0-9-]+/projects/[a-zA-Z0-9]+(?:/v2/[a-zA-Z0-9]+)?/training-jobs')
+            if (parsed.hostname != 'csbgw.roma.huawei.com' or parsed.port not in (None, 443)
+                    or not re.fullmatch(route, parsed.path)):
+                raise ValueError('作业地址不属于默认可信 ModelArts 网关；如使用其他接口，请单独配置 modelarts_endpoint')
         if self.config.get('authorization_prefix', '') not in ('', 'Bearer '):
             raise ValueError('authorization_prefix 只支持空字符串或 Bearer 加空格')
 
@@ -90,11 +103,6 @@ def _load_provider(path):
             raise ValueError('missing literal config')
         config = dict(config)
         if 'AUTH_CONFIG' not in assignments:
-            # Legacy sample uses a project API base address, not the job endpoint.
-            endpoint = str(config.get('modelarts_endpoint') or config.get('endpoint') or '').rstrip('/')
-            if endpoint and not endpoint.endswith('/training-jobs'):
-                endpoint += '/training-jobs'
-            config['modelarts_endpoint'] = endpoint
             config['project'] = config.get('project') or config.get('account')
         return IamTokenProvider(config)
     except Exception:

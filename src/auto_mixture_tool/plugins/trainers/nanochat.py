@@ -114,6 +114,7 @@ class NanoChatTrainer(TrainerAdapter):
             "NUM_NPU": str(npu_devices),
             "TARGET_PARAM_DATA_RATIO": str(target_ratio),
             "COMPARISON_METHODS": ",".join(methods),
+            "SEED": str(request.get('algorithm_config', {}).get('seed', 42)),
             "AMT_RUN_ID": str(request["job_id"]),
             "MIX_GENERAL_DATA": "1" if config.get("mix_general_data", False) else "0",
             "NANOCHAT_DISABLE_WANDB": "1" if config.get("disable_wandb", True) else "0",

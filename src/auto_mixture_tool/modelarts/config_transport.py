@@ -19,7 +19,10 @@ def write_config(env, config):
         if key in {KEY, ENCODING, CHECKSUM} or key.startswith(PART):
             del env[key]
     # ASCII also keeps the UTF-8 byte length below the service limit.
-    raw = json.dumps(config, ensure_ascii=True, separators=(',', ':'))
+    try:
+        raw = json.dumps(config, ensure_ascii=True, separators=(',', ':'), allow_nan=False)
+    except (TypeError, ValueError):
+        raise ValueError('运行配置必须为合法 JSON，不能包含 NaN、Infinity 或不可序列化对象') from None
     if len(raw) > MAX_CONFIG_BYTES:
         raise ValueError('运行配置超过工具的 1 MiB 安全上限，请减少策略配置')
     if len(raw) <= LIMIT:

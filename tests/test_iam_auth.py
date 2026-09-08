@@ -113,7 +113,8 @@ def test_original_script_read_without_execution(tmp_path, capsys):
     _load_provider.cache_clear()
     with patch('requests.post') as post:
         provider = _load_provider(str(path))
-        provider.validate_endpoint('https://gateway.example/project/training-jobs')
+        provider.validate_endpoint('https://csbgw.roma.huawei.com/csb/projects/test-account/vendors/huaweicloud-china/resourcetypes/modelarts/regions/cn-south-1/projects/newproject/v2/newproject/training-jobs')
+        assert 'modelarts_endpoint' not in provider.config
         post.assert_not_called()
     assert capsys.readouterr().out == ''
     _load_provider.cache_clear()
@@ -127,3 +128,20 @@ def test_dynamic_config_rejected_without_execution(tmp_path):
         _load_provider(str(path))
     assert 'private-value' not in str(error.value)
     _load_provider.cache_clear()
+
+
+def test_legacy_endpoint_does_not_control_iam_or_job_target():
+    cfg = config()
+    cfg.pop('modelarts_endpoint')
+    cfg['endpoint'] = 'https://old.example/unused'
+    cfg['region'] = 'cn-southwest-2'
+    target = 'https://csbgw.roma.huawei.com/csb/projects/test-account/vendors/huaweicloud-china/resourcetypes/modelarts/regions/cn-south-1/projects/newproject/v2/newproject/training-jobs'
+    provider = IamTokenProvider(cfg)
+    with patch('requests.post', return_value=response()) as post:
+        assert provider.authorization(target) == 'test-token'
+        assert post.call_args.args[0] == 'https://iam.his-op.huawei.com/iam/auth/token'
+        assert set(post.call_args.kwargs['json']['data']['attributes']) == {'account', 'secret', 'project', 'enterprise'}
+    with pytest.raises(ValueError):
+        provider.validate_endpoint(target.replace('csbgw.roma.huawei.com', 'csbgw.roma.huawei.com.evil.example'))
+    with pytest.raises(ValueError):
+        provider.validate_endpoint(target.replace('/test-account/', '/different-account/'))

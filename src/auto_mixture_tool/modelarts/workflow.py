@@ -179,10 +179,16 @@ class ModelArtsWorkflowManager:
     def resume(self) -> None:
         """Resume monitoring known jobs; never repeat an ambiguous POST."""
         self._load_disk()
+        auth_error = ''
+        try:
+            automatic_auth = get_provider() is not None
+        except ValueError as exc:
+            automatic_auth = False
+            auth_error = str(exc)
         for record in list(self.records.values()):
             if record["status"] not in {"SUCCEEDED", "FAILED", "NEEDS_ATTENTION"}:
-                if record["config"].get("modelarts") and get_provider() is None:
-                    record.update(status="WAITING_AUTH", stage="请在页面重新提供 Authorization 以恢复监控")
+                if auth_error or (record["config"].get("modelarts") and not automatic_auth):
+                    record.update(status="WAITING_AUTH", stage=auth_error or "请在页面重新提供 Authorization 以恢复监控")
                     self._store(record)
                     continue
                 self._start(record["id"])
@@ -214,7 +220,7 @@ class ModelArtsWorkflowManager:
         if self._template_cache is None:
             source = self.workspace / "modelarts_training_job.py"
             if not source.is_file():
-                raise ValueError(f"工作区缺少 ModelArts 请求模板：{source}")
+                raise FileNotFoundError('工作区缺少 modelarts_training_job.py')
             spec = importlib.util.spec_from_file_location("_amt_modelarts_template", source)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
@@ -242,10 +248,6 @@ class ModelArtsWorkflowManager:
         try:
             settings = value.get("modelarts")
             template = self._configured_template(settings, (settings or {}).get("authorization", ""))
-            provider = get_provider()
-            if provider:
-                provider.validate_endpoint(template.url)
-                template.headers['Authorization'] = 'automatic-iam'
             fields = {
                 "url": template.url,
                 "region": template.headers.get("region"),
@@ -256,10 +258,15 @@ class ModelArtsWorkflowManager:
                 **{key: template.job_data["spec"]["resource"].get(key)
                    for key in ("flavor_id", "pool_id")},
             }
-            missing = [key for key, item in fields.items()
-                       if not item or "REPLACE_ME" in str(item)]
-        except (OSError, ValueError, AttributeError, KeyError) as exc:
-            raise ValueError("无法读取工作区的 ModelArts 请求模板，请联系管理员检查配置") from exc
+        except FileNotFoundError:
+            raise ValueError('工作区缺少 modelarts_training_job.py，请检查启动时的 --workspace 路径') from None
+        except (OSError, ValueError, AttributeError, KeyError, TypeError, SyntaxError, ImportError):
+            raise ValueError('ModelArts 请求模板无法加载：请检查工作区 modelarts_training_job.py 的语法、依赖及必需字段') from None
+        provider = get_provider()
+        if provider:
+            provider.validate_endpoint(template.url)
+            fields['Authorization'] = 'automatic-iam'
+        missing = [key for key, item in fields.items() if not item or 'REPLACE_ME' in str(item)]
         return {
             "ready": not missing,
             "missing_settings": missing,
@@ -328,6 +335,9 @@ class ModelArtsWorkflowManager:
             record["outputs"][output] = (
                 f"{root}/runs/{experiment}/" if root else f"{run_root}/training/{suffix}/"
             )
+        # Build both stage requests before scheduling the first paid job.
+        for stage in ('mixing', 'training'):
+            self._payload(record, stage)
         self._store(record)
         self._start(workflow_id)
         return self.public(record)
@@ -372,6 +382,9 @@ class ModelArtsWorkflowManager:
 
     def _validate(self, config: dict[str, Any]) -> dict[str, Any]:
         value = copy.deepcopy(config)
+        for section in ('training', 'evaluation', 'resources'):
+            if not isinstance(value.get(section), dict):
+                raise ValueError(f'{section} 必须是配置对象')
         priority = value.get('priority', 1)
         if type(priority) is not int or priority not in (1, 2, 3):
             raise ValueError('priority 必须为 1、2 或 3')
@@ -383,9 +396,13 @@ class ModelArtsWorkflowManager:
         entries = value.get('offline_resources')
         roles = RESOURCE_INPUTS
         if entries is not None:
+            if not isinstance(entries, list) or any(not isinstance(e, dict) for e in entries):
+                raise ValueError('offline_resources 必须是资源对象列表')
             names, seen_roles = set(), set()
             for entry in entries:
                 name, role = entry.get('name', ''), entry.get('role', '')
+                if any(not isinstance(item, str) for item in (name, role, entry.get('uri', ''))):
+                    raise ValueError('资源 name、role 和 uri 必须为字符串')
                 if (not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{0,63}', name) or name in names
                         or name in {'data_dir', 'comparison_data_dir', 'nanochat_model_dir', 'nanochat_npu_dir'}
                         or re.fullmatch(r'strategy_\d+', name)):
@@ -432,12 +449,12 @@ class ModelArtsWorkflowManager:
         for key in ("input_data_obs_uri", "output_root_obs_uri"):
             value[key] = _clean_obs_uri(str(value.get(key, "")))
         for key in ("mixing_nodes", "training_nodes"):
-            nodes = int(value.get(key, 0))
-            if not 1 <= nodes <= 16:
+            nodes = value.get(key, 0)
+            if type(nodes) is not int or not 1 <= nodes <= 16:
                 raise ValueError(f"{key} must be between 1 and 16")
             value[key] = nodes
         strategies = value.get("strategies")
-        if not isinstance(strategies, list) or not strategies:
+        if not isinstance(strategies, list) or not strategies or any(not isinstance(s, dict) for s in strategies):
             raise ValueError("at least one strategy is required")
         kinds = [item.get("type") for item in strategies]
         if "quadmix" not in kinds:
@@ -445,7 +462,18 @@ class ModelArtsWorkflowManager:
         if kinds.count("quadmix") > 1 or kinds.count("random") > 1:
             raise ValueError("only one quadmix and one random strategy are supported")
         upload_bytes = 0
+        seen_ids = set()
         for index, strategy in enumerate(strategies):
+            strategy_id = strategy.get('id', '')
+            if (not isinstance(strategy_id, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}', strategy_id)
+                    or strategy_id in seen_ids):
+                raise ValueError('每项策略需要唯一 id，使用 1–64 位字母、数字、下划线或连字符')
+            seen_ids.add(strategy_id)
+            if not isinstance(strategy.get('script_config', {}), dict):
+                raise ValueError('script_config 必须是配置对象')
+            label = strategy.get('name', strategy_id)
+            if not isinstance(label, str) or any(c in label for c in '\t\r\n'):
+                raise ValueError('策略名称不能包含换行或制表符')
             strategy.pop('local_script_path', None)
             if strategy.get('script_upload') is not None:
                 if strategy.get('type') not in {'manual', 'random'} or strategy.get('script_obs_uri'):
@@ -455,6 +483,8 @@ class ModelArtsWorkflowManager:
                     raise ValueError('本次上传脚本总大小不能超过 128 KiB')
             script = str(strategy.get("script_obs_uri") or "").strip()
             if script:
+                if strategy.get('type') not in {'manual', 'random'}:
+                    raise ValueError('当前仅人工和随机策略支持上传采样脚本')
                 strategy["script_obs_uri"] = _clean_obs_uri(script)
                 if not script.lower().endswith(".py"):
                     raise ValueError("自定义采样策略必须指向 OBS 中的 .py 文件")
@@ -473,17 +503,32 @@ class ModelArtsWorkflowManager:
                 strategy["ratios"] = ratios
             if strategy.get("type") == "quadmix":
                 for key in ("proxy_experiments", "proxy_steps", "search_count"):
-                    number = int(strategy.get(key, {"proxy_experiments": 16, "proxy_steps": 15, "search_count": 1000}[key]))
-                    if number <= 0:
+                    number = strategy.get(key, {"proxy_experiments": 16, "proxy_steps": 15, "search_count": 1000}[key])
+                    if type(number) is not int or number <= 0:
                         raise ValueError(f"quadmix {key} must be positive")
                     strategy[key] = number
+                devices = strategy.get('devices_per_node', 8)
+                if type(devices) is not int or not 1 <= devices <= 8:
+                    raise ValueError('QuaDMix devices_per_node 必须为 1–8 的整数')
+                strategy['devices_per_node'] = devices
+                seed = strategy.get('seed', 42)
+                if type(seed) is not int or not 0 <= seed < 2**32:
+                    raise ValueError('随机种子必须为 0–4294967295 的整数')
+                strategy['seed'] = seed
+        shared_seed = next(s['seed'] for s in strategies if s['type'] == 'quadmix')
+        for strategy in strategies:
+            strategy['seed'] = shared_seed
         training = value.get("training", {})
         if str(training.get("framework", "nanochat")).lower() != "nanochat":
             raise ValueError("the current training adapter supports NanoChat only")
-        devices = int(training.get("devices_per_node", 8))
-        if not 1 <= devices <= 8:
+        devices = training.get("devices_per_node", 8)
+        if type(devices) is not int or not 1 <= devices <= 8:
             raise ValueError("training devices_per_node must be between 1 and 8")
         training["devices_per_node"] = devices
+        tag = training.get('base_model_tag', 'd24')
+        if not isinstance(tag, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}', tag):
+            raise ValueError('base_model_tag 必须是模型目录名称，不能包含路径或空格')
+        training['base_model_tag'] = tag
         ratio = float(training.get("target_param_data_ratio", 0.5))
         if not math.isfinite(ratio) or ratio <= 0:
             raise ValueError("training target_param_data_ratio must be positive")
@@ -503,6 +548,8 @@ class ModelArtsWorkflowManager:
         if not isinstance(datasets, list) or any(item not in allowed for item in datasets):
             raise ValueError("评测任务名称无效，请选择当前 NanoChat 支持的评测项")
         evaluation["datasets"] = list(dict.fromkeys(datasets))
+        if set(datasets) & {'stem', 'core', 'all'} and len(set(datasets)) != 1:
+            raise ValueError('评测预设 stem/core/all 不能与其他预设或单项任务混选')
         for key in (
             "code_obs_uri", "nanochat_repo_obs_uri", "nanochat_model_obs_uri",
             "quadmix_tokenizer_obs_uri", "proxy_validation_obs_uri",
@@ -511,6 +558,10 @@ class ModelArtsWorkflowManager:
             if not value["resources"].get(key):
                 raise ValueError(f"请填写资源 OBS 地址：{key}；代理验证集须指向包含 stem_v2_tokenized.pt 的目录")
             value["resources"][key] = _clean_obs_uri(value["resources"][key])
+        runtime_config = copy.deepcopy(value)
+        for key in ('modelarts', 'commands', 'offline_resources'):
+            runtime_config.pop(key, None)
+        write_config({}, runtime_config)
         return value
 
     def _client(self, record=None) -> ModelArtsClient:

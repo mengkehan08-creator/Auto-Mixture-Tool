@@ -96,7 +96,7 @@ def run_mixing(config: dict[str, Any]) -> None:
             "mix_general_data": False,
         },
         "evaluator_config": {"benchmarks": "stem"},
-        "executor_config": {"device_type": "npu", "device_count": 8},
+        "executor_config": {"device_type": "npu", "device_count": quadmix.get('devices_per_node', 8)},
     }
     result = PipelineManager(WORKSPACE).submit(request)
     if result.get("status") != "SUCCEEDED":
@@ -152,7 +152,7 @@ def run_training(config: dict[str, Any]) -> None:
         "CORE_METRIC_EVERY": str(config["training"].get("core_metric_every", -1)),
         "RESULT_DIR": str(OUTPUT.parent / "reports_output" if config["evaluation"].get("output_obs_uri") else OUTPUT / "training/results"),
         "MID_CHECKPOINTS_OUTPUT_DIR": str(OUTPUT.parent / "models_output" if config["training"].get("output_obs_uri") else OUTPUT / "training/checkpoints"),
-        "EVAL_BENCHMARKS": ",".join(config["evaluation"].get("datasets", ["stem"])),
+        "EVAL_BENCHMARKS": ",".join(config["evaluation"].get("datasets") or ["stem"]),
         "EVALUATION_ENABLED": "1" if config["evaluation"].get("datasets", ["stem"]) else "0",
         "MIX_GENERAL_DATA": "0",
     })

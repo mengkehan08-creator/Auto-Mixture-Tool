@@ -10,8 +10,9 @@ AUTH_CONFIG = {
     'secret': 'REPLACE_ME_SECRET',
     'project': 'REPLACE_ME_PROJECT',
     'enterprise': 'REPLACE_ME_ENTERPRISE',
-    # Exact full training-jobs API URL accepted by this credential.
-    'modelarts_endpoint': 'REPLACE_ME_MODELARTS_ENDPOINT',
+    # Optional independent job URL allowlist. Empty uses the trusted CSB gateway
+    # and account scope; the legacy auth['endpoint'] is never used here.
+    'modelarts_endpoint': '',
     # Empty = raw access_token; set to 'Bearer ' only if required by your gateway.
     'authorization_prefix': '',
     # Optional absolute path to your organization's trusted CA certificate.
