@@ -17,4 +17,6 @@ AUTH_CONFIG = {
     'authorization_prefix': '',
     # Optional absolute path to your organization's trusted CA certificate.
     'ca_bundle': '',
+    # IAM only: False disables server identity verification (credential risk).
+    'iam_verify_ssl': True,
 }

@@ -44,6 +44,21 @@ def test_private_endpoint_binding_and_placeholders():
         post.assert_not_called()
 
 
+@pytest.mark.parametrize('enabled,expected', [(True, '/trusted/ca.pem'), (False, False)])
+def test_iam_tls_private_switch(enabled, expected):
+    cfg = dict(config(), iam_verify_ssl=enabled, ca_bundle='/trusted/ca.pem')
+    with patch('requests.post', return_value=response()) as post:
+        IamTokenProvider(cfg).authorization(cfg['modelarts_endpoint'])
+        assert post.call_args.kwargs['verify'] == expected
+        assert post.call_args.kwargs['allow_redirects'] is False
+
+
+@pytest.mark.parametrize('value', ['False', '', None, 0, 1])
+def test_iam_tls_switch_requires_boolean(value):
+    with pytest.raises(ValueError, match='iam_verify_ssl'):
+        IamTokenProvider(dict(config(), iam_verify_ssl=value))
+
+
 @pytest.mark.parametrize('result', [
     SimpleNamespace(status_code=401, json=lambda: {'message': 'test-only-secret'}),
     response('bad\nheader'),
@@ -67,7 +82,7 @@ def test_unknown_expiry_not_cached():
 
 
 def test_client_gets_fresh_token_on_each_submission():
-    provider = IamTokenProvider(config())
+    provider = IamTokenProvider(dict(config(), iam_verify_ssl=False))
     template = SimpleNamespace(url=config()['modelarts_endpoint'], headers={'Authorization': ''})
     with patch('auto_mixture_tool.modelarts.workflow.get_provider', return_value=provider):
         client = ModelArtsClient(template)

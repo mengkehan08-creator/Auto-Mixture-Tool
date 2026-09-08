@@ -23,6 +23,7 @@ chmod 600 /home/ma-user/work/private_auth/iam_token_provider.py
 - `modelarts_endpoint`：可选的独立目标地址限制；留空使用可信 `csbgw.roma.huawei.com` 网关、当前 account 路径和 ModelArts 作业路由限制，不锁定旧脚本的区域或项目。若使用其他网关，明确填写与 UI `url` 相同的完整创建作业 API 地址。它不是 IAM 取 Token 地址，也不是原脚本里无关的 `endpoint`。
 - `authorization_prefix`：默认空字符串，表示直接使用 access_token。只有网关明确要求时才改成 `Bearer `（末尾有空格）。
 - `ca_bundle`：默认空，使用系统信任证书。内部 CA 不被系统信任时填写可信 CA PEM 文件绝对路径，用于 IAM 及 ModelArts HTTPS 校验，不要关闭证书验证。
+- `iam_verify_ssl`：默认 `True`。如明确接受服务器身份无法验证、Secret 和 Token 可能被截获的风险，可在私有 `auth` 或 `AUTH_CONFIG` 字典中设置为 Python 布尔值 `False`（不能写成字符串）。仅关闭 IAM 获取 Token 请求的证书校验，不关闭 ModelArts 校验，也不自动绕过代理；原脚本的 `verify=False` 不会自动映射到此开关。修改后重启后端。建议取得可信 CA 后恢复 `True`。
 
 不要复制附件中的旧 secret；建议先轮换。不要在 Git 仓库里的模板填真实凭据。私有文件是可信 Python 配置，只允许管理员修改，不能接受来自用户的文件路径。
 

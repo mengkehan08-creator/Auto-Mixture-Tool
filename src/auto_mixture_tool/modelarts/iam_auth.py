@@ -15,6 +15,8 @@ import requests
 class IamTokenProvider:
     def __init__(self, config):
         self.config = dict(config)
+        if type(self.config.get('iam_verify_ssl', True)) is not bool:
+            raise ValueError('iam_verify_ssl 必须为 Python 布尔值 True 或 False')
         self._lock = threading.Lock()
         self._token = ''
         self._expires_at = None
@@ -59,7 +61,9 @@ class IamTokenProvider:
                     'https://iam.his-op.huawei.com/iam/auth/token',
                     json={'data': {'type': 'jwt-token', 'attributes': attributes}},
                     headers={'Content-Type': 'application/json'}, timeout=30,
-                    verify=self.config.get('ca_bundle') or True, allow_redirects=False,
+                    verify=(self.config.get('ca_bundle') or True)
+                    if self.config.get('iam_verify_ssl', True) else False,
+                    allow_redirects=False,
                 )
             except requests.RequestException:
                 raise ValueError('IAM Token 获取失败：请检查网络、代理及 CA 证书') from None
