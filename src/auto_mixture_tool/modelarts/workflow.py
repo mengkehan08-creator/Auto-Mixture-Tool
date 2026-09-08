@@ -19,6 +19,8 @@ from urllib.parse import quote, urlencode, urlsplit
 
 import requests
 from .config_transport import write_config
+from .iam_auth import get_provider
+from .strategy_upload import validate_script, MAX_TOTAL_BYTES
 
 
 SUCCESS_STATES = {"completed", "succeeded", "success"}
@@ -108,7 +110,10 @@ def _state(value: Any) -> str:
 class ModelArtsClient:
     def __init__(self, template) -> None:
         headers, url = template.headers, template.url
-
+        self.provider = get_provider()
+        if self.provider:
+            self.provider.validate_endpoint(url)
+            headers = {**headers, 'Authorization': 'automatic-iam'}
         if not headers.get("Authorization") or "REPLACE_ME" in url or any("REPLACE_ME" in str(v) for v in headers.values()):
             raise ValueError(
                 "请先在 modelarts_training_job.py 中填写 ModelArts API 地址、区域和 Authorization"
@@ -117,16 +122,45 @@ class ModelArtsClient:
         self.headers = dict(headers)
 
     def submit(self, payload: dict[str, Any]) -> dict[str, Any]:
+        headers = self._request_headers(force_refresh=True)
         response = requests.post(
-            self.url, headers=self.headers, json=payload, verify=False, timeout=60
+            self.url, headers=headers, json=payload, verify=self._tls_verify(), timeout=60,
+            allow_redirects=False,
         )
-        return _response_data(response)
+        return self._response(response, headers)
 
     def get(self, job_id: str) -> dict[str, Any]:
+        headers = self._request_headers()
         response = requests.get(
-            f"{self.url}/{job_id}", headers=self.headers, verify=False, timeout=60
+            f"{self.url}/{job_id}", headers=headers, verify=self._tls_verify(), timeout=60,
+            allow_redirects=False,
         )
-        return _response_data(response)
+        return self._response(response, headers)
+
+    def _request_headers(self, force_refresh=False):
+        headers = dict(self.headers)
+        if self.provider:
+            headers['Authorization'] = self.provider.authorization(self.url, force_refresh)
+        return headers
+
+    def _tls_verify(self):
+        # Preserve legacy manual mode; automatically obtained credentials require TLS verification.
+        return (self.provider.config.get('ca_bundle') or True) if self.provider else False
+
+    @staticmethod
+    def _response(response, headers):
+        try:
+            if 300 <= response.status_code < 400:
+                raise ModelArtsRejected('ModelArts API 返回重定向，请核对配置地址')
+            return _response_data(response)
+        except ModelArtsRejected as exc:
+            token = headers.get('Authorization', '')
+            message = str(exc)
+            if token:
+                message = message.replace(token, '[REDACTED]')
+                if token.startswith('Bearer '):
+                    message = message.replace(token[7:], '[REDACTED]')
+            raise ModelArtsRejected(message) from None
 
 
 class ModelArtsWorkflowManager:
@@ -147,7 +181,7 @@ class ModelArtsWorkflowManager:
         self._load_disk()
         for record in list(self.records.values()):
             if record["status"] not in {"SUCCEEDED", "FAILED", "NEEDS_ATTENTION"}:
-                if record["config"].get("modelarts"):
+                if record["config"].get("modelarts") and get_provider() is None:
                     record.update(status="WAITING_AUTH", stage="请在页面重新提供 Authorization 以恢复监控")
                     self._store(record)
                     continue
@@ -208,6 +242,10 @@ class ModelArtsWorkflowManager:
         try:
             settings = value.get("modelarts")
             template = self._configured_template(settings, (settings or {}).get("authorization", ""))
+            provider = get_provider()
+            if provider:
+                provider.validate_endpoint(template.url)
+                template.headers['Authorization'] = 'automatic-iam'
             fields = {
                 "url": template.url,
                 "region": template.headers.get("region"),
@@ -402,7 +440,15 @@ class ModelArtsWorkflowManager:
             raise ValueError("the current mixing job requires one quadmix strategy")
         if kinds.count("quadmix") > 1 or kinds.count("random") > 1:
             raise ValueError("only one quadmix and one random strategy are supported")
+        upload_bytes = 0
         for index, strategy in enumerate(strategies):
+            strategy.pop('local_script_path', None)
+            if strategy.get('script_upload') is not None:
+                if strategy.get('type') not in {'manual', 'random'} or strategy.get('script_obs_uri'):
+                    raise ValueError('人工或随机策略只能选择一种脚本来源：OBS 地址或上传文件')
+                upload_bytes += validate_script(strategy['script_upload'])
+                if upload_bytes > MAX_TOTAL_BYTES:
+                    raise ValueError('本次上传脚本总大小不能超过 128 KiB')
             script = str(strategy.get("script_obs_uri") or "").strip()
             if script:
                 strategy["script_obs_uri"] = _clean_obs_uri(script)
@@ -556,6 +602,9 @@ class ModelArtsWorkflowManager:
         runtime_config = copy.deepcopy(config)
         runtime_config.pop('commands', None)
         runtime_config.pop('offline_resources', None)
+        if stage != 'mixing':
+            for strategy in runtime_config['strategies']:
+                strategy.pop('script_upload', None)
         write_config(env, runtime_config)
         for name, item in env.items():
             if len(str(item).encode('utf-8')) > 4096:
@@ -648,7 +697,7 @@ exec "$PY311" -m auto_mixture_tool.modelarts.stage_runner ''' + stage
             self._store(record)
             try:
                 response = self._client(record).submit(payload)
-            except ModelArtsRejected:
+            except (ModelArtsRejected, ValueError):
                 job["status"] = "FAILED"
                 raise
             if _remote_error(response):

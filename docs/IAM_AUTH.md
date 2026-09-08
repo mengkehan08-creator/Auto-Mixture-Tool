@@ -1,0 +1,49 @@
+# 自动获取 Authorization
+
+仓库根目录的 `iam_token_provider.py` 只含占位符。此功能使用所提供脚本中的 IAM JWT 接口，不包含密码认证或明文磁盘 Token 缓存。默认不启用，不影响手动 Authorization。
+
+## 开发环境配置
+
+先将工具代码更新到包含本功能的版本，再执行：
+
+```bash
+mkdir -p /home/ma-user/work/private_auth
+chmod 700 /home/ma-user/work/private_auth
+cp -n /home/ma-user/work/Auto-Mixture-Tool/iam_token_provider.py /home/ma-user/work/private_auth/iam_token_provider.py
+chmod 600 /home/ma-user/work/private_auth/iam_token_provider.py
+```
+
+仅编辑仓库外的私有副本，在 `AUTH_CONFIG` 中填写：
+
+- `account / secret / project / enterprise`：你的 IAM JWT 认证信息。
+- `modelarts_endpoint`：完整的创建训练作业 API 地址，与 UI 的 endpoint 完全一致（允许末尾 `/` 差异）。不是控制台网页地址。后端拒绝向其他地址发送自动获取的 Token。
+- `authorization_prefix`：默认空字符串，表示直接使用 access_token。只有网关明确要求时才改成 `Bearer `（末尾有空格）。
+- `ca_bundle`：默认空，使用系统信任证书。内部 CA 不被系统信任时填写可信 CA PEM 文件绝对路径，用于 IAM 及 ModelArts HTTPS 校验，不要关闭证书验证。
+
+不要复制附件中的旧 secret；建议先轮换。不要在 Git 仓库里的模板填真实凭据。私有文件是可信 Python 配置，只允许管理员修改，不能接受来自用户的文件路径。
+
+## 启动 UI 后端
+
+```bash
+cd /home/ma-user/work/Auto-Mixture-Tool
+source .venv/bin/activate
+export PYTHONPATH="$PWD:$PWD/src:${PYTHONPATH:-}"
+export AMT_IAM_PROVIDER=/home/ma-user/work/private_auth/iam_token_provider.py
+python -m auto_mixture_tool.cli --workspace "$PWD" serve --host 0.0.0.0 --port 8080
+```
+
+页面 Authorization 留空即可。启用后使用管理员配置的身份，页面手动填写的 Token 不参与远程鉴权。只应向可信内部用户开放后端，自动 IAM 不等于为 UI 增加用户登录和权限隔离。
+
+私有文件及 AMT_IAM_PROVIDER 不上传 OBS、不放进 command，也不放进作业环境变量；只有开发环境提交后端需要它们。修改凭据后重启后端。需要恢复手动模式时，停止后端，执行 `unset AMT_IAM_PROVIDER` 后重新启动。
+
+## 行为与验证边界
+
+- 配置预检查只核对私有配置和目标地址，不请求 IAM、不创建作业。
+- 配比作业和后续训练作业每次真正提交前重新获取 Token；失败时不发送创建作业请求。
+- 查询状态时使用内存缓存，提前 5 分钟刷新；缺少可解析的有效期时不复用缓存，不假定一定有效 24 小时。
+- 自动 Token 不写入实验记录，不回显至页面、不打印；HTTP 失败响应中的相同 Token 会被脱敏。
+- 重启时自动鉴权模式可恢复已有作业监控；对无法确认是否已经提交的作业不自动重复提交。
+- 仅实现本工具 UI/工作流后端自动鉴权；直接运行原 `modelarts_training_job.py` 仍使用脚本自身的手动 headers。
+- 目前通过模拟测试，未用真实密钥验证内部 IAM、证书链和网关 Token 前缀。IAM 获取成功也不保证 ModelArts 权限和资源满足要求。
+
+占位符能降低仓库泄密风险，但不能消除开发环境文件泄露、账户滥用或误上传风险。.gitignore 不能保护已经被 Git 跟踪的文件，因此务必填写仓库外的副本。

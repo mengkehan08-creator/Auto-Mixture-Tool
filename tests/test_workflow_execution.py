@@ -130,6 +130,17 @@ def test_remote_error_details_clear_progress(manager):
     assert result["outputs"]["sampled"]
 
 
+def test_auth_failure_before_submission_is_not_ambiguous(manager):
+    def fail(_):
+        raise ValueError('IAM Token 获取失败')
+    manager.client.submit = fail
+    result = finish(manager, manager.create(config()))
+    assert result['status'] == 'FAILED'
+    assert result['jobs'][0]['status'] == 'FAILED'
+    assert result['progress'] == 0
+    assert result['jobs'][1]['id'] is None
+
+
 def test_response_console_link_and_http_error():
     from auto_mixture_tool.modelarts.workflow import _console_url, _response_data, ModelArtsRejected
     assert _console_url({"metadata": {"console_url": "https://console.example/jobs/123"}}) == "https://console.example/jobs/123"

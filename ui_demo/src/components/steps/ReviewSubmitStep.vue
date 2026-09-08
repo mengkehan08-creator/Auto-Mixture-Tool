@@ -30,7 +30,8 @@ function normalizedStrategies() {
     search_count: item.searchCount,
     devices_per_node: item.devicesPerNode,
     ratios: item.ratios,
-    script_obs_uri: item.source === 'script' ? item.scriptObsUri : '',
+    script_obs_uri: item.source === 'script' && item.scriptInput !== 'upload' ? item.scriptObsUri : '',
+    ...(item.source === 'script' && item.scriptInput === 'upload' ? { script_upload: item.scriptUpload || { name: '', content: '' } } : {}),
     script_config: item.scriptConfig || {},
   }))
 }
@@ -145,10 +146,10 @@ onBeforeUnmount(() => window.clearInterval(timer))
   <section class="step-panel">
     <div class="section-title-row"><div><h2>任务配置</h2><p>一次实验提交两个作业；配比作业成功后，平台自动提交训练评测作业。</p></div></div>
     <h3>ModelArts 作业配置</h3>
-    <p class="path-preview">已填入脚本默认配置，可编辑。Authorization 需手动填写，仅保留在内存中。</p>
+    <p class="path-preview">已填入脚本默认配置，可编辑。后端启用自动 IAM 鉴权时，Authorization 可留空。</p>
     <div class="form-grid two-cols">
       <label v-for="key in ['endpoint', 'region', 'workspace_id', 'workspace_name', 'image_url', 'image_repo_id', 'flavor_id', 'pool_id']" :key="key" class="field"><span>{{ fieldLabels[key] }}</span><input v-model="runtime.modelarts[key]" autocomplete="off" /></label>
-      <label class="field"><span>Authorization</span><input v-model="runtime.modelarts.authorization" type="password" autocomplete="off" /><small>填写完整 Authorization 值。请通过受信任的 HTTPS 页面填写，不要分享或截图凭据。</small></label>
+      <label class="field"><span>Authorization</span><input v-model="runtime.modelarts.authorization" type="password" autocomplete="off" /><small>未启用自动 IAM 时填写完整值；已启用时由后端获取，不回显 Token。请勿在此填写 secret。</small></label>
     </div>
     <div class="review-grid">
       <article><span>training.output_obs_uri</span><strong class="break-path">{{ training.outputObsUri || '沿用实验输出目录' }}</strong><small>模型与检查点 · 自动追加 runs/实验名称/</small></article>

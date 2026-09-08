@@ -50,3 +50,8 @@ platform-server-error.log
 
 # Legacy local ModelArts credentials (not used by the current submit script)
 .env.modelarts
+
+# Private IAM copies (keep actual credentials outside the repository).
+iam_token_provider.local.py
+iam_tokens.json
+private_auth/

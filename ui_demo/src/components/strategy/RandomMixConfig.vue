@@ -1,5 +1,6 @@
 <script setup>
 import { Code2, Library } from '@lucide/vue'
+import StrategyScriptInput from './StrategyScriptInput.vue'
 
 defineProps({ modelValue: { type: Object, required: true } })
 </script>
@@ -13,15 +14,14 @@ defineProps({ modelValue: { type: Object, required: true } })
   <section class="strategy-source">
     <div class="source-tabs" role="group" aria-label="策略来源">
       <button type="button" :class="{ active: modelValue.source === 'builtin' }" @click="modelValue.source = 'builtin'"><Library :size="17" /><span><strong>选择内置方法</strong><small>使用平台已提供的随机采样方式</small></span></button>
-      <button type="button" :class="{ active: modelValue.source === 'script' }" @click="modelValue.source = 'script'"><Code2 :size="17" /><span><strong>使用自定义采样脚本</strong><small>从已挂载的 OBS 脚本加载采样策略</small></span></button>
+      <button type="button" :class="{ active: modelValue.source === 'script' }" @click="modelValue.source = 'script'"><Code2 :size="17" /><span><strong>使用自定义采样脚本</strong><small>填写 OBS 地址，或上传、拖拽脚本</small></span></button>
     </div>
 
     <div v-if="modelValue.source === 'builtin'" class="source-content">
       <label class="field"><span>内置采样方法</span><select v-model="modelValue.builtinMethod"><option value="uniform">均匀随机采样</option></select><small>更换随机采样逻辑请填写策略脚本。</small></label>
     </div>
     <div v-else class="source-content">
-      <label class="field"><span>策略脚本 OBS 地址</span><input v-model="modelValue.scriptObsUri" placeholder="obs://bucket/path/random_strategy.py" /><small>请先上传可信的 .py 脚本，平台仅传递 OBS 路径。</small></label>
-      <div class="script-notice"><Code2 :size="17" /><span><strong>脚本须符合平台采样接口</strong><small>脚本在候选数据中执行采样；数据预算仍由平台控制。仅允许可信内部代码。</small></span></div>
+      <StrategyScriptInput :model-value="modelValue" />
     </div>
   </section>
 </template>

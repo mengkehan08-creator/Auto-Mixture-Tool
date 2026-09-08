@@ -27,4 +27,12 @@ test('copy restores settings but never credentials or job identifiers', () => {
   copy.strategies[0].ratios.数学 = 0.5
   assert.equal(source.strategies[0].ratios.数学, 1)
   assert.ok(!JSON.stringify(copy).includes('old-request'))
+  source.strategies[0].script_obs_uri = ''
+  source.strategies[0].script_upload = { name: 'custom.py', content: 'source text' }
+  const uploadedCopy = copyWorkflow(source)
+  assert.equal(uploadedCopy.strategies[0].source, 'script')
+  assert.equal(uploadedCopy.strategies[0].scriptInput, 'upload')
+  assert.deepEqual(uploadedCopy.strategies[0].scriptUpload, source.strategies[0].script_upload)
+  uploadedCopy.strategies[0].scriptUpload.content = 'edited'
+  assert.equal(source.strategies[0].script_upload.content, 'source text')
 })

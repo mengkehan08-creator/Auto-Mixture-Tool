@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from .config_transport import read_config
 from .preflight import check_mounted_assets
+from .strategy_upload import materialize_scripts
 
 
 WORKSPACE = Path("/home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool")
@@ -171,7 +173,9 @@ def main() -> None:
     config = _config()
     check_mounted_assets(config, args.stage)
     if args.stage == "mixing":
-        run_mixing(config)
+        with tempfile.TemporaryDirectory(prefix='amt-strategies-') as directory:
+            materialize_scripts(config, directory)
+            run_mixing(config)
     else:
         run_training(config)
 
