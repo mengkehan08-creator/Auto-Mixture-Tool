@@ -6,6 +6,7 @@ export function copyWorkflow(config) {
   const evaluation = createEvaluationConfig()
   const resources = config.resources || {}
   Object.assign(runtime, {
+    priority: config.priority ?? 1,
     commands: config.commands ? { ...config.commands } : null,
     experimentName: config.experiment_name || '', inputDataObsUri: config.input_data_obs_uri,
     outputRootObsUri: config.output_root_obs_uri, mixingNodes: config.mixing_nodes,

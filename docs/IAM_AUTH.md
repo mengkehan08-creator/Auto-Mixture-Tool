@@ -4,6 +4,10 @@
 
 ## 开发环境配置
 
+也支持直接把原始 `iam_token_provider_test.py` 的完整内容粘贴到仓库外的 `iam_token_provider.py`。加载器只通过 AST 读取末尾的 `auth = {...}` 字面量字典，不执行 imports、类定义、Token 请求或 print。无须修改原脚本函数；实际鉴权由工具内的安全实现负责。旧字典的 `endpoint` 若为项目 API 基地址，会追加 `/training-jobs`，须与 UI 的创建作业地址一致；不要沿用不匹配区域或项目的示例地址。仍使用 JWT account/secret，不使用旧脚本的静态 token 或密码认证分支。
+
+旧脚本的 `verify=False`、全局代理修改和打印行为不会生效；如需要内部 CA，向 `auth` 字典补充 `ca_bundle`。文件替换后重启后端，保留 `AMT_IAM_PROVIDER` 设置即可。不要单独执行私有原脚本，因为它自身仍会打印 Token。
+
 先将工具代码更新到包含本功能的版本，再执行：
 
 ```bash

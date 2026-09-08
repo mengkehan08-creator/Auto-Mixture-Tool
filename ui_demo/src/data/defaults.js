@@ -87,6 +87,7 @@ export const createEvaluationConfig = () => ({
 })
 
 export const createRuntimeConfig = () => ({
+  priority: 1,
   offlineResources: [
     { role: 'code_obs_uri', name: 'code_dir', uri: `${obsRoot}Auto-Mixture-Tool/` },
     { role: 'quadmix_tokenizer_obs_uri', name: 'quadmix_tokenizer_dir', uri: `${obsRoot}gpt-neox-tokenizer/` },

@@ -101,3 +101,29 @@ def test_opt_in_and_placeholder_template(monkeypatch):
     with pytest.raises(ValueError):
         get_provider().validate_endpoint(config()['modelarts_endpoint'])
     _load_provider.cache_clear()
+
+
+def test_original_script_read_without_execution(tmp_path, capsys):
+    path = tmp_path / 'iam_token_provider.py'
+    legacy = config()
+    legacy['endpoint'] = 'https://gateway.example/project'
+    legacy.pop('modelarts_endpoint')
+    path.write_text("import does_not_exist\nauth = " + repr(legacy)
+                    + "\nprint('must-not-print')\nraise RuntimeError('must-not-execute')\n", encoding='utf-8')
+    _load_provider.cache_clear()
+    with patch('requests.post') as post:
+        provider = _load_provider(str(path))
+        provider.validate_endpoint('https://gateway.example/project/training-jobs')
+        post.assert_not_called()
+    assert capsys.readouterr().out == ''
+    _load_provider.cache_clear()
+
+
+def test_dynamic_config_rejected_without_execution(tmp_path):
+    path = tmp_path / 'private.py'
+    path.write_text("auth = dict(secret='private-value')", encoding='utf-8')
+    _load_provider.cache_clear()
+    with pytest.raises(ValueError) as error:
+        _load_provider(str(path))
+    assert 'private-value' not in str(error.value)
+    _load_provider.cache_clear()

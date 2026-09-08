@@ -73,6 +73,21 @@ def test_separate_model_and_report_outputs(manager):
         manager.create(body)
 
 
+def test_priority_applies_to_both_jobs_and_copy(manager):
+    body = config()
+    body['priority'] = 2
+    with patch.object(manager, '_start'):
+        created = manager.create(body)
+    record = manager.records[created['id']]
+    for stage in ('mixing', 'training'):
+        assert manager._payload(record, stage)['spec']['schedule_policy']['priority'] == 2
+    assert manager.copy_configuration(created['id'])['priority'] == 2
+    for invalid in (0, 4, True, '2'):
+        body['priority'] = invalid
+        with pytest.raises(ValueError, match='priority'):
+            manager.create(body)
+
+
 def test_ui_parameters_and_credentials_are_isolated(manager):
     body = config()
     body["modelarts"] = {

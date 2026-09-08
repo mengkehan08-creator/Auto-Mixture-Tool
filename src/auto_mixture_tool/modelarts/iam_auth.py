@@ -1,6 +1,6 @@
 """Optional server-private IAM JWT authentication; credentials never enter job config."""
 
-import importlib.util
+import ast
 import os
 import threading
 from datetime import datetime, timedelta, timezone
@@ -78,12 +78,27 @@ def _load_provider(path):
     if not source.is_absolute() or not source.is_file():
         raise ValueError('AMT_IAM_PROVIDER 必须指向已存在的私有 Python 文件绝对路径')
     try:
-        spec = importlib.util.spec_from_file_location('_amt_private_iam', source)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return IamTokenProvider(module.AUTH_CONFIG)
+        tree = ast.parse(source.read_text(encoding='utf-8-sig'))
+        assignments = {}
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id in {'AUTH_CONFIG', 'auth'}:
+                        assignments[target.id] = ast.literal_eval(node.value)
+        config = assignments.get('AUTH_CONFIG', assignments.get('auth'))
+        if not isinstance(config, dict):
+            raise ValueError('missing literal config')
+        config = dict(config)
+        if 'AUTH_CONFIG' not in assignments:
+            # Legacy sample uses a project API base address, not the job endpoint.
+            endpoint = str(config.get('modelarts_endpoint') or config.get('endpoint') or '').rstrip('/')
+            if endpoint and not endpoint.endswith('/training-jobs'):
+                endpoint += '/training-jobs'
+            config['modelarts_endpoint'] = endpoint
+            config['project'] = config.get('project') or config.get('account')
+        return IamTokenProvider(config)
     except Exception:
-        raise ValueError('无法加载 IAM 私有配置，请检查文件及 AUTH_CONFIG；详细内容不会输出') from None
+        raise ValueError('无法加载 IAM 私有配置：需要 AUTH_CONFIG 或 auth 字面量字典；详细内容不会输出') from None
 
 
 def get_provider():

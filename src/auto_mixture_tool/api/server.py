@@ -61,6 +61,7 @@ class WorkflowRequest(BaseModel):
     experiment_name: str | None = None
     input_data_obs_uri: str
     output_root_obs_uri: str
+    priority: int = Field(default=1, ge=1, le=3)
     mixing_nodes: int = Field(default=2, ge=1, le=16)
     training_nodes: int = Field(default=2, ge=1, le=16)
     full_scan: bool = False
@@ -185,11 +186,13 @@ def validate_workflow(payload: WorkflowRequest) -> dict[str, Any]:
 
 @app.get("/api/v1/workflow-defaults")
 def workflow_defaults() -> dict[str, Any]:
+    import os
     defaults_path = _workflow_manager().workspace / 'configs/modelarts_ui_defaults.json'
     import json
     settings = json.loads(defaults_path.read_text(encoding='utf-8')) if defaults_path.is_file() else {}
     allowed = {'endpoint', 'region', 'workspace_id', 'workspace_name', 'image_url', 'image_repo_id', 'flavor_id', 'pool_id'}
-    return {"modelarts": {key: value for key, value in settings.items() if key in allowed},
+    return {"auth_mode": "iam" if os.environ.get('AMT_IAM_PROVIDER', '').strip() else "manual",
+            "modelarts": {key: value for key, value in settings.items() if key in allowed},
             "commands": {stage: ModelArtsWorkflowManager._command(stage) for stage in ("mixing", "training")}}
 
 

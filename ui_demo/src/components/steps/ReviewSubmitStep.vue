@@ -11,6 +11,7 @@ const error = ref('')
 const workflows = ref([])
 const connectionError = ref('')
 const validation = ref(null)
+const authMode = ref('manual')
 const pendingId = ref('')
 const emit = defineEmits(['created'])
 let requestId = ''
@@ -40,6 +41,7 @@ function requestBody() {
   return {
     ...(props.runtime.commands ? { commands: props.runtime.commands } : {}),
     modelarts: props.runtime.modelarts,
+    priority: props.runtime.priority ?? 1,
     offline_resources: props.runtime.offlineResources,
     experiment_name: props.runtime.experimentName || null,
     input_data_obs_uri: props.runtime.inputDataObsUri,
@@ -131,6 +133,8 @@ async function submit() {
 async function loadCommands(reset = false) {
   try {
     const defaults = await apiRequest('workflow-defaults')
+    authMode.value = defaults.auth_mode || 'manual'
+    if (authMode.value === 'iam') props.runtime.modelarts.authorization = ''
     if (reset || !props.runtime.commands) props.runtime.commands = defaults.commands
     for (const [key, value] of Object.entries(defaults.modelarts || {})) {
       if (!props.runtime.modelarts[key]) props.runtime.modelarts[key] = value
@@ -146,10 +150,12 @@ onBeforeUnmount(() => window.clearInterval(timer))
   <section class="step-panel">
     <div class="section-title-row"><div><h2>任务配置</h2><p>一次实验提交两个作业；配比作业成功后，平台自动提交训练评测作业。</p></div></div>
     <h3>ModelArts 作业配置</h3>
-    <p class="path-preview">已填入脚本默认配置，可编辑。后端启用自动 IAM 鉴权时，Authorization 可留空。</p>
+    <p class="path-preview">已填入脚本默认配置，可编辑。</p>
     <div class="form-grid two-cols">
       <label v-for="key in ['endpoint', 'region', 'workspace_id', 'workspace_name', 'image_url', 'image_repo_id', 'flavor_id', 'pool_id']" :key="key" class="field"><span>{{ fieldLabels[key] }}</span><input v-model="runtime.modelarts[key]" autocomplete="off" /></label>
-      <label class="field"><span>Authorization</span><input v-model="runtime.modelarts.authorization" type="password" autocomplete="off" /><small>未启用自动 IAM 时填写完整值；已启用时由后端获取，不回显 Token。请勿在此填写 secret。</small></label>
+      <label class="field"><span>priority（任务优先级）</span><select v-model.number="runtime.priority"><option :value="1">1（默认）</option><option :value="2">2</option><option :value="3">3（需高优先级权限）</option></select><small>同时用于配比和训练作业。</small></label>
+      <label v-if="authMode === 'iam'" class="field"><span>Authorization</span><input value="自动获取（提交时执行）" readonly /><small>已启用私有 IAM 配置；Token 仅用于后端请求，不在页面显示。</small></label>
+      <label v-else class="field"><span>Authorization</span><input v-model="runtime.modelarts.authorization" type="password" autocomplete="off" /><small>当前为手动模式。配置 AMT_IAM_PROVIDER 并重启后端，可自动获取。</small></label>
     </div>
     <div class="review-grid">
       <article><span>training.output_obs_uri</span><strong class="break-path">{{ training.outputObsUri || '沿用实验输出目录' }}</strong><small>模型与检查点 · 自动追加 runs/实验名称/</small></article>

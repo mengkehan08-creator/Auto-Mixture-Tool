@@ -372,6 +372,10 @@ class ModelArtsWorkflowManager:
 
     def _validate(self, config: dict[str, Any]) -> dict[str, Any]:
         value = copy.deepcopy(config)
+        priority = value.get('priority', 1)
+        if type(priority) is not int or priority not in (1, 2, 3):
+            raise ValueError('priority 必须为 1、2 或 3')
+        value['priority'] = priority
         for section in ("training", "evaluation"):
             uri = value.get(section, {}).get("output_obs_uri")
             if uri:
@@ -525,7 +529,7 @@ class ModelArtsWorkflowManager:
         payload["metadata"]["name"] = job["name"]
         payload["metadata"]["description"] = f"Auto-Mixture {stage} stage"
         payload["spec"]["resource"]["node_count"] = job["nodes"]
-        payload["spec"].setdefault("schedule_policy", {})["priority"] = 1
+        payload["spec"].setdefault("schedule_policy", {})["priority"] = config.get('priority', 1)
         env = payload["algorithm"]["environments"]
         env["AMT_RUN_ID"] = record["name"]
         env["AMT_EXPECTED_NODES"] = str(job["nodes"])
