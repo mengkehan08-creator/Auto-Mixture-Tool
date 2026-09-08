@@ -225,6 +225,14 @@ def workflow_configuration(workflow_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.delete("/api/v1/workflows/{workflow_id}", status_code=202)
+def delete_workflow(workflow_id: str) -> dict[str, Any]:
+    try:
+        return _workflow_manager().delete(workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 def main() -> None:
     import argparse
     import uvicorn

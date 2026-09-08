@@ -1,5 +1,21 @@
 <script setup>
-defineProps({ config: { type: Object, required: true }, runtime: { type: Object, required: true } })
+import { computed, ref } from 'vue'
+const props = defineProps({ config: { type: Object, required: true }, runtime: { type: Object, required: true } })
+const automaticSteps = computed(() => props.config.numIterations === 0)
+const previousCustomSteps = ref('')
+function setStepMode(automatic) {
+  if (automatic === automaticSteps.value) return
+  if (automatic) {
+    previousCustomSteps.value = props.config.numIterations
+    props.config.numIterations = 0
+  } else {
+    props.config.numIterations = previousCustomSteps.value
+  }
+}
+function editSteps(event) {
+  const value = event.target.value
+  props.config.numIterations = value === '' || Number(value) === 0 ? '' : Number(value)
+}
 </script>
 
 <template>
@@ -23,8 +39,23 @@ defineProps({ config: { type: Object, required: true }, runtime: { type: Object,
 
     <div class="config-block"><h3>训练参数</h3><div class="form-grid three-cols"><label class="field"><span>目标参数/数据比例</span><input v-model.number="config.targetParamDataRatio" type="number" min="0.01" step="0.01" /></label><label class="field"><span>每节点 NPU 数</span><input v-model.number="config.devicesPerNode" type="number" min="1" max="8" /></label><label class="field"><span>训练评测作业节点数</span><input v-model.number="config.nodes" type="number" min="1" max="16" /><small>与配比作业独立配置</small></label></div></div>
 
-    <div class="config-block"><h3>训练步数与批量</h3><div class="form-grid two-cols">
-      <label class="field"><span>训练步数</span><input v-model.number="config.numIterations" type="number" min="0" step="1" /><small>0：按数据预算自动计算；正整数：每种配比模型均使用指定步数。不会改变配比采样量。</small></label>
+    <div class="config-block"><h3>训练步数与批量</h3>
+      <div class="training-step-control">
+        <div class="step-mode-heading"><strong>训练步数设置</strong><span>所有配比方案采用相同步数规则</span></div>
+        <div class="step-mode-options" role="group" aria-label="训练步数计算方式">
+          <button type="button" :aria-pressed="automaticSteps" :class="{ selected: automaticSteps }" @click="setStepMode(true)">
+            <span class="mode-dot" aria-hidden="true"></span><span><strong>自动计算 <small>默认</small></strong><em>根据共同训练预算确定步数</em></span>
+          </button>
+          <button type="button" :aria-pressed="!automaticSteps" :class="{ selected: !automaticSteps }" @click="setStepMode(false)">
+            <span class="mode-dot" aria-hidden="true"></span><span><strong>自定义步数</strong><em>手动指定固定训练步数</em></span>
+          </button>
+        </div>
+        <p v-if="automaticSteps" class="automatic-step-note">训练步数由共同 Token 预算和全局批量计算，运行时确定；同次实验的各配比模型使用相同步数。</p>
+        <label v-else class="field custom-step-field"><span>自定义训练步数</span><input :value="config.numIterations" @input="editSteps" type="number" min="1" step="1" required placeholder="请输入正整数，例如 1000" /><small>每种配比模型均训练指定步数，不改变采样集大小。</small>
+          <small v-if="!Number.isInteger(config.numIterations) || config.numIterations < 1" class="step-input-error">请填写大于 0 的整数。</small>
+        </label>
+      </div>
+      <div class="form-grid two-cols">
       <label class="field"><span>单卡批量大小</span><input v-model.number="config.deviceBatchSize" type="number" min="1" step="1" /><small>默认 1。增大会增加显存占用，需与模型和全局批量兼容。</small></label>
       <label class="field"><span>验证损失检查间隔</span><input v-model.number="config.evalEvery" type="number" min="-1" step="1" /><small>单位：训练步数。-1：关闭；正整数：每隔指定步数检查验证损失。</small></label>
       <label class="field"><span>任务评测间隔</span><input v-model.number="config.coreMetricEvery" type="number" min="-1" step="1" /><small>单位：训练步数。-1：关闭；正整数：每隔指定步数运行任务评测。与训练结束后的评测独立。</small></label>
@@ -41,6 +72,25 @@ defineProps({ config: { type: Object, required: true }, runtime: { type: Object,
 </template>
 
 <style scoped>
+.training-step-control { margin: 0 0 22px; padding: 18px; border: 1px solid #dfe7f6; border-radius: 12px; background: #f8faff; }
+.step-mode-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.step-mode-heading strong { font-size: 14px; }
+.step-mode-heading > span { font-size: 12px; color: #7b87a0; }
+.step-mode-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.step-mode-options button { display: flex; align-items: center; gap: 12px; text-align: left; padding: 16px; border: 1px solid #dfe6f2; border-radius: 10px; color: #506079; background: white; }
+.step-mode-options button.selected { color: #355ec5; border-color: #809fef; background: #f0f5ff; box-shadow: 0 0 0 3px #5379dc09; }
+.step-mode-options strong { display: block; font-size: 14px; }
+.step-mode-options strong small { font-size: 10px; margin-left: 6px; border-radius: 4px; background: #e0eaff; padding: 2px 5px; color: #466bc2; }
+.step-mode-options em { display: block; font-style: normal; font-size: 12px; margin-top: 5px; color: #7b87a0; }
+.mode-dot { width: 17px; height: 17px; flex-shrink: 0; border: 1px solid #c5d0e3; border-radius: 50%; background: white; }
+.selected .mode-dot { border: 5px solid #5b7fe0; }
+.automatic-step-note { margin: 15px 0 0; font-size: 12px; color: #71809a; }
+.custom-step-field { margin: 16px 0 0; max-width: 420px; }
+.custom-step-field .step-input-error { color: #bb3f51; }
+@media (max-width: 640px) {
+  .step-mode-options { grid-template-columns: 1fr; }
+  .step-mode-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+}
 .resource-row {
   display: grid;
   grid-template-columns: minmax(140px, 1fr) minmax(0, 2.4fr) auto;

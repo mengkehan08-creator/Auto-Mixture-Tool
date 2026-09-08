@@ -137,6 +137,17 @@ class ModelArtsClient:
         )
         return self._response(response, headers)
 
+    def stop(self, job_id: str) -> dict[str, Any]:
+        headers = self._request_headers(force_refresh=True)
+        response = requests.post(
+            f"{self.url}/{quote(job_id, safe='')}/actions", headers=headers,
+            json={"action_type": "terminate"}, verify=self._tls_verify(), timeout=60,
+            allow_redirects=False,
+        )
+        if response.status_code == 204:
+            return {}
+        return self._response(response, headers)
+
     def _request_headers(self, force_refresh=False):
         headers = dict(self.headers)
         if self.provider:
@@ -176,6 +187,7 @@ class ModelArtsWorkflowManager:
         self._template_cache = None
         self._authorizations: dict[str, str] = {}
         self._active: set[str] = set()
+        self._deleting: set[str] = set()
         self._stopping = threading.Event()
 
     def resume(self) -> None:
@@ -188,6 +200,10 @@ class ModelArtsWorkflowManager:
             automatic_auth = False
             auth_error = str(exc)
         for record in list(self.records.values()):
+            if record.get('delete_requested'):
+                if record['status'] != 'DELETED':
+                    self._start_delete(record['id'])
+                continue
             if record["status"] not in {"SUCCEEDED", "FAILED", "NEEDS_ATTENTION"}:
                 if auth_error or (record["config"].get("modelarts") and not automatic_auth):
                     record.update(status="WAITING_AUTH", stage=auth_error or "请在页面重新提供 Authorization 以恢复监控")
@@ -213,10 +229,72 @@ class ModelArtsWorkflowManager:
 
     def _start(self, workflow_id: str) -> None:
         with self._lock:
-            if workflow_id in self._active:
+            if workflow_id in self._active or self.records[workflow_id].get('delete_requested'):
                 return
             self._active.add(workflow_id)
         threading.Thread(target=self._run, args=(workflow_id,), daemon=True).start()
+
+    def delete(self, workflow_id: str) -> dict[str, Any]:
+        self.get(workflow_id)
+        record = self.records[workflow_id]
+        with self._lock:
+            if workflow_id in self._deleting:
+                return self.public(record)
+            record.update(delete_requested=True, status='DELETING', progress=0,
+                          stage='正在终止关联作业，确认后删除记录', message='')
+        self._store(record)
+        self._start_delete(workflow_id)
+        return self.public(record)
+
+    def _start_delete(self, workflow_id):
+        with self._lock:
+            if workflow_id in self._deleting:
+                return
+            self._deleting.add(workflow_id)
+        threading.Thread(target=self._delete_run, args=(workflow_id,), daemon=True).start()
+
+    def _delete_run(self, workflow_id):
+        record = self.records[workflow_id]
+        try:
+            # Let any in-flight creation request finish and persist its job ID.
+            while workflow_id in self._active:
+                if self._stopping.wait(0.1):
+                    return
+            for job in record['jobs']:
+                if self._stopping.is_set():
+                    return
+                if not job.get('id'):
+                    if job['status'] == 'SUBMITTING':
+                        raise ValueError('创建请求结果不明确，无法确定远程作业 ID；请在 ModelArts 核对并终止作业，记录暂不删除')
+                    continue
+                client = self._client(record)
+                status = _state(client.get(job['id'])).lower()
+                if status not in SUCCESS_STATES | FAILURE_STATES:
+                    client.stop(job['id'])
+                    # A successful stop response is not confirmation of termination.
+                    for _ in range(24):
+                        status = _state(client.get(job['id'])).lower()
+                        if status in SUCCESS_STATES | FAILURE_STATES:
+                            break
+                        if self._stopping.wait(5):
+                            return
+                    else:
+                        raise ValueError('已请求终止，但尚未确认远程作业结束；记录保留，请稍后重试删除')
+                job['status'] = status.upper()
+                self._store(record)
+            record.update(status='DELETED', progress=0, stage='已删除', message='')
+            self._authorizations.pop(workflow_id, None)
+        except Exception as exc:
+            message = str(exc)
+            for secret in self._authorizations.values():
+                if secret:
+                    message = message.replace(secret, '[REDACTED]')
+            record.update(status='DELETE_FAILED', progress=0,
+                          stage='删除未完成，已禁止后续作业自动提交', message=message)
+        finally:
+            self._store(record)
+            with self._lock:
+                self._deleting.discard(workflow_id)
 
     def _template(self):
         if self._template_cache is None:
@@ -293,6 +371,8 @@ class ModelArtsWorkflowManager:
         if request_id:
             for existing in self.records.values():
                 if existing["config"].get("request_id") == request_id:
+                    if existing.get('delete_requested'):
+                        raise ValueError('原实验已申请删除，请使用新的请求标识创建实验')
                     if existing["config"] != normalized:
                         raise ValueError("重复请求标识对应的配置不同，请重新检查配置后提交")
                     return self.public(existing)
@@ -348,7 +428,7 @@ class ModelArtsWorkflowManager:
 
     def list(self) -> list[dict[str, Any]]:
         self._load_disk()
-        return sorted((self.public(item) for item in self.records.values()),
+        return sorted((self.public(item) for item in self.records.values() if item.get('status') != 'DELETED'),
                       key=lambda item: self._created_timestamp(item), reverse=True)
 
     @staticmethod
@@ -362,7 +442,7 @@ class ModelArtsWorkflowManager:
         if not re.fullmatch(r"[0-9a-f]{12}", workflow_id):
             raise ValueError("invalid workflow id")
         self._load_disk()
-        if workflow_id not in self.records:
+        if workflow_id not in self.records or self.records[workflow_id]['status'] == 'DELETED':
             raise ValueError("workflow not found")
         return self.public(self.records[workflow_id])
 
@@ -728,14 +808,22 @@ exec "$PY311" -m auto_mixture_tool.modelarts.stage_runner ''' + stage
 
     def _run(self, workflow_id: str) -> None:
         record = self.records[workflow_id]
+        if record.get('delete_requested'):
+            with self._lock:
+                self._active.discard(workflow_id)
+            return
         try:
             if not self._submit_and_wait(record, 0, "mixing", 15, 45):
+                return
+            if record.get('delete_requested'):
                 return
             record["status"] = "MIXING_SUCCEEDED"
             record["progress"] = 50
             record["stage"] = "配比完成，正在自动提交训练评测作业"
             self._store(record)
             if not self._submit_and_wait(record, 1, "training", 60, 95):
+                return
+            if record.get('delete_requested'):
                 return
             record.update(status="SUCCEEDED", progress=100, stage="全部作业完成")
         except Exception as exc:
@@ -748,6 +836,8 @@ exec "$PY311" -m auto_mixture_tool.modelarts.stage_runner ''' + stage
                 message = message.replace(secret, "[REDACTED]")
             record["message"] = message
         finally:
+            if record.get('delete_requested'):
+                record.update(status='DELETING', progress=0, stage='正在终止关联作业，确认后删除记录')
             self._store(record)
             with self._lock:
                 self._active.discard(workflow_id)
@@ -759,7 +849,7 @@ exec "$PY311" -m auto_mixture_tool.modelarts.stage_runner ''' + stage
         job = record["jobs"][index]
         if job["status"] == "SUCCEEDED":
             return True
-        if self._stopping.is_set():
+        if self._stopping.is_set() or record.get('delete_requested'):
             return False
         job_id = job.get("id")
         if not job_id:
@@ -791,7 +881,7 @@ exec "$PY311" -m auto_mixture_tool.modelarts.stage_runner ''' + stage
         self._store(record)
         while True:
             time.sleep(float(record["config"].get("poll_interval_seconds", 15)))
-            if self._stopping.is_set():
+            if self._stopping.is_set() or record.get('delete_requested'):
                 return False
             try:
                 response = self._client(record).get(str(job_id))

@@ -162,6 +162,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <article><span>evaluation.output_obs_uri</span><strong class="break-path">{{ evaluation.outputObsUri || '沿用实验输出目录' }}</strong><small>评测与对比报告 · 自动追加 runs/实验名称/</small></article>
       <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ runtime.mixingNodes }} 节点 · 先校验再生成全部采样集</small></article>
       <article><span>训练评测作业</span><strong>{{ training.framework }}</strong><small>{{ training.nodes }} 节点 · 依次处理全部采样集</small></article>
+      <article><span>training.num_iterations</span><strong>{{ training.numIterations === 0 ? '自动计算' : `${training.numIterations} 步` }}</strong><small>{{ training.numIterations === 0 ? '按共同训练预算计算' : '各配比模型采用相同固定步数' }}</small></article>
       <article><span>输出根目录</span><strong class="break-path">{{ runtime.outputRootObsUri }}</strong><small>按实验名称隔离 mixing / sampled / training</small></article>
     </div>
     <div class="config-block">
