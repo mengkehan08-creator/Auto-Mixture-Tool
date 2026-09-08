@@ -56,6 +56,8 @@ def test_separate_model_and_report_outputs(manager):
     with patch.object(manager, '_start'):
         created = manager.create(body)
     record = manager.records[created['id']]
+    for stage in ('mixing', 'training'):
+        assert manager._payload(record, stage)['spec']['schedule_policy']['priority'] == 1
     inputs = manager._payload(record, 'mixing')['algorithm']['inputs']
     assert all(item['remote']['obs']['obs_url'].endswith('/') for item in inputs)
     outputs = manager._payload(record, 'training')['algorithm']['outputs']

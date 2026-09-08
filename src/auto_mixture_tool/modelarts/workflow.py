@@ -479,6 +479,7 @@ class ModelArtsWorkflowManager:
         payload["metadata"]["name"] = job["name"]
         payload["metadata"]["description"] = f"Auto-Mixture {stage} stage"
         payload["spec"]["resource"]["node_count"] = job["nodes"]
+        payload["spec"].setdefault("schedule_policy", {})["priority"] = 1
         env = payload["algorithm"]["environments"]
         env["AMT_RUN_ID"] = record["name"]
         env["AMT_EXPECTED_NODES"] = str(job["nodes"])

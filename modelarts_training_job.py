@@ -228,6 +228,7 @@ job_data = {
         ],
     },
     "spec": {
+        "schedule_policy": {"priority": 1},
         "resource": {
             "policy": "regular",
             "flavor_id": "modelarts.pool.visual.8xlarge",
