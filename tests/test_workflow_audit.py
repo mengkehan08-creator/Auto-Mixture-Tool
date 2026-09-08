@@ -9,6 +9,18 @@ from test_modelarts_workflow import config
 from test_workflow_execution import manager
 
 
+def test_workflows_sorted_by_creation_time_including_legacy_records(manager):
+    manager.records = {
+        'ffffffffff01': {'id': 'ffffffffff01', 'name': 'old-20260907-120000-000-abcdef'},
+        '000000000002': {'id': '000000000002', 'name': 'new', 'created_at': '2026-09-08T12:00:00+08:00'},
+        'ffffffffff03': {'id': 'ffffffffff03', 'name': 'unknown'},
+    }
+    rows = manager.list()
+    assert [r['id'] for r in rows] == ['000000000002', 'ffffffffff01', 'ffffffffff03']
+    assert rows[1]['created_at'].startswith('2026-09-07T12:00:00')
+    assert 'created_at' not in manager.records['ffffffffff01']
+
+
 def test_iam_error_is_not_template_error(manager):
     provider = IamTokenProvider({'account': 'test-account'})
     with patch('auto_mixture_tool.modelarts.workflow.get_provider', return_value=provider):

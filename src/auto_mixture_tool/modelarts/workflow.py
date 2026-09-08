@@ -309,12 +309,14 @@ class ModelArtsWorkflowManager:
         workflow_id = uuid.uuid4().hex[:12]
         if authorization:
             self._authorizations[workflow_id] = authorization
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+        created = datetime.now().astimezone()
+        stamp = created.strftime("%Y%m%d-%H%M%S-%f")[:-3]
         prefix = normalized.get("experiment_name") or "experiment"
         experiment = f"{prefix}-{stamp}-{workflow_id[:6]}"
         run_root = f"{_clean_obs_uri(normalized['output_root_obs_uri'])}/runs/{experiment}"
         record = {
             "id": workflow_id,
+            "created_at": created.isoformat(timespec="milliseconds"),
             "name": experiment,
             "status": "QUEUED",
             "progress": 0,
@@ -346,9 +348,15 @@ class ModelArtsWorkflowManager:
 
     def list(self) -> list[dict[str, Any]]:
         self._load_disk()
-        return [self.public(item) for item in sorted(
-            self.records.values(), key=lambda item: item["id"], reverse=True
-        )]
+        return sorted((self.public(item) for item in self.records.values()),
+                      key=lambda item: self._created_timestamp(item), reverse=True)
+
+    @staticmethod
+    def _created_timestamp(record):
+        try:
+            return datetime.fromisoformat(record.get("created_at", "")).timestamp()
+        except (ValueError, TypeError):
+            return 0
 
     def get(self, workflow_id: str) -> dict[str, Any]:
         if not re.fullmatch(r"[0-9a-f]{12}", workflow_id):
@@ -362,6 +370,14 @@ class ModelArtsWorkflowManager:
     def public(record: dict[str, Any]) -> dict[str, Any]:
         value = copy.deepcopy(record)
         value.pop("config", None)
+        if not value.get("created_at"):
+            # Older records encode local creation time in their generated names.
+            match = re.search(r'-(\d{8}-\d{6}-\d{3})(?:-[0-9a-f]{6})?$', value.get("name", ""))
+            if match:
+                try:
+                    value["created_at"] = datetime.strptime(match[1], "%Y%m%d-%H%M%S-%f").astimezone().isoformat()
+                except ValueError:
+                    pass
         return value
 
     def copy_configuration(self, workflow_id: str) -> dict[str, Any]:
