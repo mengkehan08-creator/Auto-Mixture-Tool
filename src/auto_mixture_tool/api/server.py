@@ -226,11 +226,11 @@ def workflow_configuration(workflow_id: str) -> dict[str, Any]:
 
 
 @app.delete("/api/v1/workflows/{workflow_id}", status_code=202)
-def delete_workflow(workflow_id: str) -> dict[str, Any]:
+def delete_workflow(workflow_id: str, confirmed_not_created: bool = False) -> dict[str, Any]:
     try:
-        return _workflow_manager().delete(workflow_id)
+        return _workflow_manager().delete(workflow_id, confirmed_not_created=confirmed_not_created)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404 if str(exc) in {'workflow not found', 'invalid workflow id'} else 400, detail=str(exc)) from exc
 
 
 def main() -> None:

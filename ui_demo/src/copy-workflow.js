@@ -1,4 +1,5 @@
 import { createRuntimeConfig, createTrainingConfig, createEvaluationConfig, createStrategy } from './data/defaults.js'
+import { normalizeEvaluationTasks } from './evaluation-selection.js'
 
 export function copyWorkflow(config) {
   const runtime = createRuntimeConfig()
@@ -31,7 +32,7 @@ export function copyWorkflow(config) {
     runtime.offlineResources.map(item => ({ ...item, uri: resources[item.role] || item.uri }))
   evaluation.outputObsUri = config.evaluation.output_obs_uri || ''
   evaluation.dataset = { enabled: Boolean(config.evaluation.datasets.length), source: 'obs',
-    names: [...config.evaluation.datasets], obsUri: resources.eval_bundle_obs_uri }
+    names: normalizeEvaluationTasks(config.evaluation.datasets), obsUri: resources.eval_bundle_obs_uri }
   const strategies = config.strategies.map(item => ({ ...createStrategy(item.type),
     name: item.name, seed: item.seed ?? 42, proxyExperiments: item.proxy_experiments,
     proxySteps: item.proxy_steps, searchCount: item.search_count, devicesPerNode: item.devices_per_node,

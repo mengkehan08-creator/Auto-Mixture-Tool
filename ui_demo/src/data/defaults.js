@@ -75,7 +75,7 @@ export const createEvaluationConfig = () => ({
   dataset: {
     enabled: true,
     source: 'builtin',
-    names: ['stem'],
+    names: [...stemTasks],
     obsUri: `${obsRoot}eval_bundle/`,
   },
   api: {
@@ -107,3 +107,4 @@ export const createRuntimeConfig = () => ({
   evalBundleObsUri: `${obsRoot}eval_bundle/`,
   pythonWheelsObsUri: `${obsRoot}python_wheels/`,
 })
+import { stemTasks } from '../evaluation-selection.js'

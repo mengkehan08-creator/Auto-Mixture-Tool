@@ -114,3 +114,46 @@ def test_delete_route_accepts_and_unknown_id_does_not_delete(manager):
         assert client.delete('/api/v1/workflows/' + row['id']).status_code == 202
         assert client.delete('/api/v1/workflows/ffffffffffff').status_code == 404
     assert row['delete_requested'] is True
+
+
+def test_verified_absent_remote_job_is_deleted_without_cloud_calls(manager):
+    row = record(manager)
+    row.update(status='NEEDS_ATTENTION')
+    row['jobs'][0].update(id=None, status='SUBMITTING')
+    manager.client = Mock()
+    with patch.object(manager, '_start_delete'):
+        manager.delete(row['id'], confirmed_not_created=True)
+    manager._delete_run(row['id'])
+    assert row['status'] == 'DELETED'
+    assert row['absence_confirmed_at']
+    manager.client.get.assert_not_called()
+    manager.client.stop.assert_not_called()
+    manager.client.submit.assert_not_called()
+
+
+@pytest.mark.parametrize('case', ['active', 'known-id'])
+def test_absence_confirmation_cannot_skip_inflight_or_known_job(manager, case):
+    row = record(manager)
+    row.update(status='NEEDS_ATTENTION')
+    row['jobs'][0]['status'] = 'SUBMITTING'
+    if case == 'active':
+        manager._active.add(row['id'])
+    else:
+        row['jobs'][0]['id'] = 'remote-job'
+    with pytest.raises(ValueError, match='已创建作业仍须终止'):
+        manager.delete(row['id'], confirmed_not_created=True)
+    assert not row.get('delete_requested')
+    manager._active.discard(row['id'])
+
+
+def test_absence_confirmation_api(manager):
+    from fastapi.testclient import TestClient
+    from auto_mixture_tool.api.server import app
+    row = record(manager)
+    row.update(status='NEEDS_ATTENTION')
+    row['jobs'][0].update(id=None, status='SUBMITTING')
+    with patch('auto_mixture_tool.api.server._workflow_manager', return_value=manager), patch.object(manager, '_start_delete'):
+        client = TestClient(app)
+        result = client.delete('/api/v1/workflows/' + row['id'] + '?confirmed_not_created=true')
+        assert result.status_code == 202
+        assert result.json()['jobs'][0]['status'] == 'NOT_CREATED'

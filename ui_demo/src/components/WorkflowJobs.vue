@@ -14,6 +14,12 @@ const deleteDialog = ref(null)
 const deleteTarget = ref(null)
 const deleting = ref(false)
 const deleteError = ref('')
+const confirmedNotCreated = ref(false)
+const needsAbsenceConfirmation = computed(() => deleteTarget.value &&
+  ['NEEDS_ATTENTION', 'DELETE_FAILED'].includes(deleteTarget.value.status) &&
+  !deleteTarget.value.jobs?.some(job => job.id) &&
+  deleteTarget.value.jobs?.some(job => job.status === 'SUBMITTING'))
+const hasRemoteJob = computed(() => Boolean(deleteTarget.value?.jobs?.some(job => job.id)))
 const selected = computed(() => workflows.value.find(w => w.id === props.selectedId))
 let timer
 function createdTime(w) {
@@ -38,13 +44,15 @@ async function copy(id) {
 function confirmDelete(workflow) {
   deleteTarget.value = workflow
   deleteError.value = ''
+  confirmedNotCreated.value = false
   deleteDialog.value.showModal()
 }
 async function remove() {
-  if (deleting.value || !deleteTarget.value) return
+  if (deleting.value || !deleteTarget.value || (needsAbsenceConfirmation.value && !confirmedNotCreated.value)) return
   deleting.value = true
   try {
-    await apiRequest(`workflows/${deleteTarget.value.id}`, { method: 'DELETE' })
+    const confirmation = needsAbsenceConfirmation.value && confirmedNotCreated.value ? '?confirmed_not_created=true' : ''
+    await apiRequest(`workflows/${deleteTarget.value.id}${confirmation}`, { method: 'DELETE' })
     deleteDialog.value.close()
     await load()
   } catch (reason) { deleteError.value = reason.message }
@@ -97,7 +105,7 @@ onBeforeUnmount(() => clearInterval(timer))
         <h3 class="workflow-section-title">关联作业</h3>
         <div class="job-grid"><div v-for="(job, index) in selected.jobs" :key="job.name">
           <div class="job-heading"><strong>{{ index === 0 ? '配比采样作业' : '训练评测作业' }}</strong><span class="status-badge" :class="`tone-${statusView(job.status).tone}`">{{ statusView(job.status).label }}</span></div>
-          <small>{{ job.name }}</small><small>作业 ID：{{ job.id || '尚未创建' }}</small>
+          <small>{{ job.name }}</small><small>作业 ID：{{ job.id || (job.status === 'SUBMITTING' ? '未返回，创建结果待核对' : '尚未创建') }}</small>
           <a v-if="job.url" :href="job.url" target="_blank" rel="noopener noreferrer">打开 ModelArts 作业详情</a>
         </div></div>
         <h3 class="workflow-section-title">输出位置</h3>
@@ -112,12 +120,15 @@ onBeforeUnmount(() => clearInterval(timer))
     <dialog ref="deleteDialog" class="delete-dialog" aria-labelledby="delete-title" @cancel="deleting && $event.preventDefault()">
       <h3 id="delete-title">确认删除实验？</h3>
       <p class="delete-name">{{ deleteTarget?.name }}</p>
-      <p>正在运行或排队的关联作业将被终止，后续训练评测作业不再自动提交。</p>
-      <p>确认远程作业结束后移除实验记录。OBS 中的数据、模型和报告不会删除。</p>
+      <p v-if="hasRemoteJob">正在运行或排队的关联作业将被终止，确认结束后移除记录。</p>
+      <p v-else-if="needsAbsenceConfirmation">提交结果不明确，未收到作业 ID。请先在 ModelArts 核对；确认未创建作业后，仅删除工具记录，不发送终止请求。</p>
+      <p v-else>未创建远程作业时直接删除记录；如有正在进行的提交请求，会等待其结果再处理。</p>
+      <label v-if="needsAbsenceConfirmation" class="absence-confirmation"><input v-model="confirmedNotCreated" type="checkbox" :disabled="deleting" />我已在 ModelArts 核对，确认未创建该实验的远程作业</label>
+      <p>后续作业不再自动提交。OBS 中的数据、模型和报告不会删除。</p>
       <p v-if="deleteError" class="error-message" role="alert">{{ deleteError }}</p>
       <div class="workflow-actions">
         <button type="button" autofocus class="button secondary" :disabled="deleting" @click="deleteDialog.close()">取消</button>
-        <button type="button" class="button delete-workflow" :disabled="deleting" @click="remove">{{ deleting ? '正在处理…' : '确认删除并终止作业' }}</button>
+        <button type="button" class="button delete-workflow" :disabled="deleting || (needsAbsenceConfirmation && !confirmedNotCreated)" @click="remove">{{ deleting ? '正在处理…' : hasRemoteJob ? '确认删除并终止作业' : '确认删除记录' }}</button>
       </div>
     </dialog>
   </section>

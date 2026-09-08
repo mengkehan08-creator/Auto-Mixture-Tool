@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { strategyOptions } from '../../data/defaults'
 import { apiRequest } from '../../api'
 import { fieldLabels, submissionFailed } from '../../workflow-state'
+import { normalizeEvaluationTasks } from '../../evaluation-selection.js'
 
 const props = defineProps({ strategies: Array, training: Object, evaluation: Object, runtime: Object })
 const status = ref('idle')
@@ -60,7 +61,7 @@ function requestBody() {
       eval_every: props.training.evalEvery,
       core_metric_every: props.training.coreMetricEvery,
     },
-    evaluation: { output_obs_uri: props.evaluation.outputObsUri, datasets: props.evaluation.dataset.enabled ? props.evaluation.dataset.names : [] },
+    evaluation: { output_obs_uri: props.evaluation.outputObsUri, datasets: props.evaluation.dataset.enabled ? normalizeEvaluationTasks(props.evaluation.dataset.names) : [] },
     resources: {
       code_obs_uri: props.runtime.codeObsUri,
       nanochat_repo_obs_uri: props.training.frameworkObsUri,

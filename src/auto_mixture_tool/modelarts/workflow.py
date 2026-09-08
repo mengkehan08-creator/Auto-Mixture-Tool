@@ -234,14 +234,22 @@ class ModelArtsWorkflowManager:
             self._active.add(workflow_id)
         threading.Thread(target=self._run, args=(workflow_id,), daemon=True).start()
 
-    def delete(self, workflow_id: str) -> dict[str, Any]:
+    def delete(self, workflow_id: str, confirmed_not_created: bool = False) -> dict[str, Any]:
         self.get(workflow_id)
         record = self.records[workflow_id]
         with self._lock:
             if workflow_id in self._deleting:
                 return self.public(record)
+            if confirmed_not_created:
+                if (workflow_id in self._active or any(job.get('id') for job in record['jobs'])
+                        or record['status'] not in {'NEEDS_ATTENTION', 'DELETE_FAILED'}):
+                    raise ValueError('仅可对已停止提交、无远程作业 ID 的待核对记录确认未创建；已创建作业仍须终止')
+                for job in record['jobs']:
+                    if job['status'] == 'SUBMITTING':
+                        job['status'] = 'NOT_CREATED'
+                record['absence_confirmed_at'] = datetime.now().astimezone().isoformat()
             record.update(delete_requested=True, status='DELETING', progress=0,
-                          stage='正在终止关联作业，确认后删除记录', message='')
+                          stage='正在删除实验记录，必要时终止关联作业', message='')
         self._store(record)
         self._start_delete(workflow_id)
         return self.public(record)
