@@ -53,10 +53,33 @@ def test_iam_tls_private_switch(enabled, expected):
         assert post.call_args.kwargs['allow_redirects'] is False
 
 
+@pytest.mark.parametrize('key', ['iam_verify_ssl', 'modelarts_verify_ssl'])
 @pytest.mark.parametrize('value', ['False', '', None, 0, 1])
-def test_iam_tls_switch_requires_boolean(value):
-    with pytest.raises(ValueError, match='iam_verify_ssl'):
-        IamTokenProvider(dict(config(), iam_verify_ssl=value))
+def test_iam_tls_switch_requires_boolean(key, value):
+    with pytest.raises(ValueError, match=key):
+        IamTokenProvider(dict(config(), **{key: value}))
+
+
+@pytest.mark.parametrize('enabled,expected', [(True, '/trusted/ca.pem'), (False, False)])
+def test_modelarts_tls_switch_applies_to_submit_and_poll_only(enabled, expected):
+    cfg = dict(config(), modelarts_verify_ssl=enabled, ca_bundle='/trusted/ca.pem')
+    provider = IamTokenProvider(cfg)
+    template = SimpleNamespace(url=cfg['modelarts_endpoint'], headers={'Authorization': ''})
+    with patch('requests.post', return_value=response()) as post:
+        provider.authorization(template.url)
+        assert post.call_args.kwargs['verify'] == '/trusted/ca.pem'
+    with patch('auto_mixture_tool.modelarts.workflow.get_provider', return_value=provider):
+        client = ModelArtsClient(template)
+    result = SimpleNamespace(status_code=200, json=lambda: {'id': 'job'})
+    with patch.object(provider, 'authorization', return_value='test-token'):
+        with patch('requests.post', return_value=result) as post:
+            client.submit({})
+            assert post.call_args.kwargs['verify'] == expected
+            assert post.call_args.kwargs['allow_redirects'] is False
+        with patch('requests.get', return_value=result) as get:
+            client.get('job')
+            assert get.call_args.kwargs['verify'] == expected
+            assert get.call_args.kwargs['allow_redirects'] is False
 
 
 @pytest.mark.parametrize('result', [

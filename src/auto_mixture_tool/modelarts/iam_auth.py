@@ -15,8 +15,9 @@ import requests
 class IamTokenProvider:
     def __init__(self, config):
         self.config = dict(config)
-        if type(self.config.get('iam_verify_ssl', True)) is not bool:
-            raise ValueError('iam_verify_ssl 必须为 Python 布尔值 True 或 False')
+        for key in ('iam_verify_ssl', 'modelarts_verify_ssl'):
+            if type(self.config.get(key, True)) is not bool:
+                raise ValueError(f'{key} 必须为 Python 布尔值 True 或 False')
         self._lock = threading.Lock()
         self._token = ''
         self._expires_at = None

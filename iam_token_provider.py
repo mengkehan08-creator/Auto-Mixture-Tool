@@ -19,4 +19,6 @@ AUTH_CONFIG = {
     'ca_bundle': '',
     # IAM only: False disables server identity verification (credential risk).
     'iam_verify_ssl': True,
+    # ModelArts only: applies to submission and status queries; same credential risk.
+    'modelarts_verify_ssl': True,
 }

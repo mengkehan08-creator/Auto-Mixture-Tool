@@ -144,8 +144,10 @@ class ModelArtsClient:
         return headers
 
     def _tls_verify(self):
-        # Preserve legacy manual mode; automatically obtained credentials require TLS verification.
-        return (self.provider.config.get('ca_bundle') or True) if self.provider else False
+        # Preserve legacy manual mode; automatic mode verifies unless explicitly disabled.
+        if not self.provider or not self.provider.config.get('modelarts_verify_ssl', True):
+            return False
+        return self.provider.config.get('ca_bundle') or True
 
     @staticmethod
     def _response(response, headers):

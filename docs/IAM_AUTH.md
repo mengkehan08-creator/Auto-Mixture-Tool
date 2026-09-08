@@ -29,6 +29,15 @@ chmod 600 /home/ma-user/work/private_auth/iam_token_provider.py
 
 ## 启动 UI 后端
 
+如明确接受风险，需同时跳过 IAM 与 ModelArts 证书验证，在仓库外私有文件的 `auth` 或 `AUTH_CONFIG` 字典内添加：
+
+```python
+"iam_verify_ssl": False,
+"modelarts_verify_ssl": False,
+```
+
+`modelarts_verify_ssl` 默认 `True`，设为 `False` 后仅影响工具工作流的 ModelArts 提交及状态查询，不改变独立提交脚本。关闭时 `ca_bundle` 不用于相应服务的校验；不会关闭重定向限制或地址授权检查。此配置不解决代理、网络或权限问题。保存后必须重启后端，恢复安全验证时将两项改回 `True` 并配置可信 CA。
+
 ```bash
 cd /home/ma-user/work/Auto-Mixture-Tool
 # 只有已创建该虚拟环境时才激活；否则使用已安装依赖的 Python。
