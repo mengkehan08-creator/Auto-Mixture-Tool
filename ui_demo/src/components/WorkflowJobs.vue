@@ -1,10 +1,10 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { apiRequest } from '../api'
-import { newestWorkflows, searchWorkflows, statusView, stageIndex, workflowStages } from '../workflow-state'
+import { newestWorkflows, searchWorkflows, statusView, stageIndex, workflowStages, canRestart } from '../workflow-state'
 import WorkflowProgress from './WorkflowProgress.vue'
 const props = defineProps({ selectedId: { type: String, default: '' } })
-const emit = defineEmits(['select', 'copy'])
+const emit = defineEmits(['select', 'copy', 'restart'])
 const workflows = ref([])
 const search = ref('')
 const filteredWorkflows = computed(() => searchWorkflows(workflows.value, search.value))
@@ -40,6 +40,12 @@ async function load() {
 async function copy(id) {
   try { emit('copy', await apiRequest(`workflows/${id}/configuration`)) }
   catch (reason) { error.value = reason.message }
+}
+async function restart(workflow, stage) {
+  try {
+    const config = await apiRequest(`workflows/${workflow.id}/configuration`)
+    emit('restart', { config, workflow, stage })
+  } catch (reason) { error.value = reason.message }
 }
 function confirmDelete(workflow) {
   deleteTarget.value = workflow
@@ -105,12 +111,14 @@ onBeforeUnmount(() => clearInterval(timer))
         <h3 class="workflow-section-title">关联作业</h3>
         <div class="job-grid"><div v-for="(job, index) in selected.jobs" :key="job.name">
           <div class="job-heading"><strong>{{ job.module === 'training-evaluation' ? '训练评测作业（旧版）' : ['配比采样作业', '模型训练作业', '模型评测作业'][index] }}</strong><span class="status-badge" :class="`tone-${statusView(job.status).tone}`">{{ statusView(job.status).label }}</span></div>
-          <small>{{ job.name }}</small><small>作业 ID：{{ job.id || (job.status === 'SUBMITTING' ? '未返回，创建结果待核对' : '尚未创建') }}</small>
+          <small>{{ job.name }}</small><small v-if="job.reused">复用前序实验输出，不提交此作业</small><small v-else>作业 ID：{{ job.id || (job.status === 'SUBMITTING' ? '未返回，创建结果待核对' : '尚未创建') }}</small>
           <a v-if="job.url" :href="job.url" target="_blank" rel="noopener noreferrer">打开 ModelArts 作业详情</a>
         </div></div>
         <h3 class="workflow-section-title">输出位置</h3>
         <div class="output-paths"><span>配比结果：{{ selected.outputs?.mixing }}</span><span>采样集：{{ selected.outputs?.sampled }}</span><span>模型输出：{{ selected.outputs?.models || selected.outputs?.training }}</span><span>评测与对比报告：{{ selected.outputs?.reports || selected.outputs?.training }}</span></div>
         <button type="button" class="button secondary" @click="copy(selected.id)">复制并调整参数</button>
+        <button v-if="canRestart(selected, 'training')" type="button" class="button secondary" @click="restart(selected, 'training')">训练阶段重试</button>
+        <button v-if="canRestart(selected, 'evaluation')" type="button" class="button secondary" @click="restart(selected, 'evaluation')">评测阶段重试</button>
         <button type="button" class="button delete-workflow" :disabled="selected.status === 'DELETING'" @click="confirmDelete(selected)">{{ selected.status === 'DELETE_FAILED' ? '重试删除' : '删除实验' }}</button>
         <label class="field"><span>更新身份认证凭据</span><input v-model="credential" type="password" autocomplete="off" /></label>
         <button type="button" class="button secondary" @click="renew">更新此实验凭据</button>

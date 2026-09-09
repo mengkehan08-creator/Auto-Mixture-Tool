@@ -57,6 +57,7 @@ class JobRequest(BaseModel):
 
 
 class WorkflowRequest(BaseModel):
+    reuse: dict[str, str] | None = None
     request_id: str | None = None
     experiment_name: str | None = None
     input_data_obs_uri: str

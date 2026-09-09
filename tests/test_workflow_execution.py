@@ -224,6 +224,23 @@ def test_command_defaults_match_runtime():
     }
 
 
+def test_all_commands_install_real_rustbpe_offline():
+    import ast
+    import shlex
+    source = Path('modelarts_training_job.py').read_text(encoding='utf-8')
+    tree = ast.parse(source)
+    sample = next(ast.literal_eval(value) for node in ast.walk(tree) if isinstance(node, ast.Dict)
+                  for key, value in zip(node.keys, node.values)
+                  if isinstance(key, ast.Constant) and key.value == 'command')
+    commands = [sample, *(ModelArtsWorkflowManager._command(stage)
+                          for stage in ('mixing', 'training', 'evaluation'))]
+    for command in commands:
+        shell = shlex.split(command)[2]
+        assert '--no-index --no-deps --upgrade --target' in shell
+        assert '/home/ma-user/modelarts/inputs/python_wheels_dir_7/rustbpe-0.1.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl' in shell
+        assert shell.index('rustbpe.Tokenizer()') < shell.index('scripts/modelarts_runtime_check.py')
+
+
 def test_offline_resources_custom_names_and_mounts(manager):
     body = config()
     roles = ['code_obs_uri', 'quadmix_tokenizer_obs_uri', 'proxy_validation_obs_uri', 'eval_bundle_obs_uri', 'python_wheels_obs_uri']

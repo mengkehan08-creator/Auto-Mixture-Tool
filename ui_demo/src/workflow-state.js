@@ -12,6 +12,15 @@ export function submissionFailed(workflow) {
   return ['FAILED', 'NEEDS_ATTENTION'].includes(workflow.status)
 }
 
+export function canRestart(workflow, stage) {
+  if (!['training', 'evaluation'].includes(stage)) return false
+  const count = stage === 'training' ? 1 : 2
+  return workflow.pipeline_version === 3 && !workflow.delete_requested &&
+    ['FAILED', 'SUCCEEDED'].includes(workflow.status) &&
+    workflow.jobs?.slice(0, count).length === count &&
+    workflow.jobs.slice(0, count).every(job => job.status === 'SUCCEEDED')
+}
+
 export function statusView(status = '') {
   const key = status.toUpperCase()
   if (key === 'DELETING') return { label: '正在终止并删除', tone: 'warning' }

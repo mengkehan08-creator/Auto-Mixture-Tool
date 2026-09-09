@@ -33,6 +33,8 @@ function goBack() {
 }
 function openJob(id) { navigate('jobs', currentStep.value, id) }
 function copyJob(config) {
+  runtime.reuse = null
+  runtime.reuseInput = ''
   const draft = copyWorkflow(config)
   Object.assign(runtime, draft.runtime)
   Object.assign(training, draft.training)
@@ -41,6 +43,14 @@ function copyJob(config) {
   formVersion.value++
   navigate('create', 1)
   copyNotice.value = '已复制作业配置，请调整参数并重新填写身份认证凭据。尚未提交新作业。'
+}
+function restartJob({ config, workflow, stage }) {
+  copyJob(config)
+  runtime.reuse = { workflow_id: workflow.id, stage }
+  runtime.reuseInput = stage === 'training' ? workflow.outputs.sampled : workflow.outputs.models
+  runtime.commands = null
+  currentStep.value = stage === 'training' ? 2 : 3
+  copyNotice.value = `从${stage === 'training' ? '训练' : '评测'}重新执行：复用前序输出，已完成阶段不可修改；提交后创建新记录，不覆盖原实验。请确认新代码已更新到 OBS，并检查启动命令。`
 }
 const strategies = reactive([createStrategy('quadmix'), createStrategy('manual'), createStrategy('random')])
 const training = reactive(createTrainingConfig())
@@ -59,14 +69,16 @@ const runtime = reactive(createRuntimeConfig())
         <span class="user-chip"><span>配</span>配比用户</span>
       </header>
 
-      <WorkflowJobs v-show="page === 'jobs'" :selected-id="selectedId" @select="navigate('jobs', currentStep, $event)" @copy="copyJob" />
+      <WorkflowJobs v-show="page === 'jobs'" :selected-id="selectedId" @select="navigate('jobs', currentStep, $event)" @copy="copyJob" @restart="restartJob" />
       <div v-show="page === 'create'">
       <p v-if="copyNotice" class="path-preview">{{ copyNotice }}</p>
+      <p v-if="runtime.reuse" class="path-preview">{{ runtime.reuse.stage === 'training' ? '采样集输入' : '模型输入' }}：{{ runtime.reuseInput }}</p>
       <StepNavigation :current-step="currentStep" @change="navigate('create', $event)" />
 
-      <MixingStrategyStep v-if="currentStep === 1" :strategies="strategies" :runtime="runtime" />
+      <p v-if="runtime.reuse && (currentStep === 1 || (currentStep === 2 && runtime.reuse.stage === 'evaluation'))" class="path-preview">此阶段已完成，本次直接复用其输出。如需调整，请使用“复制并调整参数”新建完整实验。</p>
+      <MixingStrategyStep v-else-if="currentStep === 1" :strategies="strategies" :runtime="runtime" />
       <TrainingConfigStep v-else-if="currentStep === 2" :config="training" :runtime="runtime" />
-      <EvaluationConfigStep v-else-if="currentStep === 3" :config="evaluation" :model-output="training.outputObsUri ? `${training.outputObsUri.replace(/\/$/, '')}/runs/{实验名称}/` : `${runtime.outputRootObsUri.replace(/\/$/, '')}/runs/{实验名称}/training/checkpoints/`" />
+      <EvaluationConfigStep v-else-if="currentStep === 3" :config="evaluation" :model-output="runtime.reuse?.stage === 'evaluation' ? runtime.reuseInput : training.outputObsUri ? `${training.outputObsUri.replace(/\/$/, '')}/runs/{实验名称}/` : `${runtime.outputRootObsUri.replace(/\/$/, '')}/runs/{实验名称}/training/checkpoints/`" />
       <ReviewSubmitStep v-else :key="formVersion" :strategies="strategies" :training="training" :evaluation="evaluation" :runtime="runtime" @created="openJob" />
 
       <footer class="page-actions">

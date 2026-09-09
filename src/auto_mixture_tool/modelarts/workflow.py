@@ -362,7 +362,7 @@ class ModelArtsWorkflowManager:
                 {"module": "mixing", "nodes": value["mixing_nodes"]},
                 {"module": "training", "nodes": value["training_nodes"]},
                 *([{"module": "evaluation", "nodes": value["evaluation_nodes"]}] if value['evaluation']['datasets'] or value['evaluation'].get('obs_packages') else []),
-            ],
+            ][({'training': 1, 'evaluation': 2}.get(value.get('reuse', {}).get('stage'), 0)):],
             "input_data_obs_uri": value["input_data_obs_uri"],
             "output_root_obs_uri": value["output_root_obs_uri"],
             "message": "仅检查配置及服务端模板；不提交任务，也不验证 OBS 文件及权限。",
@@ -430,8 +430,20 @@ class ModelArtsWorkflowManager:
             record["outputs"][output] = (
                 f"{root}/runs/{experiment}/" if root else f"{run_root}/training/{suffix}/"
             )
+        if normalized.get('reuse'):
+            source = self._reuse_source(normalized['reuse'])
+            start = 1 if normalized['reuse']['stage'] == 'training' else 2
+            record['reused_from'] = source['id']
+            for index in range(start):
+                record['jobs'][index].update(status='SUCCEEDED', reused=True,
+                                              source_workflow_id=source['id'])
+            for key in ('mixing', 'sampled', *(['training', 'models'] if start == 2 else [])):
+                record['outputs'][key] = source['outputs'][key]
+            record['stage'] = '等待提交训练作业' if start == 1 else '等待提交评测作业'
         # Validate every stage request before scheduling the first paid job.
         for stage in ('mixing', 'training', *(['evaluation'] if len(record['jobs']) == 3 else [])):
+            if record['jobs'][('mixing', 'training', 'evaluation').index(stage)].get('reused'):
+                continue
             self._payload(record, stage)
         self._store(record)
         self._start(workflow_id)
@@ -475,9 +487,27 @@ class ModelArtsWorkflowManager:
         self.get(workflow_id)
         value = copy.deepcopy(self.records[workflow_id]["config"])
         value.pop("request_id", None)
+        value.pop('reuse', None)
         if value.get("modelarts"):
             value["modelarts"].pop("authorization", None)
         return value
+
+    def _reuse_source(self, reuse):
+        if not isinstance(reuse, dict) or set(reuse) != {'workflow_id', 'stage'} or reuse['stage'] not in {'training', 'evaluation'}:
+            raise ValueError('复用配置必须指定 workflow_id 和 training/evaluation 阶段')
+        self.get(reuse['workflow_id'])
+        source = self.records[reuse['workflow_id']]
+        if source.get('pipeline_version') != 3:
+            raise ValueError('旧版合并作业不支持阶段复用，请新建实验')
+        if source.get('delete_requested') or source['status'] not in {'FAILED', 'SUCCEEDED'}:
+            raise ValueError('仅支持复用已结束且未申请删除的实验')
+        count = 1 if reuse['stage'] == 'training' else 2
+        if len(source['jobs']) < count or any(job['status'] != 'SUCCEEDED' for job in source['jobs'][:count]):
+            raise ValueError('前序作业未全部成功，不能复用其输出')
+        keys = ['sampled'] + (['models'] if count == 2 else [])
+        if any(not source.get('outputs', {}).get(key) for key in keys):
+            raise ValueError('原实验缺少可复用的 OBS 输出地址')
+        return source
 
     @staticmethod
     def _job_record(module: str, nodes: int, stamp: str) -> dict[str, Any]:
@@ -491,6 +521,18 @@ class ModelArtsWorkflowManager:
 
     def _validate(self, config: dict[str, Any]) -> dict[str, Any]:
         value = copy.deepcopy(config)
+        if value.get('reuse'):
+            source = self._reuse_source(value['reuse'])
+            original = source['config']
+            for key in ('strategies', 'input_data_obs_uri', 'mixing_nodes', 'full_scan'):
+                if key in original:
+                    value[key] = copy.deepcopy(original[key])
+            if value['reuse']['stage'] == 'evaluation':
+                value['training'] = copy.deepcopy(original['training'])
+                value['training_nodes'] = original['training_nodes']
+                value['resources']['nanochat_model_obs_uri'] = original['resources']['nanochat_model_obs_uri']
+                if not (value['evaluation'].get('datasets') or value['evaluation'].get('obs_packages')):
+                    raise ValueError('从评测开始时必须选择评测任务或评测包')
         for section in ('training', 'evaluation', 'resources'):
             if not isinstance(value.get(section), dict):
                 raise ValueError(f'{section} 必须是配置对象')
@@ -771,7 +813,7 @@ class ModelArtsWorkflowManager:
                 "name": "comparison_data_dir",
                 "local_dir": "/home/ma-user/modelarts/inputs/comparison_data_dir_8",
                 "access_method": "env",
-                "remote": {"obs": {"obs_url": f"{record['run_root_obs_uri']}/sampled/"}},
+                "remote": {"obs": {"obs_url": record['outputs']['sampled']}},
             })
         if stage == 'evaluation':
             for index, package in enumerate(config['evaluation'].get('obs_packages', [])):
@@ -801,6 +843,7 @@ class ModelArtsWorkflowManager:
         runtime_config['split_evaluation'] = record.get('pipeline_version') == 3
         runtime_config.pop('commands', None)
         runtime_config.pop('offline_resources', None)
+        runtime_config.pop('reuse', None)
         if stage != 'mixing':
             for strategy in runtime_config['strategies']:
                 strategy.pop('script_upload', None)
@@ -850,6 +893,8 @@ if ! "$PY311" -c 'import lightgbm' >/dev/null 2>&1; then
   fi
 fi
 export AMT_PYTHON_EXECUTABLE="$PY311"
+"$PY311" -m pip install --no-index --no-deps --upgrade --target "$PY_DEPS" /home/ma-user/modelarts/inputs/python_wheels_dir_7/rustbpe-0.1.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+"$PY311" -c 'import rustbpe; rustbpe.Tokenizer(); print("rustbpe installed:", rustbpe.__file__)'
 ln -sf "$PY311" /tmp/auto-mixture-python/python
 ln -sf "$PY311" /tmp/auto-mixture-python/python3
 export PATH="/tmp/auto-mixture-python:$PATH"

@@ -37,7 +37,7 @@ export function copyWorkflow(config) {
   evaluation.devicesPerNode = config.evaluation.devices_per_node ?? 8
   evaluation.coreEvalBatchSize = config.evaluation.core_eval_batch_size ?? 16
   evaluation.maxPerTask = config.evaluation.max_per_task ?? -1
-  evaluation.dataset = { enabled: Boolean(config.evaluation.datasets.length), source: 'obs',
+  evaluation.dataset = { enabled: Boolean(config.evaluation.datasets.length || evaluation.obsPackages.length), source: 'obs',
     names: normalizeEvaluationTasks(config.evaluation.datasets), obsUri: resources.eval_bundle_obs_uri }
   const strategies = config.strategies.map(item => ({ ...createStrategy(item.type),
     name: item.name, seed: item.seed ?? 42, proxyExperiments: item.proxy_experiments,
