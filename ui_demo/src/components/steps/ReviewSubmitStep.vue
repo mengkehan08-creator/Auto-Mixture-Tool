@@ -40,7 +40,6 @@ function normalizedStrategies() {
 
 function requestBody() {
   return {
-    ...(props.runtime.reuse ? { reuse: props.runtime.reuse } : {}),
     ...(props.runtime.commands ? { commands: props.runtime.commands } : {}),
     modelarts: props.runtime.modelarts,
     priority: props.runtime.priority ?? 1,
@@ -152,7 +151,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>任务配置</h2><p v-if="runtime.reuse">{{ runtime.reuse.stage === 'evaluation' ? '本次仅提交 1 个评测作业，复用已有模型。' : `本次提交 ${evaluation.dataset.enabled ? 2 : 1} 个作业：训练${evaluation.dataset.enabled ? ' → 评测' : ''}，复用已有采样集。` }}</p><p v-else>评测集启用且选择了任务或 OBS 评测包时提交三个作业，否则只提交配比和训练作业。</p></div></div>
+    <div class="section-title-row"><div><h2>任务配置</h2><p>评测集启用且选择了任务或 OBS 评测包时提交三个作业，否则只提交配比和训练作业。</p></div></div>
     <p v-if="evaluation.api.enabled" class="path-preview" role="status">自动评估暂未接入：本次不会执行自动评估，也不会创建自动评估作业。</p>
     <h3>ModelArts 作业配置</h3>
     <p class="path-preview">已填入脚本默认配置，可编辑。</p>
@@ -165,8 +164,8 @@ onBeforeUnmount(() => window.clearInterval(timer))
     <div class="review-grid">
       <article><span>training.output_obs_uri</span><strong class="break-path">{{ training.outputObsUri || '沿用实验输出目录' }}</strong><small>模型与检查点 · 自动追加 runs/实验名称/</small></article>
       <article><span>evaluation.output_obs_uri</span><strong class="break-path">{{ evaluation.outputObsUri || '沿用实验输出目录' }}</strong><small>评测与对比报告 · 自动追加 runs/实验名称/</small></article>
-      <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ runtime.reuse ? '复用原实验采样集，不提交' : `${runtime.mixingNodes} 节点 · 先校验再生成全部采样集` }}</small></article>
-      <article><span>训练作业</span><strong>{{ training.framework }}</strong><small>{{ runtime.reuse?.stage === 'evaluation' ? '复用原实验模型，不提交' : `${training.nodes} 节点 · 依次训练全部采样集` }}</small></article>
+      <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ runtime.mixingNodes }} 节点 · 先校验再生成全部采样集</small></article>
+      <article><span>训练作业</span><strong>{{ training.framework }}</strong><small>{{ training.nodes }} 节点 · 依次训练全部采样集</small></article>
       <article><span>evaluation_nodes</span><strong>{{ evaluation.dataset.enabled ? `${evaluation.nodes} 节点` : '未启用评测' }}</strong><small>模型输入自动使用前序训练输出</small></article>
       <article><span>training.token_budget</span><strong>{{ Number(training.tokenBudget).toLocaleString() }} Token</strong><small>各配比模型共用训练预算</small></article>
       <article><span>输出根目录</span><strong class="break-path">{{ runtime.outputRootObsUri }}</strong><small>按实验名称隔离 mixing / sampled / training</small></article>
@@ -175,8 +174,8 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <h3>command</h3>
       <p>默认命令已包含离线环境检查，可编辑。请勿在命令中填写凭据。</p>
       <template v-if="runtime.commands">
-        <label v-if="!runtime.reuse" class="field"><span>command（配比作业）</span><textarea v-model="runtime.commands.mixing" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
-        <label v-if="runtime.reuse?.stage !== 'evaluation'" class="field"><span>command（训练作业）</span><textarea v-model="runtime.commands.training" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
+        <label class="field"><span>command（配比作业）</span><textarea v-model="runtime.commands.mixing" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
+        <label class="field"><span>command（训练作业）</span><textarea v-model="runtime.commands.training" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
         <label class="field"><span>command（评测作业）</span><textarea v-model="runtime.commands.evaluation" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
       </template>
       <button class="button secondary" type="button" @click="loadCommands(true)">{{ runtime.commands ? '恢复默认命令' : '重新加载默认命令' }}</button>
