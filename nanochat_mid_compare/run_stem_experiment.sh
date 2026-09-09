@@ -137,6 +137,13 @@ DATA_MULTIPLIER="${DATA_MULTIPLIER:-2.5}"
 LOADER="${LOADER:-flat}"
 DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-1}"
 TRAIN_NUM_ITERATIONS="${TRAIN_NUM_ITERATIONS:-0}"
+TRAIN_TOKEN_BUDGET="${TRAIN_TOKEN_BUDGET:-}"
+if [ -n "$TRAIN_TOKEN_BUDGET" ]; then
+    if ! [[ "$TRAIN_TOKEN_BUDGET" =~ ^[1-9][0-9]*$ ]] || [ "$TRAIN_NUM_ITERATIONS" != "0" ]; then
+        echo "ERROR: TRAIN_TOKEN_BUDGET must be positive and cannot be combined with fixed steps"
+        exit 2
+    fi
+fi
 if ! [[ "$TRAIN_NUM_ITERATIONS" =~ ^[0-9]+$ ]]; then
     echo "ERROR: TRAIN_NUM_ITERATIONS must be a non-negative integer"
     exit 2
@@ -851,6 +858,9 @@ import os, json
 s = json.load(open(os.environ['STATS_FILE']))
 print(s['config'].get('training_budget', s['config'].get('budget_cap', '0')))
 ")
+if [ -n "$TRAIN_TOKEN_BUDGET" ]; then
+    TRAIN_BUDGET="$TRAIN_TOKEN_BUDGET"
+fi
 if [ "$TRAIN_BUDGET" -le 0 ] 2>/dev/null || [ -z "$TRAIN_BUDGET" ]; then
     echo "ERROR: training_budget is missing or zero in dataset_stats.json" >&2
     echo "       Delete $DATA_DIR and re-run prepare_data to regenerate." >&2
@@ -938,6 +948,11 @@ echo ""
 # ══════════════════════════════════════════════════════════════
 #  STEP 4: EVALUATION
 # ══════════════════════════════════════════════════════════════
+
+if [ "${AMT_TRAIN_ONLY:-0}" = "1" ]; then
+    echo "Training complete; evaluation will run in a separate ModelArts job."
+    exit 0
+fi
 
 run_eval() {
     if [ "$EVALUATION_ENABLED" != "1" ]; then

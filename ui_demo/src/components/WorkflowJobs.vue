@@ -104,7 +104,7 @@ onBeforeUnmount(() => clearInterval(timer))
         <p v-if="selected.message" class="error-message">{{ selected.message }}</p>
         <h3 class="workflow-section-title">关联作业</h3>
         <div class="job-grid"><div v-for="(job, index) in selected.jobs" :key="job.name">
-          <div class="job-heading"><strong>{{ index === 0 ? '配比采样作业' : '训练评测作业' }}</strong><span class="status-badge" :class="`tone-${statusView(job.status).tone}`">{{ statusView(job.status).label }}</span></div>
+          <div class="job-heading"><strong>{{ job.module === 'training-evaluation' ? '训练评测作业（旧版）' : ['配比采样作业', '模型训练作业', '模型评测作业'][index] }}</strong><span class="status-badge" :class="`tone-${statusView(job.status).tone}`">{{ statusView(job.status).label }}</span></div>
           <small>{{ job.name }}</small><small>作业 ID：{{ job.id || (job.status === 'SUBMITTING' ? '未返回，创建结果待核对' : '尚未创建') }}</small>
           <a v-if="job.url" :href="job.url" target="_blank" rel="noopener noreferrer">打开 ModelArts 作业详情</a>
         </div></div>

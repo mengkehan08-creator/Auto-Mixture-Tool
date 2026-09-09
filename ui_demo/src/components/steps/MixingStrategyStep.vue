@@ -40,7 +40,7 @@ function useRecommended() {
     </div>
 
     <div class="shared-resource">
-      <div><strong>配比作业</strong><small>先校验算法输入，再由所选策略生成全部采样集；成功后自动提交训练评测作业。</small></div>
+      <div><strong>配比作业</strong><small>先校验算法输入，再生成全部采样集；成功后自动提交训练作业。</small></div>
       <label class="field"><span>节点数</span><input v-model.number="runtime.mixingNodes" type="number" min="1" max="16" /></label>
     </div>
 

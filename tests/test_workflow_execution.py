@@ -41,7 +41,7 @@ def test_custom_output_and_idempotency(manager):
         again = manager.create(body)
     assert current["status"] == "SUCCEEDED"
     assert again["id"] == created["id"]
-    assert len(manager.client.submissions) == 2
+    assert len(manager.client.submissions) == 3
     assert current["outputs"]["sampled"].startswith("obs://other-bucket/custom-output/runs/")
     second = manager.client.submissions[1]["algorithm"]
     sampled = next(x for x in second["inputs"] if x["name"] == "comparison_data_dir")
@@ -60,8 +60,8 @@ def test_separate_model_and_report_outputs(manager):
         assert manager._payload(record, stage)['spec']['schedule_policy']['priority'] == 1
     inputs = manager._payload(record, 'mixing')['algorithm']['inputs']
     assert all(item['remote']['obs']['obs_url'].endswith('/') for item in inputs)
-    outputs = manager._payload(record, 'training')['algorithm']['outputs']
     for name, root in [('models', 'obs://models-bucket/checkpoints'), ('reports', 'obs://reports-bucket/comparisons')]:
+        outputs = manager._payload(record, 'training' if name == 'models' else 'evaluation')['algorithm']['outputs']
         target = next(item for item in outputs if item['name'] == name + '_output')
         assert target['remote']['obs']['obs_url'] == f"{root}/runs/{created['name']}/"
         assert target['remote']['obs']['obs_url'] == created['outputs'][name]
@@ -205,7 +205,7 @@ def test_custom_commands_are_used_and_copied(manager):
     record = manager.records[created['id']]
     for stage in ('mixing', 'training'):
         assert manager._payload(record, stage)['algorithm']['command'] == body['commands'][stage]
-    assert manager.copy_configuration(created['id'])['commands'] == body['commands']
+    assert manager.copy_configuration(created['id'])['commands'] == {**body['commands'], 'evaluation': manager._command('evaluation')}
 
 
 @pytest.mark.parametrize('commands', [{}, {'mixing': 'x'}, {'mixing': '', 'training': 'y'},
@@ -220,7 +220,7 @@ def test_invalid_commands_rejected(manager, commands):
 def test_command_defaults_match_runtime():
     from auto_mixture_tool.api.server import workflow_defaults
     assert workflow_defaults()['commands'] == {
-        stage: ModelArtsWorkflowManager._command(stage) for stage in ('mixing', 'training')
+        stage: ModelArtsWorkflowManager._command(stage) for stage in ('mixing', 'training', 'evaluation')
     }
 
 
@@ -261,10 +261,10 @@ def test_failed_mixing_never_starts_training(manager):
 
 
 def test_transient_query_does_not_resubmit(manager):
-    with patch.object(manager.client, "get", side_effect=[requests.ConnectionError(), {"status": "Completed"}, {"status": "Completed"}]), patch("auto_mixture_tool.modelarts.workflow.time.sleep"):
+    with patch.object(manager.client, "get", side_effect=[requests.ConnectionError(), {"status": "Completed"}, {"status": "Completed"}, {"status": "Completed"}]), patch("auto_mixture_tool.modelarts.workflow.time.sleep"):
         result = finish(manager, manager.create(config()))
     assert result["status"] == "SUCCEEDED"
-    assert len(manager.client.submissions) == 2
+    assert len(manager.client.submissions) == 3
 
 
 def test_resume_uses_existing_job_id(manager):
@@ -279,7 +279,7 @@ def test_resume_uses_existing_job_id(manager):
         restored.resume()
         result = finish(restored, created)
     assert result["status"] == "SUCCEEDED"
-    assert len(restored.client.submissions) == 1
+    assert len(restored.client.submissions) == 2
     assert restored.client.events[0] == "get:existing-job"
     restored.close()
 

@@ -62,7 +62,7 @@ export const createTrainingConfig = () => ({
   modelObsUri: `${obsRoot}backup_0810/work/nanochat_model_dir/`,
   baseModelTag: 'd24',
   targetParamDataRatio: 0.5,
-  numIterations: 0,
+  tokenBudget: 401395843,
   deviceBatchSize: 1,
   evalEvery: -1,
   coreMetricEvery: -1,
@@ -71,6 +71,11 @@ export const createTrainingConfig = () => ({
 })
 
 export const createEvaluationConfig = () => ({
+  obsPackages: [],
+  nodes: 1,
+  devicesPerNode: 8,
+  coreEvalBatchSize: 16,
+  maxPerTask: -1,
   outputObsUri: `${obsRoot}chengchao/reports/`,
   dataset: {
     enabled: true,

@@ -64,6 +64,7 @@ class WorkflowRequest(BaseModel):
     priority: int = Field(default=1, ge=1, le=3, strict=True)
     mixing_nodes: int = Field(default=2, ge=1, le=16, strict=True)
     training_nodes: int = Field(default=2, ge=1, le=16, strict=True)
+    evaluation_nodes: int = Field(default=1, ge=1, le=16, strict=True)
     full_scan: bool = False
     strategies: list[dict[str, Any]]
     training: dict[str, Any]
@@ -193,7 +194,7 @@ def workflow_defaults() -> dict[str, Any]:
     allowed = {'endpoint', 'region', 'workspace_id', 'workspace_name', 'image_url', 'image_repo_id', 'flavor_id', 'pool_id'}
     return {"auth_mode": "iam" if os.environ.get('AMT_IAM_PROVIDER', '').strip() else "manual",
             "modelarts": {key: value for key, value in settings.items() if key in allowed},
-            "commands": {stage: ModelArtsWorkflowManager._command(stage) for stage in ("mixing", "training")}}
+            "commands": {stage: ModelArtsWorkflowManager._command(stage) for stage in ("mixing", "training", "evaluation")}}
 
 
 @app.post("/api/v1/workflows/{workflow_id}/authorization")

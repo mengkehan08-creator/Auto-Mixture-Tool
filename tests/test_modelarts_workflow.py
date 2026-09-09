@@ -73,7 +73,7 @@ class WorkflowTests(unittest.TestCase):
                 threading.Event().wait(0.001)
             self.assertEqual(current["status"], "SUCCEEDED")
             self.assertEqual(fake.events, [
-                "submit:job-1", "get:job-1", "submit:job-2", "get:job-2"
+                "submit:job-1", "get:job-1", "submit:job-2", "get:job-2", "submit:job-3", "get:job-3"
             ])
             self.assertEqual(current["jobs"][0]["nodes"], 2)
             self.assertEqual(current["jobs"][1]["nodes"], 3)

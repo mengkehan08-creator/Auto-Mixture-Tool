@@ -49,6 +49,7 @@ function requestBody() {
     output_root_obs_uri: props.runtime.outputRootObsUri,
     mixing_nodes: props.runtime.mixingNodes,
     training_nodes: props.training.nodes,
+    evaluation_nodes: props.evaluation.nodes,
     strategies: normalizedStrategies(),
     training: {
       output_obs_uri: props.training.outputObsUri,
@@ -56,12 +57,12 @@ function requestBody() {
       base_model_tag: props.training.baseModelTag,
       target_param_data_ratio: props.training.targetParamDataRatio,
       devices_per_node: props.training.devicesPerNode,
-      num_iterations: props.training.numIterations,
+      token_budget: props.training.tokenBudget,
       device_batch_size: props.training.deviceBatchSize,
       eval_every: props.training.evalEvery,
       core_metric_every: props.training.coreMetricEvery,
     },
-    evaluation: { output_obs_uri: props.evaluation.outputObsUri, datasets: props.evaluation.dataset.enabled ? normalizeEvaluationTasks(props.evaluation.dataset.names) : [] },
+    evaluation: { obs_packages: props.evaluation.dataset.enabled && props.evaluation.dataset.source === 'obs' ? props.evaluation.obsPackages : [], automatic_api_requested: props.evaluation.api.enabled, output_obs_uri: props.evaluation.outputObsUri, devices_per_node: props.evaluation.devicesPerNode, core_eval_batch_size: props.evaluation.coreEvalBatchSize, max_per_task: -1, datasets: props.evaluation.dataset.enabled ? normalizeEvaluationTasks(props.evaluation.dataset.names) : [] },
     resources: {
       code_obs_uri: props.runtime.codeObsUri,
       nanochat_repo_obs_uri: props.training.frameworkObsUri,
@@ -137,6 +138,7 @@ async function loadCommands(reset = false) {
     authMode.value = defaults.auth_mode || 'manual'
     if (authMode.value === 'iam') props.runtime.modelarts.authorization = ''
     if (reset || !props.runtime.commands) props.runtime.commands = defaults.commands
+    else if (!props.runtime.commands.evaluation) props.runtime.commands.evaluation = defaults.commands.evaluation
     for (const [key, value] of Object.entries(defaults.modelarts || {})) {
       if (!props.runtime.modelarts[key]) props.runtime.modelarts[key] = value
     }
@@ -149,7 +151,8 @@ onBeforeUnmount(() => window.clearInterval(timer))
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>任务配置</h2><p>一次实验提交两个作业；配比作业成功后，平台自动提交训练评测作业。</p></div></div>
+    <div class="section-title-row"><div><h2>任务配置</h2><p>评测集启用且选择了任务或 OBS 评测包时提交三个作业，否则只提交配比和训练作业。</p></div></div>
+    <p v-if="evaluation.api.enabled" class="path-preview" role="status">自动评估暂未接入：本次不会执行自动评估，也不会创建自动评估作业。</p>
     <h3>ModelArts 作业配置</h3>
     <p class="path-preview">已填入脚本默认配置，可编辑。</p>
     <div class="form-grid two-cols">
@@ -162,8 +165,9 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <article><span>training.output_obs_uri</span><strong class="break-path">{{ training.outputObsUri || '沿用实验输出目录' }}</strong><small>模型与检查点 · 自动追加 runs/实验名称/</small></article>
       <article><span>evaluation.output_obs_uri</span><strong class="break-path">{{ evaluation.outputObsUri || '沿用实验输出目录' }}</strong><small>评测与对比报告 · 自动追加 runs/实验名称/</small></article>
       <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ runtime.mixingNodes }} 节点 · 先校验再生成全部采样集</small></article>
-      <article><span>训练评测作业</span><strong>{{ training.framework }}</strong><small>{{ training.nodes }} 节点 · 依次处理全部采样集</small></article>
-      <article><span>training.num_iterations</span><strong>{{ training.numIterations === 0 ? '自动计算' : `${training.numIterations} 步` }}</strong><small>{{ training.numIterations === 0 ? '按共同训练预算计算' : '各配比模型采用相同固定步数' }}</small></article>
+      <article><span>训练作业</span><strong>{{ training.framework }}</strong><small>{{ training.nodes }} 节点 · 依次训练全部采样集</small></article>
+      <article><span>evaluation_nodes</span><strong>{{ evaluation.dataset.enabled ? `${evaluation.nodes} 节点` : '未启用评测' }}</strong><small>模型输入自动使用前序训练输出</small></article>
+      <article><span>training.token_budget</span><strong>{{ Number(training.tokenBudget).toLocaleString() }} Token</strong><small>各配比模型共用训练预算</small></article>
       <article><span>输出根目录</span><strong class="break-path">{{ runtime.outputRootObsUri }}</strong><small>按实验名称隔离 mixing / sampled / training</small></article>
     </div>
     <div class="config-block">
@@ -171,7 +175,8 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <p>默认命令已包含离线环境检查，可编辑。请勿在命令中填写凭据。</p>
       <template v-if="runtime.commands">
         <label class="field"><span>command（配比作业）</span><textarea v-model="runtime.commands.mixing" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
-        <label class="field"><span>command（训练评测作业）</span><textarea v-model="runtime.commands.training" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
+        <label class="field"><span>command（训练作业）</span><textarea v-model="runtime.commands.training" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
+        <label class="field"><span>command（评测作业）</span><textarea v-model="runtime.commands.evaluation" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
       </template>
       <button class="button secondary" type="button" @click="loadCommands(true)">{{ runtime.commands ? '恢复默认命令' : '重新加载默认命令' }}</button>
     </div>

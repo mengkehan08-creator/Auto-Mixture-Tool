@@ -130,6 +130,7 @@ def run_training(config: dict[str, Any]) -> None:
                 raise ValueError("人工采样清单与本次所选方案不一致")
     env = os.environ.copy()
     env.update({
+        "AMT_TRAIN_ONLY": "1" if config.get('split_evaluation') else "0",
         "PREPARED_COMPARISON_DATA_DIR": str(data_dir),
         "COMPARISON_METHODS": ",".join(comparison["methods"]),
         "MANUAL_PLANS_JSON": json.dumps(
@@ -147,13 +148,14 @@ def run_training(config: dict[str, Any]) -> None:
         ),
         "NUM_NPU": str(config["training"].get("devices_per_node", 8)),
         "TRAIN_NUM_ITERATIONS": str(config["training"].get("num_iterations", 0)),
+        "TRAIN_TOKEN_BUDGET": str(config["training"].get("token_budget", "")),
         "DEVICE_BATCH_SIZE": str(config["training"].get("device_batch_size", 1)),
         "EVAL_EVERY": str(config["training"].get("eval_every", -1)),
         "CORE_METRIC_EVERY": str(config["training"].get("core_metric_every", -1)),
         "RESULT_DIR": str(OUTPUT.parent / "reports_output" if config["evaluation"].get("output_obs_uri") else OUTPUT / "training/results"),
         "MID_CHECKPOINTS_OUTPUT_DIR": str(OUTPUT.parent / "models_output" if config["training"].get("output_obs_uri") else OUTPUT / "training/checkpoints"),
         "EVAL_BENCHMARKS": ",".join(config["evaluation"].get("datasets") or ["stem"]),
-        "EVALUATION_ENABLED": "1" if config["evaluation"].get("datasets", ["stem"]) else "0",
+        "EVALUATION_ENABLED": "1" if not config.get('split_evaluation') and config["evaluation"].get("datasets", ["stem"]) else "0",
         "MIX_GENERAL_DATA": "0",
     })
     subprocess.run(
@@ -162,13 +164,16 @@ def run_training(config: dict[str, Any]) -> None:
         env=env,
         check=True,
     )
+    if config.get('split_evaluation') and int(os.environ.get('VC_TASK_INDEX', '0')) == 0:
+        from .evaluation_job import publish_models
+        publish_models(config, Path(env['MID_CHECKPOINTS_OUTPUT_DIR']), data_dir)
 
 
 def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("stage", choices=("mixing", "training"))
+    parser.add_argument("stage", choices=("mixing", "training", "evaluation"))
     args = parser.parse_args()
     config = _config()
     check_mounted_assets(config, args.stage)
@@ -176,8 +181,11 @@ def main() -> None:
         with tempfile.TemporaryDirectory(prefix='amt-strategies-') as directory:
             materialize_scripts(config, directory)
             run_mixing(config)
-    else:
+    elif args.stage == 'training':
         run_training(config)
+    else:
+        from .evaluation_job import run_evaluation
+        run_evaluation(config)
 
 
 if __name__ == "__main__":

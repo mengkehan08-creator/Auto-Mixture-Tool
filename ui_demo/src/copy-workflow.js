@@ -23,7 +23,7 @@ export function copyWorkflow(config) {
     baseModelTag: config.training.base_model_tag || 'd24',
     targetParamDataRatio: config.training.target_param_data_ratio,
     devicesPerNode: config.training.devices_per_node,
-    numIterations: config.training.num_iterations ?? 0,
+    tokenBudget: config.training.token_budget ?? training.tokenBudget,
     deviceBatchSize: config.training.device_batch_size ?? 1,
     evalEvery: config.training.eval_every ?? -1,
     coreMetricEvery: config.training.core_metric_every ?? -1,
@@ -31,6 +31,12 @@ export function copyWorkflow(config) {
   runtime.offlineResources = config.offline_resources ? structuredClone(config.offline_resources) :
     runtime.offlineResources.map(item => ({ ...item, uri: resources[item.role] || item.uri }))
   evaluation.outputObsUri = config.evaluation.output_obs_uri || ''
+  evaluation.obsPackages = structuredClone(config.evaluation.obs_packages || [])
+  evaluation.api.enabled = config.evaluation.automatic_api_requested === true
+  evaluation.nodes = config.evaluation_nodes ?? 1
+  evaluation.devicesPerNode = config.evaluation.devices_per_node ?? 8
+  evaluation.coreEvalBatchSize = config.evaluation.core_eval_batch_size ?? 16
+  evaluation.maxPerTask = config.evaluation.max_per_task ?? -1
   evaluation.dataset = { enabled: Boolean(config.evaluation.datasets.length), source: 'obs',
     names: normalizeEvaluationTasks(config.evaluation.datasets), obsUri: resources.eval_bundle_obs_uri }
   const strategies = config.strategies.map(item => ({ ...createStrategy(item.type),

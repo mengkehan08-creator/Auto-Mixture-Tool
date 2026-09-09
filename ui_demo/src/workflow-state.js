@@ -23,7 +23,7 @@ export function statusView(status = '') {
   if (key === 'NEEDS_ATTENTION') return { label: '待人工核对', tone: 'warning' }
   if (['QUEUED', 'PENDING', 'WAITING', 'SUBMITTED', 'CREATING'].includes(key)) return { label: '等待运行', tone: 'muted' }
   if (key === 'SUBMITTING') return { label: '正在提交', tone: 'active' }
-  if (['RUNNING', 'MIXING_RUNNING', 'TRAINING_RUNNING', 'MIXING_SUCCEEDED'].includes(key)) return { label: '正在作业', tone: 'active' }
+  if (['RUNNING', 'MIXING_RUNNING', 'TRAINING_RUNNING', 'EVALUATION_RUNNING', 'TRAINING_SUCCEEDED', 'MIXING_SUCCEEDED'].includes(key)) return { label: '正在作业', tone: 'active' }
   return { label: '状态待确认', tone: 'muted' }
 }
 
@@ -37,10 +37,13 @@ export function searchWorkflows(items, query) {
   return items.filter(item => !keyword || (item.name || '').toLocaleLowerCase().includes(keyword))
 }
 
-export const workflowStages = ['配比提交', '配比采样', '训练提交', '训练评测', '全部完成']
+export const workflowStages = ['配比提交', '配比采样', '训练提交', '模型训练', '评测提交', '模型评测', '全部完成']
 
 export function stageIndex(workflow) {
-  if (workflow.status === 'SUCCEEDED') return 4
+  if (workflow.status === 'SUCCEEDED') return 6
+  const evaluation = workflow.jobs?.[2]
+  if (evaluation?.id) return ['active', 'success'].includes(statusView(evaluation.status).tone) ? 5 : 4
+  if (workflow.status === 'TRAINING_SUCCEEDED') return 4
   const training = workflow.jobs?.[1]
   const mixing = workflow.jobs?.[0]
   if (workflow.status === 'TRAINING_RUNNING' || training?.id) {

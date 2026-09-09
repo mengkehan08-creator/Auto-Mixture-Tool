@@ -1,4 +1,4 @@
-"""Submit and monitor the two ModelArts jobs that form one experiment."""
+"""Submit dependent mixing, training and evaluation ModelArts jobs."""
 
 from __future__ import annotations
 
@@ -360,7 +360,8 @@ class ModelArtsWorkflowManager:
             "missing_settings": missing,
             "jobs": [
                 {"module": "mixing", "nodes": value["mixing_nodes"]},
-                {"module": "training-evaluation", "nodes": value["training_nodes"]},
+                {"module": "training", "nodes": value["training_nodes"]},
+                *([{"module": "evaluation", "nodes": value["evaluation_nodes"]}] if value['evaluation']['datasets'] or value['evaluation'].get('obs_packages') else []),
             ],
             "input_data_obs_uri": value["input_data_obs_uri"],
             "output_root_obs_uri": value["output_root_obs_uri"],
@@ -403,6 +404,7 @@ class ModelArtsWorkflowManager:
         experiment = f"{prefix}-{stamp}-{workflow_id[:6]}"
         run_root = f"{_clean_obs_uri(normalized['output_root_obs_uri'])}/runs/{experiment}"
         record = {
+            "pipeline_version": 3,
             "id": workflow_id,
             "created_at": created.isoformat(timespec="milliseconds"),
             "name": experiment,
@@ -417,7 +419,8 @@ class ModelArtsWorkflowManager:
             },
             "jobs": [
                 self._job_record("mixing", normalized["mixing_nodes"], stamp),
-                self._job_record("training-evaluation", normalized["training_nodes"], stamp),
+                self._job_record("training", normalized["training_nodes"], stamp),
+                *([self._job_record("evaluation", normalized["evaluation_nodes"], stamp)] if normalized['evaluation']['datasets'] or normalized['evaluation'].get('obs_packages') else []),
             ],
             "config": normalized,
             "message": "",
@@ -427,8 +430,8 @@ class ModelArtsWorkflowManager:
             record["outputs"][output] = (
                 f"{root}/runs/{experiment}/" if root else f"{run_root}/training/{suffix}/"
             )
-        # Build both stage requests before scheduling the first paid job.
-        for stage in ('mixing', 'training'):
+        # Validate every stage request before scheduling the first paid job.
+        for stage in ('mixing', 'training', *(['evaluation'] if len(record['jobs']) == 3 else [])):
             self._payload(record, stage)
         self._store(record)
         self._start(workflow_id)
@@ -527,7 +530,9 @@ class ModelArtsWorkflowManager:
                     raise ValueError('已删除默认运行资源，请恢复资源或为两个作业配置不依赖这些资源的自定义 command')
         commands = value.get("commands")
         if commands is not None:
-            if not isinstance(commands, dict) or set(commands) != {"mixing", "training"}:
+            if isinstance(commands, dict) and set(commands) == {"mixing", "training"}:
+                commands['evaluation'] = self._command('evaluation')
+            if not isinstance(commands, dict) or set(commands) != {"mixing", "training", "evaluation"}:
                 raise ValueError("command 必须分别提供配比和训练作业的启动命令")
             for command in commands.values():
                 if not isinstance(command, str) or not command.strip() or "\x00" in command or len(command) > 32768:
@@ -554,7 +559,8 @@ class ModelArtsWorkflowManager:
         value["experiment_name"] = experiment_name
         for key in ("input_data_obs_uri", "output_root_obs_uri"):
             value[key] = _clean_obs_uri(str(value.get(key, "")))
-        for key in ("mixing_nodes", "training_nodes"):
+        value.setdefault('evaluation_nodes', 1)
+        for key in ("mixing_nodes", "training_nodes", "evaluation_nodes"):
             nodes = value.get(key, 0)
             if type(nodes) is not int or not 1 <= nodes <= 16:
                 raise ValueError(f"{key} must be between 1 and 16")
@@ -639,6 +645,12 @@ class ModelArtsWorkflowManager:
         if not math.isfinite(ratio) or ratio <= 0:
             raise ValueError("training target_param_data_ratio must be positive")
         training["target_param_data_ratio"] = ratio
+        if "token_budget" in training:
+            budget = training["token_budget"]
+            if type(budget) is not int or not 1 <= budget <= 9007199254740991:
+                raise ValueError("训练 Token 预算必须为大于 0 的安全整数")
+            if training.get("num_iterations", 0) != 0:
+                raise ValueError("训练 Token 预算与固定训练步数不能同时设置")
         for key, default, minimum in (("num_iterations", 0, 0), ("device_batch_size", 1, 1),
                                       ("eval_every", -1, -1), ("core_metric_every", -1, -1)):
             number = training.get(key, default)
@@ -648,6 +660,21 @@ class ModelArtsWorkflowManager:
             training[key] = number
         value["training"] = training
         evaluation = value.setdefault("evaluation", {"datasets": ["stem"]})
+        packages = evaluation.get('obs_packages', [])
+        if not isinstance(packages, list) or len(packages) > 16:
+            raise ValueError('OBS 评测包必须为列表，最多 16 项')
+        for package in packages:
+            if not isinstance(package, dict) or not isinstance(package.get('name'), str) or not package['name'].strip():
+                raise ValueError('请填写 OBS 评测包名称')
+            package['obs_uri'] = _clean_obs_uri(str(package.get('obs_uri', '')))
+        for key, default, minimum, maximum in (
+            ('devices_per_node', 8, 1, 8), ('core_eval_batch_size', 16, 1, 4096),
+            ('max_per_task', -1, -1, 2147483647),
+        ):
+            number = evaluation.get(key, default)
+            if type(number) is not int or not minimum <= number <= maximum or number == 0:
+                raise ValueError(f'评测参数 {key} 无效')
+            evaluation[key] = number
         allowed = {"stem", "core", "all", "arc_easy", "arc_challenge", "mmlu_stem",
                    "gpqa_diamond", "gsm8k_cot", "math_cot_500", "mmlu_zeroshot"}
         datasets = evaluation.get("datasets", ["stem"])
@@ -682,7 +709,7 @@ class ModelArtsWorkflowManager:
         payload = self._configured_template(record["config"].get("modelarts")).job_data
         config = copy.deepcopy(record["config"])
         config.pop("modelarts", None)
-        job = record["jobs"][0 if stage == "mixing" else 1]
+        job = record["jobs"][{'mixing': 0, 'training': 1, 'evaluation': 2}[stage]]
         payload["metadata"]["name"] = job["name"]
         payload["metadata"]["description"] = f"Auto-Mixture {stage} stage"
         payload["spec"]["resource"]["node_count"] = job["nodes"]
@@ -746,6 +773,16 @@ class ModelArtsWorkflowManager:
                 "access_method": "env",
                 "remote": {"obs": {"obs_url": f"{record['run_root_obs_uri']}/sampled/"}},
             })
+        if stage == 'evaluation':
+            for index, package in enumerate(config['evaluation'].get('obs_packages', [])):
+                payload['algorithm']['inputs'].append({
+                    'name': f'eval_package_{index}', 'local_dir': f'/home/ma-user/modelarts/inputs/eval_package_{index}',
+                    'access_method': 'env', 'remote': {'obs': {'obs_url': package['obs_uri'].rstrip('/') + '/'}},
+                })
+            payload['algorithm']['inputs'].append({
+                'name': 'trained_models', 'local_dir': '/home/ma-user/modelarts/inputs/trained_models',
+                'access_method': 'env', 'remote': {'obs': {'obs_url': record['outputs']['models']}},
+            })
         for index, strategy in enumerate(config["strategies"], start=9):
             obs_uri = str(strategy.get("script_obs_uri") or "").strip()
             if not obs_uri or stage != "mixing":
@@ -761,6 +798,7 @@ class ModelArtsWorkflowManager:
                 "access_method": "env", "remote": {"obs": {"obs_url": _clean_obs_uri(obs_uri)}},
             })
         runtime_config = copy.deepcopy(config)
+        runtime_config['split_evaluation'] = record.get('pipeline_version') == 3
         runtime_config.pop('commands', None)
         runtime_config.pop('offline_resources', None)
         if stage != 'mixing':
@@ -773,8 +811,13 @@ class ModelArtsWorkflowManager:
         payload["algorithm"]["outputs"][0]["remote"]["obs"]["obs_url"] = (
             record["run_root_obs_uri"] + "/"
         )
-        if stage == "training":
-            for section, output in (("training", "models"), ("evaluation", "reports")):
+        if stage in {"training", "evaluation"}:
+            pairs = (("training", "models"), ("evaluation", "reports"))
+            if stage == 'evaluation':
+                pairs = (("evaluation", "reports"),)
+            elif record.get('pipeline_version') == 3:
+                pairs = (("training", "models"),)
+            for section, output in pairs:
                 if config[section].get("output_obs_uri"):
                     payload["algorithm"]["outputs"].append({
                         "name": f"{output}_output", "local_dir": f"/home/ma-user/modelarts/outputs/{output}_output",
@@ -784,7 +827,7 @@ class ModelArtsWorkflowManager:
 
     @staticmethod
     def _command(stage: str) -> str:
-        if stage not in {'mixing', 'training'}:
+        if stage not in {'mixing', 'training', 'evaluation'}:
             raise ValueError('Unknown ModelArts stage')
         command = '''set -euo pipefail
 cd /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool
@@ -827,12 +870,19 @@ exec "$PY311" -m auto_mixture_tool.modelarts.stage_runner ''' + stage
                 return
             record["status"] = "MIXING_SUCCEEDED"
             record["progress"] = 50
-            record["stage"] = "配比完成，正在自动提交训练评测作业"
+            record["stage"] = "配比完成，正在自动提交训练作业"
             self._store(record)
             if not self._submit_and_wait(record, 1, "training", 60, 95):
                 return
             if record.get('delete_requested'):
                 return
+            if record.get('pipeline_version') == 3 and len(record['jobs']) > 2:
+                record.update(status='TRAINING_SUCCEEDED', stage='训练完成，正在自动提交评测作业')
+                self._store(record)
+                if not self._submit_and_wait(record, 2, 'evaluation', 96, 99):
+                    return
+                if record.get('delete_requested'):
+                    return
             record.update(status="SUCCEEDED", progress=100, stage="全部作业完成")
         except Exception as exc:
             uncertain = any(job["status"] == "SUBMITTING" and not job["id"] for job in record["jobs"])

@@ -1,8 +1,10 @@
 <script setup>
 import { computed } from 'vue'
-import { hasProgress, stageIndex, workflowStages } from '../workflow-state'
+import { hasProgress, stageIndex, workflowStages as allStages } from '../workflow-state'
 const props = defineProps({ workflow: { type: Object, required: true } })
-const current = computed(() => stageIndex(props.workflow))
+const workflowStages = computed(() => props.workflow.jobs?.length === 2
+  ? ['配比提交', '配比采样', '训练提交', props.workflow.jobs[1].module === 'training-evaluation' ? '训练评测' : '模型训练', '全部完成'] : allStages)
+const current = computed(() => Math.min(stageIndex(props.workflow), workflowStages.value.length - 1))
 const visible = computed(() => hasProgress(props.workflow))
 const finished = computed(() => props.workflow.status === 'SUCCEEDED')
 </script>
@@ -16,11 +18,12 @@ const finished = computed(() => props.workflow.status === 'SUCCEEDED')
     <div class="stage-scroll">
       <div class="stage-ruler" :class="{ inactive: !visible, finished }">
         <div class="ruler-track" role="progressbar" aria-label="工作流阶段进度"
-          :aria-valuenow="visible ? current : 0" :aria-valuemax="4" aria-valuemin="0"
+          :style="{ left: `${50 / workflowStages.length}%`, width: `${100 - 100 / workflowStages.length}%` }"
+          :aria-valuenow="visible ? current : 0" :aria-valuemax="workflowStages.length - 1" aria-valuemin="0"
           :aria-valuetext="visible ? workflowStages[current] : '暂无有效进度'">
-          <span :style="{ width: visible ? `${current * 25}%` : '0%' }"></span>
+          <span :style="{ width: visible ? `${current * 100 / (workflowStages.length - 1)}%` : '0%' }"></span>
         </div>
-        <ol class="ruler-stages">
+        <ol class="ruler-stages" :style="{ gridTemplateColumns: `repeat(${workflowStages.length}, 1fr)` }">
           <li v-for="(stage, index) in workflowStages" :key="stage"
             :class="{ done: visible && (index < current || finished), current: visible && index === current && !finished }"
             :aria-current="visible && index === current && !finished ? 'step' : undefined">

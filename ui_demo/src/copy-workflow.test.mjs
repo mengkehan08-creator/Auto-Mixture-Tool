@@ -8,7 +8,7 @@ test('OBS defaults match deployed script resources including proxy validation', 
   assert.ok(runtime.inputDataObsUri.endsWith('chengchao/prepared_parquet_57ffce0ca0a2/'))
   assert.equal(runtime.proxyValidationObsUri, 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/AMT_old/data/')
   assert.ok(createTrainingConfig().modelObsUri.includes('backup_0810/work/'))
-  assert.equal(createTrainingConfig().numIterations, 0)
+  assert.equal(createTrainingConfig().tokenBudget, 401395843)
 })
 test('copy restores settings but never credentials or job identifiers', () => {
   const source = { request_id: 'old-request', experiment_name: 'experiment', mixing_nodes: 3, training_nodes: 4,
@@ -19,9 +19,11 @@ test('copy restores settings but never credentials or job identifiers', () => {
     strategies: [{ id: 'old-plan', type: 'manual', ratios: { 数学: 1 }, script_obs_uri: 'obs://bucket/custom.py', script_config: { limit: 2 } }],
   }
   const copy = copyWorkflow(source)
-  assert.equal(copy.training.numIterations, 0)
-  source.training.num_iterations = 1200
-  assert.equal(copyWorkflow(source).training.numIterations, 1200)
+  assert.equal(copy.training.tokenBudget, 401395843)
+  source.evaluation.automatic_api_requested = true
+  assert.equal(copyWorkflow(source).evaluation.api.enabled, true)
+  source.training.token_budget = 120000000
+  assert.equal(copyWorkflow(source).training.tokenBudget, 120000000)
   assert.equal(copy.runtime.modelarts.authorization, '')
   assert.equal(copy.runtime.mixingNodes, 3)
   assert.equal(copy.training.nodes, 4)

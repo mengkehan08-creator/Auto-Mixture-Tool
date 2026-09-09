@@ -1,0 +1,182 @@
+"""Explicit checkpoint handoff between training and evaluation jobs."""
+from __future__ import annotations
+
+import csv
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+def digest(path):
+    result = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+            result.update(chunk)
+    return result.hexdigest()
+
+
+def publish_models(config, root, data):
+    """Publish the completion manifest last, only after all models are present."""
+    run = os.environ['AMT_RUN_ID']
+    base = config['training'].get('base_model_tag', 'd24')
+    models = []
+    for strategy in config['strategies']:
+        kind = strategy['type']
+        part = f"manual_{strategy['id']}" if kind == 'manual' else kind
+        tag = f'{base}_stem_{part}_{run}'
+        folder = root / tag
+        weights = sorted(folder.glob('model_*.pt'))
+        if not weights:
+            raise ValueError(f'训练输出不完整：找不到 {folder}/model_*.pt，评测不会启动')
+        weight = weights[-1]
+        step = int(weight.stem.removeprefix('model_'))
+        meta = folder / weight.name.replace('model_', 'meta_').replace('.pt', '.json')
+        files = []
+        for path in (weight, meta):
+            if not path.is_file() or path.stat().st_size == 0:
+                raise ValueError(f'训练输出不完整：{path}')
+            files.append({'path': path.relative_to(root).as_posix(), 'size': path.stat().st_size,
+                          'sha256': digest(path)})
+        models.append({'id': strategy['id'], 'name': strategy.get('name', kind),
+                       'model_tag': tag, 'step': step, 'files': files,
+                       'configured_ratios': strategy.get('ratios', {})})
+    manifest = {'version': 1, 'run': run, 'models': models,
+                'dataset_stats': json.loads((data / 'dataset_stats.json').read_text(encoding='utf-8'))}
+    target = root / 'models_manifest.json'
+    temporary = target.with_suffix('.tmp')
+    temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+    temporary.replace(target)
+
+
+def validate_models(root):
+    manifest = json.loads((root / 'models_manifest.json').read_text(encoding='utf-8'))
+    if manifest.get('version') != 1 or not manifest.get('models'):
+        raise ValueError('模型清单无效或为空')
+    for model in manifest['models']:
+        tag = model['model_tag']
+        if Path(tag).name != tag or '/' in tag or '\\' in tag or tag in {'.', '..'}:
+            raise ValueError('模型标签不能包含路径')
+        if not model.get('files'):
+            raise ValueError('模型清单缺少文件')
+        for item in model['files']:
+            path = (root / item['path']).resolve()
+            if not path.is_relative_to(root.resolve()) or not path.is_file():
+                raise ValueError(f'模型文件缺失或路径无效：{item["path"]}')
+            if path.stat().st_size != item['size'] or digest(path) != item['sha256']:
+                raise ValueError(f'模型文件校验失败：{item["path"]}')
+    return manifest
+
+
+def run_evaluation(config):
+    from nanochat_mid_compare.eval_assets import validate_assets, task_definitions
+    inputs = Path('/home/ma-user/modelarts/inputs')
+    tasks, labels = task_definitions(inputs / 'nanochat_npu_dir_3')
+    packages = []
+    if config['evaluation']['datasets']:
+        packages.append(('builtin', inputs / 'eval_bundle_dir_6', config['evaluation']['datasets']))
+    for index, package in enumerate(config['evaluation'].get('obs_packages', [])):
+        source = inputs / f'eval_package_{index}'
+        validate_package(source)
+        packages.append((f'package_{index}', source, ['core']))
+    # Validate every selected package before any model evaluation starts.
+    for name, source, selected in packages:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            (base / 'eval_bundle').symlink_to(source, target_is_directory=True)
+            from nanochat_mid_compare.prepare_offline_eval_bundle import materialize
+            materialize(source, base)
+            validate_assets(base, selected, tasks, labels)
+    for name, source, selected in packages:
+        current = {**config, 'evaluation': {**config['evaluation'], 'datasets': selected}}
+        _run_evaluation(current, source, name if config['evaluation'].get('obs_packages') else None)
+
+
+def validate_package(source):
+    import yaml
+    try:
+        tasks = yaml.safe_load((source / 'core.yaml').read_text(encoding='utf-8'))['icl_tasks']
+        if not isinstance(tasks, list) or not tasks:
+            raise ValueError('icl_tasks 不能为空')
+        labels = set()
+        for task in tasks:
+            if task['icl_task_type'] not in {'multiple_choice', 'generation'}:
+                raise ValueError(f"不支持任务类型：{task['icl_task_type']}")
+            if not isinstance(task['label'], str) or task['label'] in labels:
+                raise ValueError('任务名称无效或重复')
+            labels.add(task['label'])
+            if not isinstance(task['dataset_uri'], str):
+                raise ValueError('dataset_uri 必须是相对路径')
+            if not isinstance(task['num_fewshot'], list) or not task['num_fewshot'] or type(task['num_fewshot'][0]) is not int or task['num_fewshot'][0] < 0:
+                raise ValueError('num_fewshot 必须包含非负整数')
+            if task['icl_task_type'] == 'generation' and task.get('answer_extractor', 'gsm8k') not in {'gsm8k', 'math'}:
+                raise ValueError('不支持该生成题答案提取方式')
+    except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError) as exc:
+        raise ValueError(f'评测集不符合当前 NanoChat 要求：{source}：{exc}') from None
+
+
+def _run_evaluation(config, bundle, report_name):
+    from .stage_runner import OUTPUT, WORKSPACE
+    inputs = Path('/home/ma-user/modelarts/inputs')
+    models = inputs / 'trained_models'
+    manifest = validate_models(models)
+    settings = config['evaluation']
+    nodes = int(os.environ.get('MA_NUM_HOSTS', '1'))
+    rank = int(os.environ.get('VC_TASK_INDEX', '0'))
+    if nodes != config.get('evaluation_nodes', 1):
+        raise ValueError('评测节点数与配置不一致')
+    master = os.environ.get('VC_WORKER_HOSTS', '127.0.0.1').split(',')[0]
+    if nodes > 1 and not os.environ.get('VC_WORKER_HOSTS'):
+        raise ValueError('多节点评测缺少 VC_WORKER_HOSTS')
+    report = OUTPUT.parent / 'reports_output' if settings.get('output_obs_uri') else OUTPUT / 'training/results'
+    if report_name:
+        report = report / report_name
+    report.mkdir(parents=True, exist_ok=True)
+    repo = inputs / 'nanochat_npu_dir_3'
+    with tempfile.TemporaryDirectory(prefix='amt-evaluation-') as directory:
+        runtime = Path(directory)
+        (runtime / 'mid_checkpoints').symlink_to(models, target_is_directory=True)
+        (runtime / 'tokenizer').symlink_to(inputs / 'nanochat_model_dir_1/tokenizer', target_is_directory=True)
+        (runtime / 'eval_bundle').symlink_to(bundle, target_is_directory=True)
+        from nanochat_mid_compare.prepare_offline_eval_bundle import materialize
+        materialize(bundle, runtime)
+        env = os.environ.copy()
+        env.update(NANOCHAT_BASE_DIR=str(runtime), HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1',
+                   HF_DATASETS_OFFLINE='1', PYTHONPATH=f'{WORKSPACE}:{WORKSPACE / "src"}:{repo}:' + env.get('PYTHONPATH', ''))
+        env['RANK_SIZE'] = str(nodes * settings.get('devices_per_node', 8))
+        env['HCCL_EXEC_TIMEOUT'] = '1200'
+        results = []
+        for model in manifest['models']:
+            command = [sys.executable, '-m', 'torch.distributed.run', f'--nnodes={nodes}',
+                       f'--node_rank={rank}', f'--nproc_per_node={settings.get("devices_per_node", 8)}',
+                       '--rdzv_backend=static', f'--rdzv_endpoint={master}:{os.environ.get("MASTER_PORT", "29500")}',
+                       '-m', 'nanochat_mid_compare.offline_base_eval', '--eval=core', '--model-type=mid',
+                       f'--model-tag={model["model_tag"]}', f'--step={model["step"]}',
+                       '--eval-benchmarks=' + ','.join(settings['datasets']),
+                       f'--core-eval-batch-size={settings.get("core_eval_batch_size", 16)}',
+                       f'--max-per-task={settings.get("max_per_task", -1)}']
+            subprocess.run(command, cwd=repo, env=env, check=True)
+            if rank == 0:
+                source = runtime / 'base_eval' / f'mid_model_{model["step"]:06d}.csv'
+                target = report / f'{model["id"]}.csv'
+                shutil.copyfile(source, target)
+                with target.open(encoding='utf-8') as stream:
+                    metrics = list(csv.DictReader(stream, skipinitialspace=True))
+                results.append({**model, 'metrics': metrics})
+        if rank == 0:
+            (report / 'comparison_report.json').write_text(json.dumps({
+                'run': manifest['run'], 'models': results, 'dataset_stats': manifest['dataset_stats'],
+                'evaluation': settings,
+            }, ensure_ascii=False, indent=2), encoding='utf-8')
+            lines = ['# 配比模型评测对比', '', '| 策略 | 评测项 | Accuracy | Centered |', '|---|---|---|---|']
+            for model in results:
+                for row in model['metrics']:
+                    row = {key.strip(): value.strip() for key, value in row.items()}
+                    name = str(model['name']).replace('|', '\\|').replace('\n', ' ')
+                    lines.append(f"| {name} | {row.get('Task', '')} | {row.get('Accuracy', '')} | {row.get('Centered', '')} |")
+            lines += ['', '配比与采样统计详见 comparison_report.json 的 dataset_stats。']
+            (report / 'comparison_report.md').write_text('\n'.join(lines), encoding='utf-8')
