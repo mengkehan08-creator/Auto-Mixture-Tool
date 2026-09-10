@@ -27,6 +27,7 @@ export function statusView(status = '') {
   if (key === 'DELETE_FAILED') return { label: '删除未完成', tone: 'danger' }
   if (['SUCCEEDED', 'SUCCESS', 'COMPLETED'].includes(key)) return { label: '已完成', tone: 'success' }
   if (key === 'FAILED') return { label: '失败终止', tone: 'danger' }
+  if (key === 'BLOCKED') return { label: '前序未成功，未提交', tone: 'warning' }
   if (['CANCELED', 'CANCELLED', 'TERMINATED'].includes(key)) return { label: '已终止', tone: 'muted' }
   if (key === 'WAITING_AUTH') return { label: '等待授权', tone: 'warning' }
   if (key === 'NEEDS_ATTENTION') return { label: '待人工核对', tone: 'warning' }
@@ -46,10 +47,34 @@ export function searchWorkflows(items, query) {
   return items.filter(item => !keyword || (item.name || '').toLocaleLowerCase().includes(keyword))
 }
 
+export function workflowStatusGroup(status = '') {
+  const key = status.toUpperCase()
+  const tone = statusView(key).tone
+  if (tone === 'success') return 'success'
+  if (tone === 'danger' || ['CANCELED', 'CANCELLED', 'TERMINATED'].includes(key)) return 'danger'
+  if (tone === 'active' || ['QUEUED', 'PENDING', 'WAITING', 'SUBMITTED', 'CREATING'].includes(key)) return 'active'
+  return 'warning'
+}
+
+export function workflowPage(items, requestedPage = 1) {
+  const pageCount = Math.max(1, Math.ceil(items.length / 5))
+  const page = Math.min(pageCount, Math.max(1, requestedPage))
+  const offset = (page - 1) * 5
+  return { page, pageCount, items: items.slice(offset, offset + 5),
+    start: items.length ? offset + 1 : 0, end: Math.min(offset + 5, items.length) }
+}
+
 export const workflowStages = ['配比提交', '配比采样', '训练提交', '模型训练', '评测提交', '模型评测', '全部完成']
 
 export function stageIndex(workflow) {
   if (workflow.status === 'SUCCEEDED') return 6
+  if (workflow.pipeline_version === 4) {
+    const evaluation = workflow.jobs.find(j => j.module === 'evaluation')
+    if (evaluation?.id) return 5
+    if (workflow.jobs.some(j => j.module === 'training' && j.id)) return 3
+    if (workflow.jobs.some(j => j.module === 'mixing' && j.id)) return 1
+    return 0
+  }
   const evaluation = workflow.jobs?.[2]
   if (evaluation?.id) return ['active', 'success'].includes(statusView(evaluation.status).tone) ? 5 : 4
   if (workflow.status === 'TRAINING_SUCCEEDED') return 4

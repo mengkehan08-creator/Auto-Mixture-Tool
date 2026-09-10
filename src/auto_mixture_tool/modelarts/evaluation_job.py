@@ -42,8 +42,10 @@ def publish_models(config, root, data):
                 raise ValueError(f'训练输出不完整：{path}')
             files.append({'path': path.relative_to(root).as_posix(), 'size': path.stat().st_size,
                           'sha256': digest(path)})
-        models.append({'id': strategy['id'], 'name': strategy.get('name', kind),
+        models.append({'id': strategy['id'], 'name': strategy.get('model_name') or strategy.get('name', kind),
                        'model_tag': tag, 'step': step, 'files': files,
+                       'training_config': config['training'],
+                       'model_config': json.loads(meta.read_text(encoding='utf-8')).get('model_config', {}),
                        'configured_ratios': strategy.get('ratios', {})})
     manifest = {'version': 1, 'run': run, 'models': models,
                 'dataset_stats': json.loads((data / 'dataset_stats.json').read_text(encoding='utf-8'))}
@@ -53,10 +55,14 @@ def publish_models(config, root, data):
     temporary.replace(target)
 
 
-def validate_models(root):
+def validate_models(root, strategy_id=None):
     manifest = json.loads((root / 'models_manifest.json').read_text(encoding='utf-8'))
     if manifest.get('version') != 1 or not manifest.get('models'):
         raise ValueError('模型清单无效或为空')
+    if strategy_id is not None:
+        manifest['models'] = [m for m in manifest['models'] if m['id'] == strategy_id]
+        if len(manifest['models']) != 1:
+            raise ValueError('模型清单与所选策略不匹配')
     for model in manifest['models']:
         tag = model['model_tag']
         if Path(tag).name != tag or '/' in tag or '\\' in tag or tag in {'.', '..'}:
@@ -70,6 +76,31 @@ def validate_models(root):
             if path.stat().st_size != item['size'] or digest(path) != item['sha256']:
                 raise ValueError(f'模型文件校验失败：{item["path"]}')
     return manifest
+
+
+def evaluation_models(config, inputs):
+    """Resolve only the selected model in each source manifest, with its own tokenizer."""
+    sources = config.get('evaluation_sources')
+    if not sources:
+        manifest = validate_models(inputs / 'trained_models')
+        for model in manifest['models']:
+            model['_root'] = str(inputs / 'trained_models')
+            model['_tokenizer'] = str(inputs / 'nanochat_model_dir_1/tokenizer')
+        return manifest
+    result = {'run': os.environ.get('AMT_RUN_ID', ''), 'models': [], 'dataset_stats': {}}
+    for index, source in enumerate(sources):
+        root = inputs / source['mount']
+        manifest = validate_models(root, source['strategy_id'])
+        matches = [m for m in manifest['models'] if m['id'] == source['strategy_id']]
+        if len(matches) != 1:
+            raise ValueError(f'模型清单与所选策略不匹配：{source["name"]}')
+        model = matches[0]
+        model.update(id=f'model_{index}', catalog_id=source['id'], name=source['name'],
+                     source_workflow_id=source['workflow_id'], source_obs_uri=source['obs_uri'],
+                     _root=str(root), _tokenizer=str(inputs / source['tokenizer_mount']))
+        result['models'].append(model)
+        result['dataset_stats'][source['id']] = manifest['dataset_stats']
+    return result
 
 
 def run_evaluation(config):
@@ -122,8 +153,7 @@ def validate_package(source):
 def _run_evaluation(config, bundle, report_name):
     from .stage_runner import OUTPUT, WORKSPACE
     inputs = Path('/home/ma-user/modelarts/inputs')
-    models = inputs / 'trained_models'
-    manifest = validate_models(models)
+    manifest = evaluation_models(config, inputs)
     settings = config['evaluation']
     nodes = int(os.environ.get('MA_NUM_HOSTS', '1'))
     rank = int(os.environ.get('VC_TASK_INDEX', '0'))
@@ -139,8 +169,6 @@ def _run_evaluation(config, bundle, report_name):
     repo = inputs / 'nanochat_npu_dir_3'
     with tempfile.TemporaryDirectory(prefix='amt-evaluation-') as directory:
         runtime = Path(directory)
-        (runtime / 'mid_checkpoints').symlink_to(models, target_is_directory=True)
-        (runtime / 'tokenizer').symlink_to(inputs / 'nanochat_model_dir_1/tokenizer', target_is_directory=True)
         (runtime / 'eval_bundle').symlink_to(bundle, target_is_directory=True)
         from nanochat_mid_compare.prepare_offline_eval_bundle import materialize
         materialize(bundle, runtime)
@@ -151,6 +179,11 @@ def _run_evaluation(config, bundle, report_name):
         env['HCCL_EXEC_TIMEOUT'] = '1200'
         results = []
         for model in manifest['models']:
+            for name, path in (('mid_checkpoints', model['_root']), ('tokenizer', model['_tokenizer'])):
+                link = runtime / name
+                if link.is_symlink():
+                    link.unlink()
+                link.symlink_to(path, target_is_directory=True)
             command = [sys.executable, '-m', 'torch.distributed.run', f'--nnodes={nodes}',
                        f'--node_rank={rank}', f'--nproc_per_node={settings.get("devices_per_node", 8)}',
                        '--rdzv_backend=static', f'--rdzv_endpoint={master}:{os.environ.get("MASTER_PORT", "29500")}',
@@ -166,7 +199,7 @@ def _run_evaluation(config, bundle, report_name):
                 shutil.copyfile(source, target)
                 with target.open(encoding='utf-8') as stream:
                     metrics = list(csv.DictReader(stream, skipinitialspace=True))
-                results.append({**model, 'metrics': metrics})
+                results.append({**{k: v for k, v in model.items() if not k.startswith('_')}, 'metrics': metrics})
         if rank == 0:
             (report / 'comparison_report.json').write_text(json.dumps({
                 'run': manifest['run'], 'models': results, 'dataset_stats': manifest['dataset_stats'],

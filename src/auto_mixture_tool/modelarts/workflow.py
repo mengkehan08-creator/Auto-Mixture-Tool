@@ -245,7 +245,7 @@ class ModelArtsWorkflowManager:
                         or record['status'] not in {'NEEDS_ATTENTION', 'DELETE_FAILED'}):
                     raise ValueError('仅可对已停止提交、无远程作业 ID 的待核对记录确认未创建；已创建作业仍须终止')
                 for job in record['jobs']:
-                    if job['status'] == 'SUBMITTING':
+                    if job['status'] in {'SUBMITTING', 'NEEDS_ATTENTION'}:
                         job['status'] = 'NOT_CREATED'
                 record['absence_confirmed_at'] = datetime.now().astimezone().isoformat()
             record.update(delete_requested=True, status='DELETING', progress=0,
@@ -272,7 +272,7 @@ class ModelArtsWorkflowManager:
                 if self._stopping.is_set():
                     return
                 if not job.get('id'):
-                    if job['status'] == 'SUBMITTING':
+                    if job['status'] in {'SUBMITTING', 'NEEDS_ATTENTION'}:
                         raise ValueError('创建请求结果不明确，无法确定远程作业 ID；请在 ModelArts 核对并终止作业，记录暂不删除')
                     continue
                 client = self._client(record)
@@ -332,6 +332,9 @@ class ModelArtsWorkflowManager:
 
     def preview(self, config: dict[str, Any]) -> dict[str, Any]:
         value = self._validate(config)
+        from . import parallel_workflow
+        if value.get('execution_mode') == 'parallel':
+            parallel_workflow.check_names(self, parallel_workflow.planned_jobs(value))
         missing = []
         try:
             settings = value.get("modelarts")
@@ -358,7 +361,7 @@ class ModelArtsWorkflowManager:
         return {
             "ready": not missing,
             "missing_settings": missing,
-            "jobs": [
+            "jobs": parallel_workflow.planned_jobs(value) if value.get('execution_mode') == 'parallel' else [
                 {"module": "mixing", "nodes": value["mixing_nodes"]},
                 {"module": "training", "nodes": value["training_nodes"]},
                 *([{"module": "evaluation", "nodes": value["evaluation_nodes"]}] if value['evaluation']['datasets'] or value['evaluation'].get('obs_packages') else []),
@@ -430,6 +433,14 @@ class ModelArtsWorkflowManager:
             record["outputs"][output] = (
                 f"{root}/runs/{experiment}/" if root else f"{run_root}/training/{suffix}/"
             )
+        if normalized.get('execution_mode') == 'parallel':
+            from . import parallel_workflow
+            parallel_workflow.initialize(self, record, stamp)
+            for job in record['jobs']:
+                parallel_workflow.payload(self, record, job)
+            self._store(record)
+            self._start(workflow_id)
+            return self.public(record)
         if normalized.get('reuse'):
             source = self._reuse_source(normalized['reuse'])
             start = 1 if normalized['reuse']['stage'] == 'training' else 2
@@ -488,6 +499,11 @@ class ModelArtsWorkflowManager:
         value = copy.deepcopy(self.records[workflow_id]["config"])
         value.pop("request_id", None)
         value.pop('reuse', None)
+        value.pop('job_reuse', None)
+        if value.get('execution_mode') == 'parallel':
+            for strategy in value['strategies']:
+                strategy['mixing_job_name'] = strategy['training_job_name'] = ''
+            value['evaluation']['job_name'] = ''
         if value.get("modelarts"):
             value["modelarts"].pop("authorization", None)
         return value
@@ -521,6 +537,8 @@ class ModelArtsWorkflowManager:
 
     def _validate(self, config: dict[str, Any]) -> dict[str, Any]:
         value = copy.deepcopy(config)
+        if value.get('execution_mode', 'sequential') not in {'parallel', 'sequential'}:
+            raise ValueError('execution_mode 必须为 parallel 或 sequential')
         if value.get('reuse'):
             source = self._reuse_source(value['reuse'])
             original = source['config']
@@ -611,8 +629,6 @@ class ModelArtsWorkflowManager:
         if not isinstance(strategies, list) or not strategies or any(not isinstance(s, dict) for s in strategies):
             raise ValueError("at least one strategy is required")
         kinds = [item.get("type") for item in strategies]
-        if "quadmix" not in kinds:
-            raise ValueError("the current mixing job requires one quadmix strategy")
         if kinds.count("quadmix") > 1 or kinds.count("random") > 1:
             raise ValueError("only one quadmix and one random strategy are supported")
         upload_bytes = 0
@@ -669,9 +685,11 @@ class ModelArtsWorkflowManager:
                 if type(seed) is not int or not 0 <= seed < 2**32:
                     raise ValueError('随机种子必须为 0–4294967295 的整数')
                 strategy['seed'] = seed
-        shared_seed = next(s['seed'] for s in strategies if s['type'] == 'quadmix')
+        shared_seed = next((s['seed'] for s in strategies if s['type'] == 'quadmix'), 42)
         for strategy in strategies:
-            strategy['seed'] = shared_seed
+            strategy['seed'] = strategy.get('seed', 42) if value.get('execution_mode') == 'parallel' else shared_seed
+            if type(strategy['seed']) is not int or not 0 <= strategy['seed'] < 2**32:
+                raise ValueError('随机种子必须为 0–4294967295 的整数')
         training = value.get("training", {})
         if str(training.get("framework", "nanochat")).lower() != "nanochat":
             raise ValueError("the current training adapter supports NanoChat only")
@@ -734,6 +752,10 @@ class ModelArtsWorkflowManager:
                 raise ValueError(f"请填写资源 OBS 地址：{key}；代理验证集须指向包含 stem_v2_tokenized.pt 的目录")
             value["resources"][key] = _clean_obs_uri(value["resources"][key])
         runtime_config = copy.deepcopy(value)
+        if value.get('execution_mode') == 'parallel':
+            from .parallel_workflow import validate
+            validate(self, value)
+            runtime_config = copy.deepcopy(value)
         for key in ('modelarts', 'commands', 'offline_resources'):
             runtime_config.pop(key, None)
         write_config({}, runtime_config)
@@ -904,6 +926,9 @@ exec "$PY311" -m auto_mixture_tool.modelarts.stage_runner ''' + stage
 
     def _run(self, workflow_id: str) -> None:
         record = self.records[workflow_id]
+        if record.get('pipeline_version') == 4:
+            from .parallel_workflow import run
+            return run(self, record)
         if record.get('delete_requested'):
             with self._lock:
                 self._active.discard(workflow_id)
@@ -1009,6 +1034,11 @@ exec "$PY311" -m auto_mixture_tool.modelarts.stage_runner ''' + stage
 
     def _store(self, record: dict[str, Any]) -> None:
         with self._lock:
+            for item in [record, *record.get('jobs', [])]:
+                if item.get('message'):
+                    for secret in self._authorizations.values():
+                        if secret:
+                            item['message'] = item['message'].replace(secret, '[REDACTED]')
             self.records[record["id"]] = record
             self.directory.mkdir(parents=True, exist_ok=True)
             target = self.directory / f"{record['id']}.json"

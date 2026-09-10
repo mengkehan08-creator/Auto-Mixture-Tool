@@ -37,6 +37,8 @@ export function copyWorkflow(config) {
   evaluation.devicesPerNode = config.evaluation.devices_per_node ?? 8
   evaluation.coreEvalBatchSize = config.evaluation.core_eval_batch_size ?? 16
   evaluation.maxPerTask = config.evaluation.max_per_task ?? -1
+  evaluation.modelIds = [...(config.evaluation.model_ids || [])]
+  evaluation.priority = config.evaluation.priority ?? 1
   evaluation.dataset = { enabled: Boolean(config.evaluation.datasets.length || evaluation.obsPackages.length), source: 'obs',
     names: normalizeEvaluationTasks(config.evaluation.datasets), obsUri: resources.eval_bundle_obs_uri }
   const strategies = config.strategies.map(item => ({ ...createStrategy(item.type),
@@ -46,6 +48,13 @@ export function copyWorkflow(config) {
     source: item.script_obs_uri || item.script_upload ? 'script' : 'builtin', scriptObsUri: item.script_obs_uri || '',
     scriptInput: item.script_upload ? 'upload' : 'obs', scriptUpload: item.script_upload ? structuredClone(item.script_upload) : null,
     scriptConfig: structuredClone(item.script_config || {}),
+    mixingNodes: item.mixing_nodes ?? config.mixing_nodes,
+    trainingNodes: item.training_nodes ?? config.training_nodes,
+    mixingPriority: item.mixing_priority ?? config.priority ?? 1,
+    trainingPriority: item.training_priority ?? config.priority ?? 1,
+    mixingJobName: '', trainingJobName: '', modelName: item.model_name || '',
+    mixingCommand: item.mixing_command || '', trainingCommand: item.training_command || '',
+    trainingOverrides: structuredClone(item.training || {}),
   }))
   return { runtime, training, evaluation, strategies }
 }

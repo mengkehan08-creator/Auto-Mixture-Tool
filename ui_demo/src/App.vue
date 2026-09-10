@@ -53,7 +53,7 @@ const runtime = reactive(createRuntimeConfig())
   <div class="app-shell">
     <AppSidebar :page="page" @navigate="navigate($event)" />
     <main class="main-content">
-      <header class="topbar">
+      <header class="topbar topbar-sticky">
         <button class="button secondary" type="button" :disabled="!navigationHistory.length" @click="goBack" aria-label="返回上一页面"><ChevronLeft :size="16" />返回</button>
         <div><h1>{{ page === 'jobs' ? '实验作业管理' : '创建配比实验' }}</h1><p>配置算法、训练与评测后提交至 ModelArts</p></div>
         <span class="user-chip"><span>配</span>配比用户</span>
@@ -65,7 +65,7 @@ const runtime = reactive(createRuntimeConfig())
       <StepNavigation :current-step="currentStep" @change="navigate('create', $event)" />
 
       <MixingStrategyStep v-if="currentStep === 1" :strategies="strategies" :runtime="runtime" />
-      <TrainingConfigStep v-else-if="currentStep === 2" :config="training" :runtime="runtime" />
+      <TrainingConfigStep v-else-if="currentStep === 2" :config="training" :runtime="runtime" :strategies="strategies" />
       <EvaluationConfigStep v-else-if="currentStep === 3" :config="evaluation" :model-output="training.outputObsUri ? `${training.outputObsUri.replace(/\/$/, '')}/runs/{实验名称}/` : `${runtime.outputRootObsUri.replace(/\/$/, '')}/runs/{实验名称}/training/checkpoints/`" />
       <ReviewSubmitStep v-else :key="formVersion" :strategies="strategies" :training="training" :evaluation="evaluation" :runtime="runtime" @created="openJob" />
 

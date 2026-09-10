@@ -9,8 +9,9 @@ def check_mounted_assets(config, stage, inputs=Path('/home/ma-user/modelarts/inp
     files = [model / 'tokenizer/tokenizer.pkl', model / 'tokenizer/token_bytes.pt']
     directories = [model / 'base_checkpoints' / config['training'].get('base_model_tag', 'd24')]
     if stage == 'mixing':
-        files += [inputs / 'quadmix_tokenizer_dir_4/tokenizer.json',
-                  inputs / 'proxy_validation_dir_5/stem_v2_tokenized.pt']
+        if any(s['type'] == 'quadmix' for s in config.get('strategies', [{'type': 'quadmix'}])):
+            files += [inputs / 'quadmix_tokenizer_dir_4/tokenizer.json',
+                      inputs / 'proxy_validation_dir_5/stem_v2_tokenized.pt']
         data = inputs / 'data_dir_0'
         if not data.is_dir() or next(data.rglob('*.parquet'), None) is None:
             errors.append(f'缺少 Parquet 输入数据：{data}')
@@ -22,6 +23,13 @@ def check_mounted_assets(config, stage, inputs=Path('/home/ma-user/modelarts/inp
     else:
         directories = [inputs / 'eval_bundle_dir_6', inputs / 'trained_models']
         files += [repo / 'scripts/base_eval.py', inputs / 'trained_models/models_manifest.json']
+        if config.get('evaluation_sources'):
+            directories = [inputs / 'eval_bundle_dir_6']
+            files = [repo / 'scripts/base_eval.py']
+            for source in config['evaluation_sources']:
+                files += [inputs / source['mount'] / 'models_manifest.json',
+                          inputs / source['tokenizer_mount'] / 'tokenizer.pkl',
+                          inputs / source['tokenizer_mount'] / 'token_bytes.pt']
     for path in files:
         if not path.is_file() or path.stat().st_size == 0:
             errors.append(f'文件缺失或为空：{path}')

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { hasProgress, submissionFailed, fieldLabels, newestWorkflows, searchWorkflows, statusView, stageIndex } from './workflow-state.js'
+import { hasProgress, submissionFailed, fieldLabels, newestWorkflows, searchWorkflows, statusView, stageIndex, workflowStatusGroup, workflowPage } from './workflow-state.js'
 
 test('only confirmed jobs without errors show progress', () => {
   assert.equal(hasProgress({ status: 'QUEUED', jobs: [{ id: null }] }), false)
@@ -49,4 +49,36 @@ test('ruler uses confirmed job status, not estimated percentage', () => {
   assert.equal(statusView('CANCELED').label, '已终止')
   assert.equal(statusView('DELETING').label, '正在终止并删除')
   assert.equal(statusView('DELETE_FAILED').label, '删除未完成')
+})
+
+test('status filters include all success aliases, queueing, termination and attention states', () => {
+  for (const s of ['SUCCEEDED', 'COMPLETED', 'success']) assert.equal(workflowStatusGroup(s), 'success')
+  for (const s of ['RUNNING', 'TRAINING_RUNNING', 'QUEUED', 'PENDING', 'SUBMITTING']) assert.equal(workflowStatusGroup(s), 'active')
+  for (const s of ['FAILED', 'CANCELED', 'TERMINATED', 'DELETE_FAILED']) assert.equal(workflowStatusGroup(s), 'danger')
+  for (const s of ['WAITING_AUTH', 'NEEDS_ATTENTION', 'BLOCKED', 'DELETING', 'unknown']) assert.equal(workflowStatusGroup(s), 'warning')
+})
+
+test('pagination shows five rows in existing newest-first order without mutating rows', () => {
+  const rows = Array.from({ length: 12 }, (_, id) => ({ id }))
+  assert.deepEqual(workflowPage(rows, 1).items.map(w => w.id), [0, 1, 2, 3, 4])
+  assert.deepEqual(workflowPage(rows, 2).items.map(w => w.id), [5, 6, 7, 8, 9])
+  const last = workflowPage(rows, 3)
+  assert.deepEqual(last.items.map(w => w.id), [10, 11])
+  assert.deepEqual([last.start, last.end, last.pageCount], [11, 12, 3])
+  assert.equal(rows.length, 12)
+})
+
+test('pagination clamps after deletion and handles empty or exactly five rows', () => {
+  assert.deepEqual(workflowPage([], 3), { page: 1, pageCount: 1, items: [], start: 0, end: 0 })
+  const rows = Array.from({ length: 5 }, (_, id) => ({ id }))
+  assert.equal(workflowPage(rows, 2).page, 1)
+  assert.equal(workflowPage(rows, 0).page, 1)
+  assert.equal(workflowPage([...rows, { id: 5 }], 2).items.length, 1)
+})
+
+test('status and partial-name search compose before pagination', () => {
+  const rows = Array.from({ length: 18 }, (_, id) => ({ id, name: `QuadMix-${id}`, status: id % 2 ? 'RUNNING' : 'SUCCEEDED' }))
+  const matches = searchWorkflows(rows, 'QUADMIX').filter(w => workflowStatusGroup(w.status) === 'success')
+  assert.equal(matches.length, 9)
+  assert.deepEqual(workflowPage(matches, 2).items.map(w => w.id), [10, 12, 14, 16])
 })

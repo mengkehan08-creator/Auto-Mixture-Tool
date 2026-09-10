@@ -20,6 +20,14 @@ let submittedBody = ''
 let timer = null
 
 const strategyNames = computed(() => props.strategies.map((strategy) => strategyOptions.find((option) => option.value === strategy.type)?.label).join('、'))
+const evaluationEnabled = computed(() => props.evaluation.dataset.enabled && (props.evaluation.dataset.names.length || props.evaluation.obsPackages.length))
+const jobPlan = computed(() => [
+  ...props.strategies.flatMap(s => [
+    { module: 'mixing', label: `${s.name} · 配比`, name: s.mixingJobName, nodes: s.mixingNodes, priority: s.mixingPriority, depends: '无，可立即提交' },
+    { module: 'training', label: `${s.name} · 训练`, name: s.trainingJobName, nodes: s.trainingNodes, priority: s.trainingPriority, depends: `${s.name} 配比成功` },
+  ]),
+  ...(evaluationEnabled.value ? [{ module: 'evaluation', label: '汇总评测', name: props.evaluation.jobName, nodes: props.evaluation.nodes, priority: props.evaluation.priority, depends: '本次全部训练成功' }] : []),
+])
 
 function normalizedStrategies() {
   return props.strategies.map((item) => ({
@@ -31,6 +39,11 @@ function normalizedStrategies() {
     proxy_steps: item.proxySteps,
     search_count: item.searchCount,
     devices_per_node: item.devicesPerNode,
+    mixing_nodes: item.mixingNodes, training_nodes: item.trainingNodes,
+    mixing_job_name: item.mixingJobName, training_job_name: item.trainingJobName,
+    mixing_priority: item.mixingPriority, training_priority: item.trainingPriority,
+    mixing_command: item.mixingCommand, training_command: item.trainingCommand,
+    model_name: item.modelName, training: item.trainingOverrides || {},
     ratios: item.ratios,
     script_obs_uri: item.source === 'script' && item.scriptInput !== 'upload' ? item.scriptObsUri : '',
     ...(item.source === 'script' && item.scriptInput === 'upload' ? { script_upload: item.scriptUpload || { name: '', content: '' } } : {}),
@@ -40,6 +53,7 @@ function normalizedStrategies() {
 
 function requestBody() {
   return {
+    execution_mode: 'parallel',
     ...(props.runtime.commands ? { commands: props.runtime.commands } : {}),
     modelarts: props.runtime.modelarts,
     priority: props.runtime.priority ?? 1,
@@ -62,7 +76,7 @@ function requestBody() {
       eval_every: props.training.evalEvery,
       core_metric_every: props.training.coreMetricEvery,
     },
-    evaluation: { obs_packages: props.evaluation.dataset.enabled && props.evaluation.dataset.source === 'obs' ? props.evaluation.obsPackages : [], automatic_api_requested: props.evaluation.api.enabled, output_obs_uri: props.evaluation.outputObsUri, devices_per_node: props.evaluation.devicesPerNode, core_eval_batch_size: props.evaluation.coreEvalBatchSize, max_per_task: -1, datasets: props.evaluation.dataset.enabled ? normalizeEvaluationTasks(props.evaluation.dataset.names) : [] },
+    evaluation: { job_name: props.evaluation.jobName, priority: props.evaluation.priority, model_ids: props.evaluation.dataset.enabled ? props.evaluation.modelIds : [], obs_packages: props.evaluation.dataset.enabled && props.evaluation.dataset.source === 'obs' ? props.evaluation.obsPackages : [], automatic_api_requested: props.evaluation.api.enabled, output_obs_uri: props.evaluation.outputObsUri, devices_per_node: props.evaluation.devicesPerNode, core_eval_batch_size: props.evaluation.coreEvalBatchSize, max_per_task: -1, datasets: props.evaluation.dataset.enabled ? normalizeEvaluationTasks(props.evaluation.dataset.names) : [] },
     resources: {
       code_obs_uri: props.runtime.codeObsUri,
       nanochat_repo_obs_uri: props.training.frameworkObsUri,
@@ -151,23 +165,30 @@ onBeforeUnmount(() => window.clearInterval(timer))
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>任务配置</h2><p>评测集启用且选择了任务或 OBS 评测包时提交三个作业，否则只提交配比和训练作业。</p></div></div>
+    <div class="section-title-row"><div><h2>任务配置</h2><p>本次计划 {{ jobPlan.length }} 个独立作业。每个策略配比成功即启动训练，全部训练成功后汇总评测。</p></div></div>
+    <div class="config-block">
+      <h3>作业提交清单</h3>
+      <div class="job-plan-scroll"><table class="job-plan"><thead><tr><th>module</th><th>name</th><th>node_count</th><th>priority</th><th>depends_on</th></tr></thead>
+        <tbody><tr v-for="(job, index) in jobPlan" :key="index"><td>{{ job.label }}</td><td>{{ job.name || '自动按时间命名' }}</td><td>{{ job.nodes }}</td><td>{{ job.priority }}</td><td>{{ job.depends }}</td></tr></tbody>
+      </table></div>
+      <p>配比并发最多 {{ strategies.reduce((n, s) => n + s.mixingNodes, 0) }} 节点，训练并发最多 {{ strategies.reduce((n, s) => n + s.trainingNodes, 0) }} 节点。不同策略的配比与训练可能重叠，实际启动取决于资源池容量。</p>
+      <p v-if="evaluationEnabled">评测模型：本次 {{ strategies.length }} 个＋历史 {{ evaluation.modelIds.length }} 个。</p>
+    </div>
     <p v-if="evaluation.api.enabled" class="path-preview" role="status">自动评估暂未接入：本次不会执行自动评估，也不会创建自动评估作业。</p>
     <h3>ModelArts 作业配置</h3>
     <p class="path-preview">已填入脚本默认配置，可编辑。</p>
     <div class="form-grid two-cols">
       <label v-for="key in ['endpoint', 'region', 'workspace_id', 'workspace_name', 'image_url', 'image_repo_id', 'flavor_id', 'pool_id']" :key="key" class="field"><span>{{ fieldLabels[key] }}</span><input v-model="runtime.modelarts[key]" autocomplete="off" /></label>
-      <label class="field"><span>priority（任务优先级）</span><select v-model.number="runtime.priority"><option :value="1">1（默认）</option><option :value="2">2</option><option :value="3">3（需高优先级权限）</option></select><small>同时用于配比和训练作业。</small></label>
       <label v-if="authMode === 'iam'" class="field"><span>Authorization</span><input value="自动获取（提交时执行）" readonly /><small>已启用私有 IAM 配置；Token 仅用于后端请求，不在页面显示。</small></label>
       <label v-else class="field"><span>Authorization</span><input v-model="runtime.modelarts.authorization" type="password" autocomplete="off" /><small>当前为手动模式。配置 AMT_IAM_PROVIDER 并重启后端，可自动获取。</small></label>
     </div>
     <div class="review-grid">
       <article><span>training.output_obs_uri</span><strong class="break-path">{{ training.outputObsUri || '沿用实验输出目录' }}</strong><small>模型与检查点 · 自动追加 runs/实验名称/</small></article>
       <article><span>evaluation.output_obs_uri</span><strong class="break-path">{{ evaluation.outputObsUri || '沿用实验输出目录' }}</strong><small>评测与对比报告 · 自动追加 runs/实验名称/</small></article>
-      <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ runtime.mixingNodes }} 节点 · 先校验再生成全部采样集</small></article>
-      <article><span>训练作业</span><strong>{{ training.framework }}</strong><small>{{ training.nodes }} 节点 · 依次训练全部采样集</small></article>
+      <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ strategies.length }} 个独立作业 · 各自校验与采样</small></article>
+      <article><span>训练作业</span><strong>{{ training.framework }}</strong><small>{{ strategies.length }} 个独立作业 · 可并行训练</small></article>
       <article><span>evaluation_nodes</span><strong>{{ evaluation.dataset.enabled ? `${evaluation.nodes} 节点` : '未启用评测' }}</strong><small>模型输入自动使用前序训练输出</small></article>
-      <article><span>training.token_budget</span><strong>{{ Number(training.tokenBudget).toLocaleString() }} Token</strong><small>各配比模型共用训练预算</small></article>
+      <article><span>training.token_budget</span><strong>{{ Number(training.tokenBudget).toLocaleString() }} Token</strong><small>公共默认预算 · 单独配置时以各作业参数为准</small></article>
       <article><span>输出根目录</span><strong class="break-path">{{ runtime.outputRootObsUri }}</strong><small>按实验名称隔离 mixing / sampled / training</small></article>
     </div>
     <div class="config-block">
@@ -177,6 +198,10 @@ onBeforeUnmount(() => window.clearInterval(timer))
         <label class="field"><span>command（配比作业）</span><textarea v-model="runtime.commands.mixing" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
         <label class="field"><span>command（训练作业）</span><textarea v-model="runtime.commands.training" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
         <label class="field"><span>command（评测作业）</span><textarea v-model="runtime.commands.evaluation" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
+        <details v-for="strategy in strategies" :key="strategy.id"><summary>{{ strategy.name }} · 单独设置 command（可选）</summary>
+          <label class="field"><span>mixing.command</span><textarea v-model="strategy.mixingCommand" :placeholder="runtime.commands.mixing" rows="5"></textarea></label>
+          <label class="field"><span>training.command</span><textarea v-model="strategy.trainingCommand" :placeholder="runtime.commands.training" rows="5"></textarea></label>
+        </details>
       </template>
       <button class="button secondary" type="button" @click="loadCommands(true)">{{ runtime.commands ? '恢复默认命令' : '重新加载默认命令' }}</button>
     </div>
@@ -189,7 +214,16 @@ onBeforeUnmount(() => window.clearInterval(timer))
       {{ status === 'loading' ? '正在检查并提交实验…' : '提交到 ModelArts' }}
     </button>
     <p v-if="error" class="error-message">{{ error }}</p>
-    <article v-if="status === 'success'" class="submit-result"><CheckCircle2 :size="25" /><div><strong>实验已受理</strong><span>第二个作业将在第一个成功后自动提交。</span></div></article>
+    <article v-if="status === 'success'" class="submit-result"><CheckCircle2 :size="25" /><div><strong>实验已受理</strong><span>后续作业按依赖关系自动提交。</span></div></article>
     <p v-if="connectionError" class="error-message">状态服务连接失败：{{ connectionError }}。请在左侧实验作业核对提交结果，勿重复提交。</p>
   </section>
 </template>
+<style scoped>
+.job-plan-scroll { overflow-x: auto; }
+.job-plan { border-collapse: collapse; width: 100%; font-size: 13px; }
+.job-plan th, .job-plan td { padding: 12px; border-bottom: 1px solid #e2e8f3; text-align: left; }
+.job-plan th { background: #f1f5ff; color: #526487; }
+details { margin: 16px 0; }
+summary { cursor: pointer; color: #4e70dd; }
+textarea { width: 100%; }
+</style>

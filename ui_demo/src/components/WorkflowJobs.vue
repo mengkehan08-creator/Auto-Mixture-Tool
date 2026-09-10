@@ -1,16 +1,29 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { apiRequest } from '../api'
-import { newestWorkflows, searchWorkflows, statusView, stageIndex, workflowStages, canRestart } from '../workflow-state'
+import { newestWorkflows, searchWorkflows, statusView, stageIndex, workflowStages, canRestart, workflowStatusGroup, workflowPage } from '../workflow-state'
 import WorkflowProgress from './WorkflowProgress.vue'
 import StageRetryPanel from './StageRetryPanel.vue'
+import ParallelJobRetry from './ParallelJobRetry.vue'
+import ModelLibrary from './ModelLibrary.vue'
 const props = defineProps({ selectedId: { type: String, default: '' } })
 const emit = defineEmits(['select', 'copy'])
 const retryStage = ref('')
-watch(() => props.selectedId, () => { retryStage.value = '' })
+const retryJob = ref(null)
+watch(() => props.selectedId, () => { retryStage.value = ''; retryJob.value = null })
+function canRetryJob(workflow, job) {
+  return workflow.pipeline_version === 4 && !workflow.delete_requested && ['SUCCEEDED', 'FAILED'].includes(workflow.status) &&
+    job.depends_on.every(key => workflow.jobs.find(j => j.key === key)?.status === 'SUCCEEDED')
+}
 const workflows = ref([])
 const search = ref('')
-const filteredWorkflows = computed(() => searchWorkflows(workflows.value, search.value))
+const statusFilter = ref('all')
+const currentPage = ref(1)
+const filteredWorkflows = computed(() => searchWorkflows(workflows.value, search.value)
+  .filter(w => statusFilter.value === 'all' || workflowStatusGroup(w.status) === statusFilter.value))
+const pagination = computed(() => workflowPage(filteredWorkflows.value, currentPage.value))
+watch([search, statusFilter], () => { currentPage.value = 1 }, { flush: 'sync' })
+watch(() => pagination.value.pageCount, count => { currentPage.value = Math.min(currentPage.value, count) })
 const error = ref('')
 const credential = ref('')
 const deleteDialog = ref(null)
@@ -21,7 +34,7 @@ const confirmedNotCreated = ref(false)
 const needsAbsenceConfirmation = computed(() => deleteTarget.value &&
   ['NEEDS_ATTENTION', 'DELETE_FAILED'].includes(deleteTarget.value.status) &&
   !deleteTarget.value.jobs?.some(job => job.id) &&
-  deleteTarget.value.jobs?.some(job => job.status === 'SUBMITTING'))
+  deleteTarget.value.jobs?.some(job => ['SUBMITTING', 'NEEDS_ATTENTION'].includes(job.status)))
 const hasRemoteJob = computed(() => Boolean(deleteTarget.value?.jobs?.some(job => job.id)))
 const selected = computed(() => workflows.value.find(w => w.id === props.selectedId))
 let timer
@@ -29,9 +42,9 @@ function createdTime(w) {
   const date = new Date(w.created_at)
   return Number.isNaN(date.getTime()) ? '创建时间未记录' : date.toLocaleString('zh-CN', { hour12: false })
 }
-const counts = computed(() => ['active', 'success', 'danger', 'warning'].map(tone => ({
-  tone, label: { active: '正在作业', success: '已完成', danger: '失败终止', warning: '待处理' }[tone],
-  count: workflows.value.filter(w => statusView(w.status).tone === tone).length,
+const counts = computed(() => ['all', 'active', 'success', 'danger', 'warning'].map(tone => ({
+  tone, label: { all: '全部作业', active: '正在作业', success: '已完成', danger: '失败终止', warning: '待处理' }[tone],
+  count: tone === 'all' ? workflows.value.length : workflows.value.filter(w => workflowStatusGroup(w.status) === tone).length,
 })))
 async function load() {
   try {
@@ -46,6 +59,7 @@ async function copy(id) {
 }
 async function retryCreated(id) {
   retryStage.value = ''
+  retryJob.value = null
   await load()
   emit('select', id)
 }
@@ -85,13 +99,13 @@ onBeforeUnmount(() => clearInterval(timer))
       <span class="workflow-count">共 {{ workflows.length }} 条实验</span></div>
     <p v-if="error" class="error-message">{{ error }}</p>
     <template v-if="!selectedId">
-      <div class="workflow-summary"><div v-for="item in counts" :key="item.tone" :class="`tone-${item.tone}`"><span>{{ item.label }}</span><strong>{{ item.count }}</strong></div></div>
+      <div class="workflow-summary" role="group" aria-label="按作业状态筛选"><button v-for="item in counts" :key="item.tone" type="button" :class="[`tone-${item.tone}`, { selected: statusFilter === item.tone }]" :aria-pressed="statusFilter === item.tone" @click="statusFilter = item.tone"><span>{{ item.label }}</span><strong>{{ item.count }}</strong></button></div>
       <div class="workflow-search">
         <label class="field"><span>搜索作业名</span><input v-model="search" type="search" placeholder="输入完整或部分作业名" @keydown.esc="search = ''" /></label>
         <button v-if="search" type="button" class="button secondary" @click="search = ''">清空搜索</button>
-        <span role="status">显示 {{ filteredWorkflows.length }} / {{ workflows.length }} 条</span>
+        <span role="status">符合条件 {{ filteredWorkflows.length }} 条 · 当前显示 {{ pagination.start }}–{{ pagination.end }} 条</span>
       </div>
-      <article v-for="w in filteredWorkflows" :key="w.id" class="workflow-card">
+      <article v-for="w in pagination.items" :key="w.id" class="workflow-card">
         <header><div><strong>{{ w.name }}</strong><small>创建时间 · {{ createdTime(w) }}</small></div><span class="status-badge" :class="`tone-${statusView(w.status).tone}`">{{ statusView(w.status).label }}</span></header>
         <p class="workflow-stage-caption">{{ ['FAILED', 'NEEDS_ATTENTION', 'WAITING_AUTH', 'DELETING', 'DELETE_FAILED'].includes(w.status) ? statusView(w.status).label : `当前阶段：${workflowStages[stageIndex(w)]}` }}</p>
         <p v-if="w.status === 'DELETE_FAILED'" class="error-message">{{ w.message }}</p>
@@ -102,7 +116,11 @@ onBeforeUnmount(() => clearInterval(timer))
         </div>
       </article>
       <p v-if="!workflows.length && !error">暂无实验作业。</p>
-      <p v-else-if="!filteredWorkflows.length && !error" class="workflow-search-empty">没有匹配的实验作业，请更换关键词或清空搜索。</p>
+      <p v-else-if="!filteredWorkflows.length && !error" class="workflow-search-empty">没有匹配的实验作业，请调整状态筛选或搜索关键词。</p>
+      <nav v-if="filteredWorkflows.length" class="workflow-pagination" aria-label="实验作业分页">
+        <span role="status">每页 5 条 · 第 {{ pagination.page }} / {{ pagination.pageCount }} 页</span>
+        <div><button class="button secondary" type="button" :disabled="pagination.page === 1" @click="currentPage = pagination.page - 1">上一页</button><button class="button secondary" type="button" :disabled="pagination.page === pagination.pageCount" @click="currentPage = pagination.page + 1">下一页</button></div>
+      </nav>
     </template>
     <template v-else>
       <button type="button" class="button secondary" @click="emit('select', '')">返回实验作业</button>
@@ -114,12 +132,17 @@ onBeforeUnmount(() => clearInterval(timer))
         <div v-if="workflows.some(w => w.reused_from === selected.id)" class="workflow-actions"><span>阶段重试记录：</span><button v-for="item in workflows.filter(w => w.reused_from === selected.id)" :key="item.id" class="button secondary" type="button" @click="emit('select', item.id)">{{ item.name }} · {{ statusView(item.status).label }}</button></div>
         <h3 class="workflow-section-title">关联作业</h3>
         <div class="job-grid"><div v-for="(job, index) in selected.jobs" :key="job.name">
-          <div class="job-heading"><strong>{{ job.module === 'training-evaluation' ? '训练评测作业（旧版）' : ['配比采样作业', '模型训练作业', '模型评测作业'][index] }}</strong><span class="status-badge" :class="`tone-${statusView(job.status).tone}`">{{ statusView(job.status).label }}</span></div>
+          <div class="job-heading"><strong>{{ ({ mixing: '配比采样', training: '模型训练', evaluation: '汇总评测', 'training-evaluation': '训练评测（旧版）' })[job.module] }}{{ job.strategy_name ? ` · ${job.strategy_name}` : '' }}</strong><span class="status-badge" :class="`tone-${statusView(job.status).tone}`">{{ statusView(job.status).label }}</span></div>
           <small>{{ job.name }}</small><small v-if="job.reused">复用前序实验输出，不提交此作业</small><small v-else>作业 ID：{{ job.id || (job.status === 'SUBMITTING' ? '未返回，创建结果待核对' : '尚未创建') }}</small>
           <a v-if="job.url" :href="job.url" target="_blank" rel="noopener noreferrer">打开 ModelArts 作业详情</a>
+          <small>节点数：{{ job.nodes }}<template v-if="job.priority"> · 优先级：{{ job.priority }}</template></small>
+          <p v-if="job.message" class="error-message">{{ job.message }}</p>
+          <details v-if="job.outputs"><summary>输入与输出地址</summary><p class="break-path">输入：{{ job.input_obs_uri || '全部训练模型及已选历史模型' }}</p><p v-for="(path, key) in job.outputs" :key="key" class="break-path">{{ key }}：{{ path }}</p></details>
+          <button v-if="canRetryJob(selected, job)" class="button secondary" type="button" :disabled="!!retryJob" @click="retryJob = job">{{ job.module === 'mixing' ? '配比阶段重试' : job.module === 'training' ? '训练阶段重试' : '评测阶段重试' }}</button>
         </div></div>
         <h3 class="workflow-section-title">输出位置</h3>
-        <div class="output-paths"><span>配比结果：{{ selected.outputs?.mixing }}</span><span>采样集：{{ selected.outputs?.sampled }}</span><span>模型输出：{{ selected.outputs?.models || selected.outputs?.training }}</span><span>评测与对比报告：{{ selected.outputs?.reports || selected.outputs?.training }}</span></div>
+        <div v-if="selected.pipeline_version === 4" class="output-paths"><span>各策略输入、采样和模型地址详见上方独立作业。</span><span>实验输出：{{ selected.run_root_obs_uri }}</span><span>汇总报告：{{ selected.outputs?.reports }}</span></div>
+        <div v-else class="output-paths"><span>配比结果：{{ selected.outputs?.mixing }}</span><span>采样集：{{ selected.outputs?.sampled }}</span><span>模型输出：{{ selected.outputs?.models || selected.outputs?.training }}</span><span>评测与对比报告：{{ selected.outputs?.reports || selected.outputs?.training }}</span></div>
         <button type="button" class="button secondary" @click="copy(selected.id)">复制并调整参数</button>
         <button v-if="canRestart(selected, 'training')" type="button" class="button secondary" :disabled="!!retryStage" @click="retryStage = 'training'">训练阶段重试</button>
         <button v-if="canRestart(selected, 'evaluation')" type="button" class="button secondary" :disabled="!!retryStage" @click="retryStage = 'evaluation'">评测阶段重试</button>
@@ -127,6 +150,8 @@ onBeforeUnmount(() => clearInterval(timer))
         <label class="field"><span>更新身份认证凭据</span><input v-model="credential" type="password" autocomplete="off" /></label>
         <button type="button" class="button secondary" @click="renew">更新此实验凭据</button>
         <StageRetryPanel v-if="retryStage" :key="`${selected.id}-${retryStage}`" :workflow="selected" :stage="retryStage" @close="retryStage = ''" @created="retryCreated" />
+        <ParallelJobRetry v-if="retryJob" :key="`${selected.id}-${retryJob.key}`" :workflow="selected" :job="retryJob" @close="retryJob = null" @created="retryCreated" />
+        <ModelLibrary :key="`${selected.id}-${selected.progress}`" :workflow-id="selected.id" />
       </article>
       <p v-else-if="!error">正在加载作业详情…</p>
     </template>

@@ -2,6 +2,7 @@
 import { Bot, Database } from '@lucide/vue'
 import { computed } from 'vue'
 import { stemTasks, normalizeEvaluationTasks } from '../../evaluation-selection.js'
+import ModelLibrary from '../ModelLibrary.vue'
 
 const props = defineProps({ config: { type: Object, required: true }, modelOutput: String })
 const selectedTasks = computed(() => normalizeEvaluationTasks(props.config.dataset.names))
@@ -42,14 +43,17 @@ function toggleDataset(config, name) {
               <small>新增包按 core.yaml 执行，运行前检查兼容性；可与上方 STEM 同时使用。</small>
             </div>
             <h3>独立评测作业</h3>
-            <label class="field"><span>模型输入 OBS 地址（自动衔接训练输出）</span><input :value="modelOutput" readonly /></label>
+            <label class="field"><span>评测作业名称</span><input v-model="config.jobName" maxlength="64" placeholder="留空自动按时间命名" /></label>
+            <label class="field"><span>本次模型输出根目录（按策略分别读取）</span><input :value="modelOutput" readonly /><small>自动加载各策略子目录及下方所选历史模型，模型文件不经过本工具服务器。</small></label>
             <div class="form-grid two-cols">
               <label class="field"><span>评测节点数</span><input v-model.number="config.nodes" type="number" min="1" max="16" /></label>
+              <label class="field"><span>评测任务优先级</span><select v-model.number="config.priority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
               <label class="field"><span>每节点 NPU 数</span><input v-model.number="config.devicesPerNode" type="number" min="1" max="8" /></label>
               <label class="field"><span>评测批量大小</span><input v-model.number="config.coreEvalBatchSize" type="number" min="1" /><small>默认 16，显存不足时调小。</small></label>
             </div>
             <label class="field"><span>评测与对比报告输出 OBS 目录</span><input v-model="config.outputObsUri" placeholder="留空沿用实验输出目录" /><small>自动追加 runs/实验名称/。</small></label>
           </section>
+          <ModelLibrary :selected="config.modelIds" />
         </div>
       </article>
 

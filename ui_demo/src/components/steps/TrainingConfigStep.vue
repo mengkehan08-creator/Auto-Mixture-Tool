@@ -1,10 +1,28 @@
 <script setup>
-defineProps({ config: { type: Object, required: true }, runtime: { type: Object, required: true } })
+const props = defineProps({ config: { type: Object, required: true }, runtime: { type: Object, required: true }, strategies: { type: Array, default: () => [] } })
+function customize(strategy, enabled) {
+  const c = props.config
+  strategy.trainingOverrides = enabled ? { token_budget: c.tokenBudget, device_batch_size: c.deviceBatchSize,
+    devices_per_node: c.devicesPerNode, eval_every: c.evalEvery, core_metric_every: c.coreMetricEvery } : {}
+}
 </script>
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>训练配置</h2><p>第二个作业依次训练全部采样集，保存模型后由独立评测作业加载。</p></div></div>
+    <div class="section-title-row"><div><h2>训练配置</h2><p>每份采样集对应独立训练作业，各自配比成功后自动启动。全部训练成功后统一评测。</p></div></div>
+    <div v-for="strategy in strategies" :key="strategy.id" class="config-block">
+      <h3>{{ strategy.name }} · 训练作业</h3>
+      <div class="form-grid two-cols">
+        <label class="field"><span>训练作业名称</span><input v-model="strategy.trainingJobName" maxlength="64" placeholder="留空自动按时间命名" /></label>
+        <label class="field"><span>保存模型名称</span><input v-model="strategy.modelName" maxlength="128" placeholder="留空使用策略名及实验时间" /></label>
+        <label class="field"><span>训练节点数</span><input v-model.number="strategy.trainingNodes" type="number" min="1" max="16" /></label>
+        <label class="field"><span>训练任务优先级</span><select v-model.number="strategy.trainingPriority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
+      </div>
+      <label><input type="checkbox" :checked="!!Object.keys(strategy.trainingOverrides).length" @change="customize(strategy, $event.target.checked)" /> 单独设置训练参数（否则沿用下方公共配置）</label>
+      <div v-if="Object.keys(strategy.trainingOverrides).length" class="form-grid two-cols">
+        <label v-for="[key, label, min, max] in [['token_budget', '训练 Token 预算', 1, 9007199254740991], ['devices_per_node', '每节点 NPU 数', 1, 8], ['device_batch_size', '单卡批量大小', 1, 4096], ['eval_every', '验证损失检查间隔', -1, 2147483647], ['core_metric_every', '任务评测间隔', -1, 2147483647]]" :key="key" class="field"><span>{{ label }}</span><input v-model.number="strategy.trainingOverrides[key]" type="number" :min="min" :max="max" /></label>
+      </div>
+    </div>
 
     <div class="config-block">
       <h3>训练框架</h3>
@@ -21,11 +39,11 @@ defineProps({ config: { type: Object, required: true }, runtime: { type: Object,
       <div class="form-grid two-cols"><label class="field"><span>NanoChat 模型目录 OBS 地址</span><input v-model="config.modelObsUri" placeholder="obs://bucket/path/nanochat_model_dir/" /></label><label class="field"><span>基础模型标签</span><input v-model="config.baseModelTag" placeholder="d24" /></label></div>
     </div>
 
-    <div class="config-block"><h3>训练参数</h3><div class="form-grid three-cols"><label class="field"><span>目标参数/数据比例</span><input v-model.number="config.targetParamDataRatio" type="number" min="0.01" step="0.01" /></label><label class="field"><span>每节点 NPU 数</span><input v-model.number="config.devicesPerNode" type="number" min="1" max="8" /></label><label class="field"><span>训练作业节点数</span><input v-model.number="config.nodes" type="number" min="1" max="16" /><small>与配比、评测作业独立配置</small></label></div></div>
+    <div class="config-block"><h3>公共训练参数</h3><div class="form-grid two-cols"><label class="field"><span>目标参数/数据比例</span><input v-model.number="config.targetParamDataRatio" type="number" min="0.01" step="0.01" /></label><label class="field"><span>默认每节点 NPU 数</span><input v-model.number="config.devicesPerNode" type="number" min="1" max="8" /></label></div></div>
 
     <div class="config-block"><h3>训练预算与批量</h3>
       <div class="training-step-control">
-        <div class="step-mode-heading"><strong>共同训练预算</strong><span>所有配比方案使用相同 Token 预算</span></div>
+        <div class="step-mode-heading"><strong>默认训练预算</strong><span>未单独配置的训练作业沿用此预算</span></div>
         <label class="field custom-step-field"><span>训练 Token 预算</span><input v-model.number="config.tokenBudget" type="number" min="1" max="9007199254740991" step="1" required /><small>默认 401,395,843 Token，基于当前 d24 配置；更换模型后请按需调整。不改变采样集大小。</small>
           <small v-if="!Number.isSafeInteger(config.tokenBudget) || config.tokenBudget < 1" class="step-input-error">请填写大于 0 的安全整数。</small>
         </label>

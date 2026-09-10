@@ -55,7 +55,9 @@ def _comparison(config: dict[str, Any]) -> dict[str, Any]:
 
 def run_mixing(config: dict[str, Any]) -> None:
     from auto_mixture_tool.pipeline import PipelineManager
-    quadmix = next(item for item in config["strategies"] if item["type"] == "quadmix")
+    quadmix = next((item for item in config["strategies"] if item["type"] == "quadmix"), None)
+    if quadmix is None:
+        return run_baseline_mixing(config)
     request = {
         "dataset_uri": "/home/ma-user/modelarts/inputs/data_dir_0",
         "schema_uri": str(WORKSPACE / "configs/schema_stem_quadmix_parquet.yaml"),
@@ -101,6 +103,45 @@ def run_mixing(config: dict[str, Any]) -> None:
     result = PipelineManager(WORKSPACE).submit(request)
     if result.get("status") != "SUCCEEDED":
         raise RuntimeError(result.get("message") or "mixing stage failed")
+
+
+def run_baseline_mixing(config):
+    """Run the existing sampling implementation without launching proxy experiments."""
+    if int(os.environ.get('VC_TASK_INDEX', '0')) != 0:
+        print('人工/随机采样由首节点写出；本节点无需重复采样。')
+        return
+    from auto_mixture_tool.pipeline import PipelineManager
+    data = '/home/ma-user/modelarts/inputs/data_dir_0'
+    schema = str(WORKSPACE / 'configs/schema_stem_quadmix_parquet.yaml')
+    report = PipelineManager(WORKSPACE).validate(data, schema, full_scan=config.get('full_scan', False))
+    if not report['valid']:
+        raise ValueError('数据格式不符合算法要求：' + '; '.join(report.get('errors', [])))
+    comparison = _comparison(config)
+    training = config['training']
+    env = dict(os.environ, PREPARE_ONLY='1', COMPARISON_METHODS=','.join(comparison['methods']),
+               STEM_DATA_DIR=data, SCHEMA_CONFIG=schema,
+               NANOCHAT_REPO='/home/ma-user/modelarts/inputs/nanochat_npu_dir_3',
+               NANOCHAT_MODEL_DIR='/home/ma-user/modelarts/inputs/nanochat_model_dir_1',
+               BASE_MODEL_TAG=training.get('base_model_tag', 'd24'),
+               TARGET_PARAM_DATA_RATIO=str(training.get('target_param_data_ratio', 0.5)),
+               RESULT_DIR=str(OUTPUT / 'sampled'), MID_CHECKPOINTS_OUTPUT_DIR=str(OUTPUT / 'unused_checkpoints'),
+               NUM_NPU=str(config['strategies'][0].get('devices_per_node', 8)),
+               SEED=str(config['strategies'][0].get('seed', 42)),
+               NANOCHAT_DISABLE_WANDB='1', MIX_GENERAL_DATA='0',
+               MANUAL_RATIO='')
+    plans = comparison['manual_plans']
+    if plans:
+        first = plans[0]
+        env.update(MANUAL_RATIO=':'.join(f'{k}={v}' for k, v in first['ratios'].items()),
+                   MANUAL_STRATEGY_PATH=first['strategy']['script_path'],
+                   MANUAL_STRATEGY_CONFIG_JSON=json.dumps(first['strategy']['config']),
+                   MANUAL_PLANS_JSON=json.dumps([{'id': p['id'], 'label': p['label'], 'ratios': p['ratios'],
+                       'strategy_path': p['strategy']['script_path'], 'strategy_config': p['strategy']['config']}
+                       for p in plans], ensure_ascii=False))
+    random = comparison['random_strategy']
+    env.update(RANDOM_STRATEGY_PATH=random['script_path'], RANDOM_STRATEGY_CONFIG_JSON=json.dumps(random['config']))
+    subprocess.run(['bash', str(WORKSPACE / 'nanochat_mid_compare/run_stem_experiment.sh')],
+                   cwd=WORKSPACE, env=env, check=True)
 
 
 def _prepared_data_dir() -> Path:
@@ -152,7 +193,7 @@ def run_training(config: dict[str, Any]) -> None:
         "DEVICE_BATCH_SIZE": str(config["training"].get("device_batch_size", 1)),
         "EVAL_EVERY": str(config["training"].get("eval_every", -1)),
         "CORE_METRIC_EVERY": str(config["training"].get("core_metric_every", -1)),
-        "RESULT_DIR": str(OUTPUT.parent / "reports_output" if config["evaluation"].get("output_obs_uri") else OUTPUT / "training/results"),
+        "RESULT_DIR": str(OUTPUT / "training/results" if config.get('split_evaluation') else OUTPUT.parent / "reports_output" if config["evaluation"].get("output_obs_uri") else OUTPUT / "training/results"),
         "MID_CHECKPOINTS_OUTPUT_DIR": str(OUTPUT.parent / "models_output" if config["training"].get("output_obs_uri") else OUTPUT / "training/checkpoints"),
         "EVAL_BENCHMARKS": ",".join(config["evaluation"].get("datasets") or ["stem"]),
         "EVALUATION_ENABLED": "1" if not config.get('split_evaluation') and config["evaluation"].get("datasets", ["stem"]) else "0",

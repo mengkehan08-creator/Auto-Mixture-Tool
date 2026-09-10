@@ -57,6 +57,7 @@ class JobRequest(BaseModel):
 
 
 class WorkflowRequest(BaseModel):
+    execution_mode: str = 'sequential'
     reuse: dict[str, str] | None = None
     request_id: str | None = None
     experiment_name: str | None = None
@@ -209,6 +210,21 @@ def renew_workflow_authorization(workflow_id: str, payload: dict[str, str]) -> d
 @app.get("/api/v1/workflows")
 def list_workflows() -> list[dict[str, Any]]:
     return _workflow_manager().list()
+
+
+@app.get('/api/v1/models')
+def list_models() -> list[dict[str, Any]]:
+    from auto_mixture_tool.modelarts.parallel_workflow import models
+    return models(_workflow_manager())
+
+
+@app.post('/api/v1/workflows/{workflow_id}/jobs/{job_key}/retry', status_code=202)
+def retry_parallel_job(workflow_id: str, job_key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    from auto_mixture_tool.modelarts.parallel_workflow import retry
+    try:
+        return retry(_workflow_manager(), workflow_id, job_key, payload)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/v1/workflows/{workflow_id}")
