@@ -9,7 +9,7 @@ test('strategy nodes and training overrides are independent', () => {
   const a = createStrategy('quadmix'), b = createStrategy('manual')
   a.mixingNodes = 4; a.trainingOverrides.token_budget = 15
   assert.equal(b.mixingNodes, 1)
-  assert.deepEqual(b.trainingOverrides, {})
+  assert.deepEqual(b.trainingOverrides, { token_budget: 401395843, device_batch_size: 1, devices_per_node: 8, eval_every: -1, core_metric_every: -1 })
   assert.equal(createTrainingConfig().nodes, 2)
   assert.deepEqual(createEvaluationConfig().modelIds, [])
 })

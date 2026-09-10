@@ -12,6 +12,7 @@ const emit = defineEmits(['change'])
       :key="step.id"
       type="button"
       :class="{ active: currentStep === step.id, complete: currentStep > step.id }"
+      :aria-current="currentStep === step.id ? 'step' : undefined"
       @click="emit('change', step.id)"
     >
       <span>{{ step.id }}</span>{{ step.label }}

@@ -53,16 +53,18 @@ const runtime = reactive(createRuntimeConfig())
   <div class="app-shell">
     <AppSidebar :page="page" @navigate="navigate($event)" />
     <main class="main-content">
-      <header class="topbar topbar-sticky">
+      <div class="workspace-header">
+      <header class="topbar">
         <button class="button secondary" type="button" :disabled="!navigationHistory.length" @click="goBack" aria-label="返回上一页面"><ChevronLeft :size="16" />返回</button>
         <div><h1>{{ page === 'jobs' ? '实验作业管理' : '创建配比实验' }}</h1><p>配置算法、训练与评测后提交至 ModelArts</p></div>
         <span class="user-chip"><span>配</span>配比用户</span>
       </header>
+      <StepNavigation v-if="page === 'create'" :current-step="currentStep" @change="navigate('create', $event)" />
+      </div>
 
       <WorkflowJobs v-show="page === 'jobs'" :selected-id="selectedId" @select="navigate('jobs', currentStep, $event)" @copy="copyJob" />
       <div v-show="page === 'create'">
       <p v-if="copyNotice" class="path-preview">{{ copyNotice }}</p>
-      <StepNavigation :current-step="currentStep" @change="navigate('create', $event)" />
 
       <MixingStrategyStep v-if="currentStep === 1" :strategies="strategies" :runtime="runtime" />
       <TrainingConfigStep v-else-if="currentStep === 2" :config="training" :runtime="runtime" :strategies="strategies" />

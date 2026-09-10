@@ -17,10 +17,10 @@ const emit = defineEmits(['remove', 'change-type'])
         <option v-for="option in strategyOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
       </select>
       <span class="strategy-description">{{ strategyOptions.find((option) => option.value === strategy.type)?.description }}</span>
-      <button class="button danger" type="button" :disabled="!removable" @click="emit('remove')"><Trash2 :size="16" />删除</button>
+      <button class="button danger" type="button" :disabled="!removable" :aria-label="`删除策略 ${strategy.name}`" :title="removable ? '删除此策略' : '至少保留一项策略'" @click="emit('remove')"><Trash2 :size="16" />删除</button>
     </header>
 
-    <div class="config-block form-grid three-cols">
+    <div class="strategy-job-fields form-grid" :class="strategy.type === 'quadmix' ? 'three-cols' : 'two-cols'">
       <label class="field"><span>配比作业名称</span><input v-model="strategy.mixingJobName" placeholder="留空自动按时间命名" maxlength="64" /></label>
       <label class="field"><span>配比节点数</span><input v-model.number="strategy.mixingNodes" type="number" min="1" max="16" /></label>
       <label class="field"><span>配比任务优先级</span><select v-model.number="strategy.mixingPriority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
@@ -31,3 +31,7 @@ const emit = defineEmits(['remove', 'change-type'])
     <RandomMixConfig v-else :model-value="strategy" />
   </article>
 </template>
+<style scoped>
+.strategy-job-fields { margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid #e2e8f3; align-items: start; }
+.strategy-job-fields .field { margin: 0; }
+</style>

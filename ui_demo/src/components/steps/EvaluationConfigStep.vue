@@ -19,7 +19,7 @@ function toggleDataset(config, name) {
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>评测配置</h2><p>默认选中全部 STEM 评测任务，可自由调整单项；自动评估 API 尚未接入。</p></div></div>
+    <div class="section-title-row"><div><h2>评测配置</h2><p>选择评测任务与历史模型，全部训练成功后统一对比。默认选中全部 STEM 任务。</p></div></div>
     <div class="method-grid">
       <article :class="['method-card', { enabled: config.dataset.enabled }]">
         <header><span class="method-icon"><Database :size="20" /></span><span><strong>评测集评测</strong><small>使用内置评测集或已上传的 OBS 目录</small></span><label class="switch"><input v-model="config.dataset.enabled" type="checkbox" aria-label="启用评测集评测" /><span></span></label></header>
@@ -58,7 +58,7 @@ function toggleDataset(config, name) {
       </article>
 
       <article :class="['method-card', { enabled: config.api.enabled }]">
-        <header><span class="method-icon"><Bot :size="20" /></span><span><strong>自动评估</strong><small>调用外部模型或评分服务</small></span><label class="switch"><input v-model="config.api.enabled" type="checkbox" aria-label="启用自动评估" /><span></span></label></header>
+        <header><span class="method-icon"><Bot :size="20" /></span><span><strong>自动评估</strong><small>尚未接入 · 当前不创建作业</small></span><label class="switch"><input v-model="config.api.enabled" type="checkbox" aria-label="启用自动评估" /><span></span></label></header>
         <div v-if="config.api.enabled" class="method-body">
           <p class="path-preview" role="status">暂未接入，无法执行自动评估。仅保留选择，不创建自动评估作业。</p>
         </div>
@@ -69,16 +69,21 @@ function toggleDataset(config, name) {
 </template>
 
 <style scoped>
-.method-grid { align-items: start; }
+.method-grid { align-items: start; grid-template-columns: minmax(0, 2fr) minmax(250px, 1fr); }
 .switch { position: relative; flex-shrink: 0; }
 .switch input { display: block; position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; z-index: 1; cursor: pointer; }
 .switch input:focus-visible + span { outline: 2px solid #4567b9; outline-offset: 3px; }
 .evaluation-job-settings { margin-top: 20px; padding-top: 18px; border-top: 1px solid #e4eaf5; }
 .evaluation-job-settings h3 { margin-bottom: 16px; font-size: 14px; }
+.evaluation-job-settings > .field, .evaluation-job-settings > .form-grid { margin-bottom: 18px; }
+.evaluation-job-settings .config-block .button { margin-top: 12px; }
 .eval-selection-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 16px 0 12px; }
 .eval-selection-heading .field-label { margin: 0; }
 .stem-select-all { padding: 6px 12px; border: 1px solid #d6e1f6; border-radius: 7px; background: #f4f7ff; color: #4567b9; font-size: 12px; font-weight: 600; }
 .stem-select-all.active { border-color: #98b1ee; background: #eaf1ff; color: #325bc2; }
 .stem-select-all:hover { background: #dfeaff; }
 .eval-selection-count { display: block; margin-top: 12px; color: #7a879d; font-size: 12px; }
+@media (max-width: 1180px) {
+  .method-grid { grid-template-columns: minmax(0, 1fr); }
+}
 </style>

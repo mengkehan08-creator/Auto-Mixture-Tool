@@ -1,15 +1,18 @@
 <script setup>
-const props = defineProps({ config: { type: Object, required: true }, runtime: { type: Object, required: true }, strategies: { type: Array, default: () => [] } })
-function customize(strategy, enabled) {
-  const c = props.config
-  strategy.trainingOverrides = enabled ? { token_budget: c.tokenBudget, device_batch_size: c.deviceBatchSize,
-    devices_per_node: c.devicesPerNode, eval_every: c.evalEvery, core_metric_every: c.coreMetricEvery } : {}
-}
+defineProps({ config: { type: Object, required: true }, runtime: { type: Object, required: true }, strategies: { type: Array, default: () => [] } })
+
+const trainingFields = [
+  { key: 'token_budget', label: '训练 Token 预算', min: 1, max: 9007199254740991, hint: '本次模型训练的 Token 总量，训练步数据此自动计算。' },
+  { key: 'devices_per_node', label: '每节点 NPU 数', min: 1, max: 8, hint: '每个训练节点使用的卡数。' },
+  { key: 'device_batch_size', label: '单卡批量大小', min: 1, max: 4096, hint: '每张卡一次处理的序列数，显存不足时调小。' },
+  { key: 'eval_every', label: '验证损失检查间隔', min: -1, max: 2147483647, hint: '每隔多少训练步计算验证损失；-1 表示关闭。' },
+  { key: 'core_metric_every', label: '任务评测间隔', min: -1, max: 2147483647, hint: '训练期间的任务评测频率；-1 表示关闭，不影响训练后的独立评测。' },
+]
 </script>
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>训练配置</h2><p>每份采样集对应独立训练作业，各自配比成功后自动启动。全部训练成功后统一评测。</p></div></div>
+    <div class="section-title-row"><div><h2>训练配置</h2><p>各策略独立设置训练参数，共用下方框架与初始模型。配比成功后自动启动对应训练。</p></div></div>
     <div v-for="strategy in strategies" :key="strategy.id" class="config-block">
       <h3>{{ strategy.name }} · 训练作业</h3>
       <div class="form-grid two-cols">
@@ -17,10 +20,11 @@ function customize(strategy, enabled) {
         <label class="field"><span>保存模型名称</span><input v-model="strategy.modelName" maxlength="128" placeholder="留空使用策略名及实验时间" /></label>
         <label class="field"><span>训练节点数</span><input v-model.number="strategy.trainingNodes" type="number" min="1" max="16" /></label>
         <label class="field"><span>训练任务优先级</span><select v-model.number="strategy.trainingPriority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
-      </div>
-      <label><input type="checkbox" :checked="!!Object.keys(strategy.trainingOverrides).length" @change="customize(strategy, $event.target.checked)" /> 单独设置训练参数（否则沿用下方公共配置）</label>
-      <div v-if="Object.keys(strategy.trainingOverrides).length" class="form-grid two-cols">
-        <label v-for="[key, label, min, max] in [['token_budget', '训练 Token 预算', 1, 9007199254740991], ['devices_per_node', '每节点 NPU 数', 1, 8], ['device_batch_size', '单卡批量大小', 1, 4096], ['eval_every', '验证损失检查间隔', -1, 2147483647], ['core_metric_every', '任务评测间隔', -1, 2147483647]]" :key="key" class="field"><span>{{ label }}</span><input v-model.number="strategy.trainingOverrides[key]" type="number" :min="min" :max="max" /></label>
+        <label v-for="field in trainingFields" :key="field.key" class="field">
+          <span>{{ field.label }}</span>
+          <input v-model.number="strategy.trainingOverrides[field.key]" type="number" :min="field.min" :max="field.max" :aria-describedby="`training-${strategy.id}-${field.key}`" />
+          <small :id="`training-${strategy.id}-${field.key}`">{{ field.hint }}</small>
+        </label>
       </div>
     </div>
 
@@ -28,32 +32,18 @@ function customize(strategy, enabled) {
       <h3>训练框架</h3>
       <div class="segmented"><button type="button" :class="{ active: config.frameworkSource === 'builtin' }" @click="config.frameworkSource = 'builtin'">使用内置框架</button><button type="button" :class="{ active: config.frameworkSource === 'obs' }" @click="config.frameworkSource = 'obs'">OBS 挂载框架</button></div>
       <div v-if="config.frameworkSource === 'builtin'" class="form-grid two-cols"><label class="field"><span>框架</span><select v-model="config.framework"><option>NanoChat</option></select></label></div>
-      <label class="field"><span>{{ config.frameworkSource === 'builtin' ? 'NanoChat 代码 OBS 地址' : 'NanoChat 兼容框架 OBS 地址' }}</span><input v-model="config.frameworkObsUri" placeholder="obs://bucket/path/nanochat-npu/" /><small>请先上传到 OBS；当前执行适配器要求与 NanoChat 启动接口兼容。</small></label>
+      <label class="field"><span>{{ config.frameworkSource === 'builtin' ? 'NanoChat 代码 OBS 地址' : 'NanoChat 兼容框架 OBS 地址' }}</span><input v-model="config.frameworkObsUri" placeholder="obs://bucket/path/nanochat-npu/" /><small>框架须已上传 OBS，并兼容 NanoChat 启动接口。</small></label>
     </div>
 
     <div class="config-block">
       <h3>训练模型</h3>
       <label class="field"><span>模型输出 OBS 目录</span><input v-model="config.outputObsUri" placeholder="留空沿用实验输出目录" /><small>保存各策略训练后的模型及检查点，自动追加 runs/实验名称/，避免覆盖。</small></label>
       <div class="segmented"><button type="button" :class="{ active: config.modelSource === 'builtin' }" @click="config.modelSource = 'builtin'">使用内置配置</button><button type="button" :class="{ active: config.modelSource === 'obs' }" @click="config.modelSource = 'obs'">OBS 挂载模型</button></div>
-      <div v-if="config.modelSource === 'builtin'" class="form-grid two-cols"><label class="field"><span>初始化方式</span><select v-model="config.model"><option>NanoChat-Base</option></select><small>从所选模型目录的 base_checkpoints/模型标签 加载初始权重；不是在线下载模型。</small></label></div>
+      <div v-if="config.modelSource === 'builtin'" class="form-grid two-cols"><label class="field"><span>初始化方式</span><select v-model="config.model"><option>NanoChat-Base</option></select><small>从模型目录的 base_checkpoints/模型标签 加载初始权重。</small></label></div>
       <div class="form-grid two-cols"><label class="field"><span>NanoChat 模型目录 OBS 地址</span><input v-model="config.modelObsUri" placeholder="obs://bucket/path/nanochat_model_dir/" /></label><label class="field"><span>基础模型标签</span><input v-model="config.baseModelTag" placeholder="d24" /></label></div>
     </div>
 
-    <div class="config-block"><h3>公共训练参数</h3><div class="form-grid two-cols"><label class="field"><span>目标参数/数据比例</span><input v-model.number="config.targetParamDataRatio" type="number" min="0.01" step="0.01" /></label><label class="field"><span>默认每节点 NPU 数</span><input v-model.number="config.devicesPerNode" type="number" min="1" max="8" /></label></div></div>
-
-    <div class="config-block"><h3>训练预算与批量</h3>
-      <div class="training-step-control">
-        <div class="step-mode-heading"><strong>默认训练预算</strong><span>未单独配置的训练作业沿用此预算</span></div>
-        <label class="field custom-step-field"><span>训练 Token 预算</span><input v-model.number="config.tokenBudget" type="number" min="1" max="9007199254740991" step="1" required /><small>默认 401,395,843 Token，基于当前 d24 配置；更换模型后请按需调整。不改变采样集大小。</small>
-          <small v-if="!Number.isSafeInteger(config.tokenBudget) || config.tokenBudget < 1" class="step-input-error">请填写大于 0 的安全整数。</small>
-        </label>
-        <p class="automatic-step-note">实际训练量按全局 Token 批量向上取整；预算超过采样集时可能重复读取数据。复制旧作业后请重新核对预算。</p>
-      </div>
-      <div class="form-grid two-cols">
-      <label class="field"><span>单卡批量大小</span><input v-model.number="config.deviceBatchSize" type="number" min="1" step="1" /><small>默认 1。增大会增加显存占用，需与模型和全局批量兼容。</small></label>
-      <label class="field"><span>验证损失检查间隔</span><input v-model.number="config.evalEvery" type="number" min="-1" step="1" /><small>单位：训练步数。-1：关闭；正整数：每隔指定步数检查验证损失。</small></label>
-      <label class="field"><span>任务评测间隔</span><input v-model.number="config.coreMetricEvery" type="number" min="-1" step="1" /><small>单位：训练步数。-1：关闭；正整数：每隔指定步数运行任务评测。与训练结束后的评测独立。</small></label>
-    </div></div>
+    <div class="config-block"><h3>采样预算设置</h3><label class="field"><span>目标参数/数据比例</span><input v-model.number="config.targetParamDataRatio" type="number" min="0.01" step="0.01" /><small>用于计算采样数据规模。各模型的训练 Token 预算在上方对应作业中分别设置。</small></label></div>
     <div class="config-block"><h3>运行依赖配置</h3>
       <div v-for="(resource, index) in runtime.offlineResources" :key="index" class="resource-row">
         <label class="field"><span>name</span><input v-model="resource.name" placeholder="自定义资源名称" /></label>
@@ -66,16 +56,6 @@ function customize(strategy, enabled) {
 </template>
 
 <style scoped>
-.training-step-control { margin: 0 0 22px; padding: 18px; border: 1px solid #dfe7f6; border-radius: 12px; background: #f8faff; }
-.step-mode-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.step-mode-heading strong { font-size: 14px; }
-.step-mode-heading > span { font-size: 12px; color: #7b87a0; }
-.automatic-step-note { margin: 15px 0 0; font-size: 12px; color: #71809a; }
-.custom-step-field { margin: 16px 0 0; max-width: 420px; }
-.custom-step-field .step-input-error { color: #bb3f51; }
-@media (max-width: 640px) {
-  .step-mode-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
-}
 .resource-row {
   display: grid;
   grid-template-columns: minmax(140px, 1fr) minmax(0, 2.4fr) auto;

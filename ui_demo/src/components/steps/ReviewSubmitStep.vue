@@ -175,8 +175,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <p v-if="evaluationEnabled">评测模型：本次 {{ strategies.length }} 个＋历史 {{ evaluation.modelIds.length }} 个。</p>
     </div>
     <p v-if="evaluation.api.enabled" class="path-preview" role="status">自动评估暂未接入：本次不会执行自动评估，也不会创建自动评估作业。</p>
-    <h3>ModelArts 作业配置</h3>
-    <p class="path-preview">已填入脚本默认配置，可编辑。</p>
+    <div class="section-title-row modelarts-heading"><div><h3>ModelArts 作业配置</h3><p>已填入脚本默认值，可按资源池与镜像调整。</p></div></div>
     <div class="form-grid two-cols">
       <label v-for="key in ['endpoint', 'region', 'workspace_id', 'workspace_name', 'image_url', 'image_repo_id', 'flavor_id', 'pool_id']" :key="key" class="field"><span>{{ fieldLabels[key] }}</span><input v-model="runtime.modelarts[key]" autocomplete="off" /></label>
       <label v-if="authMode === 'iam'" class="field"><span>Authorization</span><input value="自动获取（提交时执行）" readonly /><small>已启用私有 IAM 配置；Token 仅用于后端请求，不在页面显示。</small></label>
@@ -188,7 +187,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ strategies.length }} 个独立作业 · 各自校验与采样</small></article>
       <article><span>训练作业</span><strong>{{ training.framework }}</strong><small>{{ strategies.length }} 个独立作业 · 可并行训练</small></article>
       <article><span>evaluation_nodes</span><strong>{{ evaluation.dataset.enabled ? `${evaluation.nodes} 节点` : '未启用评测' }}</strong><small>模型输入自动使用前序训练输出</small></article>
-      <article><span>training.token_budget</span><strong>{{ Number(training.tokenBudget).toLocaleString() }} Token</strong><small>公共默认预算 · 单独配置时以各作业参数为准</small></article>
+      <article v-for="strategy in strategies" :key="strategy.id"><span>{{ strategy.name }} · training.token_budget</span><strong>{{ Number(strategy.trainingOverrides.token_budget).toLocaleString() }} Token</strong><small>该训练作业的实际配置预算</small></article>
       <article><span>输出根目录</span><strong class="break-path">{{ runtime.outputRootObsUri }}</strong><small>按实验名称隔离 mixing / sampled / training</small></article>
     </div>
     <div class="config-block">
@@ -207,15 +206,17 @@ onBeforeUnmount(() => window.clearInterval(timer))
     </div>
 
     <p class="path-preview">提交会创建收费云作业，结果保存到指定 OBS 目录下的独立实验子目录。</p>
-    <button class="button secondary" type="button" :disabled="status === 'loading'" @click="checkConfiguration">检查配置（不创建作业）</button>
-    <p v-if="validation?.ready" class="path-preview">配置检查通过。{{ validation.message }}</p>
-    <button class="button submit-button" type="button" :disabled="status === 'loading' || (status === 'success' && submittedBody === JSON.stringify(requestBody()))" @click="submit">
+    <p v-if="validation?.ready" class="success-message" role="status">配置检查通过。{{ validation.message }}</p>
+    <div class="submission-actions" :aria-busy="status === 'loading'">
+      <button class="button secondary" type="button" :disabled="status === 'loading'" @click="checkConfiguration">检查配置（不创建作业）</button>
+      <button class="button submit-button" type="button" :disabled="status === 'loading' || (status === 'success' && submittedBody === JSON.stringify(requestBody()))" @click="submit">
       <LoaderCircle v-if="status === 'loading'" class="spin" :size="18" /><Rocket v-else :size="18" />
       {{ status === 'loading' ? '正在检查并提交实验…' : '提交到 ModelArts' }}
-    </button>
-    <p v-if="error" class="error-message">{{ error }}</p>
+      </button>
+    </div>
+    <p v-if="error" class="error-message" role="alert">{{ error }}</p>
     <article v-if="status === 'success'" class="submit-result"><CheckCircle2 :size="25" /><div><strong>实验已受理</strong><span>后续作业按依赖关系自动提交。</span></div></article>
-    <p v-if="connectionError" class="error-message">状态服务连接失败：{{ connectionError }}。请在左侧实验作业核对提交结果，勿重复提交。</p>
+    <p v-if="connectionError" class="error-message" role="alert">状态服务连接失败：{{ connectionError }}。请在左侧实验作业核对提交结果，勿重复提交。</p>
   </section>
 </template>
 <style scoped>
@@ -223,6 +224,10 @@ onBeforeUnmount(() => window.clearInterval(timer))
 .job-plan { border-collapse: collapse; width: 100%; font-size: 13px; }
 .job-plan th, .job-plan td { padding: 12px; border-bottom: 1px solid #e2e8f3; text-align: left; }
 .job-plan th { background: #f1f5ff; color: #526487; }
+.job-plan td { overflow-wrap: anywhere; min-width: 100px; }
+.job-plan tbody tr:hover { background: #f7faff; }
+.modelarts-heading { margin-top: 26px; }
+.modelarts-heading h3 { margin-bottom: 0; }
 details { margin: 16px 0; }
 summary { cursor: pointer; color: #4e70dd; }
 textarea { width: 100%; }

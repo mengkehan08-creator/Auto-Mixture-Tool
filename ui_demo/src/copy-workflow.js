@@ -1,4 +1,4 @@
-import { createRuntimeConfig, createTrainingConfig, createEvaluationConfig, createStrategy } from './data/defaults.js'
+import { createRuntimeConfig, createTrainingConfig, createEvaluationConfig, createStrategy, trainingParameters } from './data/defaults.js'
 import { normalizeEvaluationTasks } from './evaluation-selection.js'
 
 export function copyWorkflow(config) {
@@ -54,7 +54,7 @@ export function copyWorkflow(config) {
     trainingPriority: item.training_priority ?? config.priority ?? 1,
     mixingJobName: '', trainingJobName: '', modelName: item.model_name || '',
     mixingCommand: item.mixing_command || '', trainingCommand: item.training_command || '',
-    trainingOverrides: structuredClone(item.training || {}),
+    trainingOverrides: { ...trainingParameters(training), ...structuredClone(item.training || {}) },
   }))
   return { runtime, training, evaluation, strategies }
 }
