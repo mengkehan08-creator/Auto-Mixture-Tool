@@ -586,8 +586,10 @@ class ModelArtsWorkflowManager:
                     value['resources'][role] = entry['uri']
             if set(roles) - seen_roles:
                 commands = value.get('commands') or {}
-                if any(commands.get(stage, self._command(stage)) == self._command(stage) for stage in ('mixing', 'training')):
-                    raise ValueError('已删除默认运行资源，请恢复资源或为两个作业配置不依赖这些资源的自定义 command')
+                strategies = value.get('strategies', []) if value.get('execution_mode') == 'parallel' else [{}]
+                if any((strategy.get(stage + '_command') or commands.get(stage, self._command(stage))) == self._command(stage)
+                       for strategy in strategies for stage in ('mixing', 'training')):
+                    raise ValueError('已删除默认运行资源，请恢复资源或为所有配比、训练作业配置不依赖这些资源的自定义 command')
         commands = value.get("commands")
         if commands is not None:
             if isinstance(commands, dict) and set(commands) == {"mixing", "training"}:

@@ -54,6 +54,10 @@ def validate(manager, config):
         single = copy.deepcopy(config)
         single.pop('execution_mode', None)
         single['strategies'] = [copy.deepcopy(strategy)]
+        single['commands'] = {
+            stage: strategy.get(stage + '_command') or config.get('commands', {}).get(stage, manager._command(stage))
+            for stage in ('mixing', 'training', 'evaluation')
+        }
         single['training'].update(overrides)
         strategy['training'] = manager._validate(single)['training']
     config['evaluation']['job_name'] = job_name(config['evaluation'].get('job_name'))

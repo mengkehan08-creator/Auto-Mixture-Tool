@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { apiRequest } from '../api'
+import { validateJobCommands } from '../job-commands.js'
 const props = defineProps({ workflow: Object, job: Object })
 const emit = defineEmits(['close', 'created'])
 const draft = reactive({ name: '', nodes: props.job.nodes, priority: props.job.priority, command: '', authorization: '' })
@@ -27,6 +28,7 @@ onMounted(async () => {
 async function submit() {
   pending.value = true; error.value = ''
   try {
+    validateJobCommands([{ owner: draft, commandKey: 'command', label: '重试作业' }])
     const body = { ...draft, ...(props.job.module === 'training' ? { training: { ...training } } : {}),
       ...(props.job.module === 'evaluation' ? { evaluation: { ...evaluation } } : {}) }
     if (JSON.stringify(body) !== fingerprint) {

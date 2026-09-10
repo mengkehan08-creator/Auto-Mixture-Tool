@@ -17,7 +17,7 @@ export const stepOptions = [
 export function createStrategy(type = 'quadmix') {
   const common = { id: nextId++, type, mixingNodes: type === 'quadmix' ? 2 : 1, trainingNodes: 2,
     mixingJobName: '', trainingJobName: '', modelName: '', mixingPriority: 1, trainingPriority: 1,
-    trainingOverrides: trainingParameters(), mixingCommand: '', trainingCommand: '' }
+    trainingOverrides: trainingParameters(), mixingCommand: null, trainingCommand: null }
 
   if (type === 'manual') {
     return {

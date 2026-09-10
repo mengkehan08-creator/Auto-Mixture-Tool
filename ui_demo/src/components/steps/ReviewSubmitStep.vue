@@ -5,6 +5,7 @@ import { strategyOptions } from '../../data/defaults'
 import { apiRequest } from '../../api'
 import { fieldLabels, submissionFailed } from '../../workflow-state'
 import { normalizeEvaluationTasks } from '../../evaluation-selection.js'
+import { initializeJobCommands, validateJobCommands } from '../../job-commands.js'
 
 const props = defineProps({ strategies: Array, training: Object, evaluation: Object, runtime: Object })
 const status = ref('idle')
@@ -14,6 +15,7 @@ const connectionError = ref('')
 const validation = ref(null)
 const authMode = ref('manual')
 const pendingId = ref('')
+const defaultCommands = ref(null)
 const emit = defineEmits(['created'])
 let requestId = ''
 let submittedBody = ''
@@ -23,10 +25,10 @@ const strategyNames = computed(() => props.strategies.map((strategy) => strategy
 const evaluationEnabled = computed(() => props.evaluation.dataset.enabled && (props.evaluation.dataset.names.length || props.evaluation.obsPackages.length))
 const jobPlan = computed(() => [
   ...props.strategies.flatMap(s => [
-    { module: 'mixing', label: `${s.name} · 配比`, name: s.mixingJobName, nodes: s.mixingNodes, priority: s.mixingPriority, depends: '无，可立即提交' },
-    { module: 'training', label: `${s.name} · 训练`, name: s.trainingJobName, nodes: s.trainingNodes, priority: s.trainingPriority, depends: `${s.name} 配比成功` },
+    { key: `mixing-${s.id}`, owner: s, commandKey: 'mixingCommand', module: 'mixing', label: `${s.name} · 配比`, name: s.mixingJobName, nodes: s.mixingNodes, priority: s.mixingPriority, depends: '无，可立即提交' },
+    { key: `training-${s.id}`, owner: s, commandKey: 'trainingCommand', module: 'training', label: `${s.name} · 训练`, name: s.trainingJobName, nodes: s.trainingNodes, priority: s.trainingPriority, depends: `${s.name} 配比成功` },
   ]),
-  ...(evaluationEnabled.value ? [{ module: 'evaluation', label: '汇总评测', name: props.evaluation.jobName, nodes: props.evaluation.nodes, priority: props.evaluation.priority, depends: '本次全部训练成功' }] : []),
+  ...(evaluationEnabled.value ? [{ key: 'evaluation', owner: props.runtime.commands || {}, commandKey: 'evaluation', module: 'evaluation', label: '汇总评测', name: props.evaluation.jobName, nodes: props.evaluation.nodes, priority: props.evaluation.priority, depends: '本次全部训练成功' }] : []),
 ])
 
 function normalizedStrategies() {
@@ -54,7 +56,10 @@ function normalizedStrategies() {
 function requestBody() {
   return {
     execution_mode: 'parallel',
-    ...(props.runtime.commands ? { commands: props.runtime.commands } : {}),
+    ...(props.runtime.commands ? { commands: {
+      ...props.runtime.commands,
+      evaluation: evaluationEnabled.value ? props.runtime.commands.evaluation : (defaultCommands.value?.evaluation || props.runtime.commands.evaluation),
+    } } : {}),
     modelarts: props.runtime.modelarts,
     priority: props.runtime.priority ?? 1,
     offline_resources: props.runtime.offlineResources,
@@ -113,6 +118,7 @@ async function checkConfiguration() {
   validation.value = null
   try {
     if (!props.runtime.commands) throw new Error('启动命令尚未加载，请点击重新加载默认命令。')
+    validateJobCommands(jobPlan.value)
     validation.value = await apiRequest('workflows/validate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody()),
     })
@@ -146,13 +152,13 @@ async function submit() {
   }
 }
 
-async function loadCommands(reset = false) {
+async function loadCommands() {
   try {
     const defaults = await apiRequest('workflow-defaults')
     authMode.value = defaults.auth_mode || 'manual'
     if (authMode.value === 'iam') props.runtime.modelarts.authorization = ''
-    if (reset || !props.runtime.commands) props.runtime.commands = defaults.commands
-    else if (!props.runtime.commands.evaluation) props.runtime.commands.evaluation = defaults.commands.evaluation
+    defaultCommands.value = defaults.commands
+    initializeJobCommands(props.strategies, props.runtime, defaults.commands)
     for (const [key, value] of Object.entries(defaults.modelarts || {})) {
       if (!props.runtime.modelarts[key]) props.runtime.modelarts[key] = value
     }
@@ -190,19 +196,17 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <article v-for="strategy in strategies" :key="strategy.id"><span>{{ strategy.name }} · training.token_budget</span><strong>{{ Number(strategy.trainingOverrides.token_budget).toLocaleString() }} Token</strong><small>该训练作业的实际配置预算</small></article>
       <article><span>输出根目录</span><strong class="break-path">{{ runtime.outputRootObsUri }}</strong><small>按实验名称隔离 mixing / sampled / training</small></article>
     </div>
-    <div class="config-block">
-      <h3>command</h3>
-      <p>默认命令已包含离线环境检查，可编辑。请勿在命令中填写凭据。</p>
-      <template v-if="runtime.commands">
-        <label class="field"><span>command（配比作业）</span><textarea v-model="runtime.commands.mixing" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
-        <label class="field"><span>command（训练作业）</span><textarea v-model="runtime.commands.training" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
-        <label class="field"><span>command（评测作业）</span><textarea v-model="runtime.commands.evaluation" rows="8" style="width:100%;font-family:monospace" spellcheck="false"></textarea></label>
-        <details v-for="strategy in strategies" :key="strategy.id"><summary>{{ strategy.name }} · 单独设置 command（可选）</summary>
-          <label class="field"><span>mixing.command</span><textarea v-model="strategy.mixingCommand" :placeholder="runtime.commands.mixing" rows="5"></textarea></label>
-          <label class="field"><span>training.command</span><textarea v-model="strategy.trainingCommand" :placeholder="runtime.commands.training" rows="5"></textarea></label>
-        </details>
-      </template>
-      <button class="button secondary" type="button" @click="loadCommands(true)">{{ runtime.commands ? '恢复默认命令' : '重新加载默认命令' }}</button>
+    <div class="job-commands">
+      <h3>作业启动命令</h3>
+      <p>每个作业独立编辑，修改仅对当前作业生效。请勿在命令中填写凭据。</p>
+      <button v-if="!defaultCommands" class="button secondary" type="button" @click="loadCommands">重新加载默认命令</button>
+      <article v-for="job in jobPlan" :key="job.key" class="config-block">
+        <header class="job-command-heading">
+          <div><h3>{{ job.label }}</h3><small>name：{{ job.name || '自动按时间命名' }} · node_count：{{ job.nodes }} · priority：{{ job.priority }}</small></div>
+          <button class="button secondary" type="button" :disabled="!defaultCommands || status === 'loading'" @click="job.owner[job.commandKey] = defaultCommands[job.module]">恢复此作业默认命令</button>
+        </header>
+        <label class="field"><span>command</span><textarea v-model="job.owner[job.commandKey]" rows="8" :disabled="status === 'loading' || job.owner[job.commandKey] == null" spellcheck="false" placeholder="正在加载默认命令…"></textarea></label>
+      </article>
     </div>
 
     <p class="path-preview">提交会创建收费云作业，结果保存到指定 OBS 目录下的独立实验子目录。</p>
@@ -228,7 +232,9 @@ onBeforeUnmount(() => window.clearInterval(timer))
 .job-plan tbody tr:hover { background: #f7faff; }
 .modelarts-heading { margin-top: 26px; }
 .modelarts-heading h3 { margin-bottom: 0; }
-details { margin: 16px 0; }
-summary { cursor: pointer; color: #4e70dd; }
-textarea { width: 100%; }
+.job-commands { margin-top: 28px; }
+.job-commands > p, .job-command-heading small { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.job-command-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 14px; margin-bottom: 18px; }
+.job-command-heading h3 { margin-bottom: 6px; }
+.job-commands textarea { width: 100%; font-family: Consolas, monospace; }
 </style>

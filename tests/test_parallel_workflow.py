@@ -161,6 +161,39 @@ def test_random_only_no_quad_required_and_custom_command(manager):
     assert read_config(body['algorithm']['environments'])['strategies'][0]['type'] == 'random'
 
 
+def test_each_job_payload_uses_its_own_command_and_retry_keeps_others(manager):
+    value = parallel_config()
+    value['commands'] = {stage: manager._command(stage) for stage in ('mixing', 'training', 'evaluation')}
+    value['commands']['evaluation'] = 'evaluate-all-models'
+    expected = {'evaluation': 'evaluate-all-models'}
+    for strategy in value['strategies']:
+        for stage in ('mixing', 'training'):
+            command = f'run-{stage}-{strategy["id"]}'
+            strategy[stage + '_command'] = command
+            expected[f'{stage}-{strategy["id"]}'] = command
+    record = create(manager, value)
+    for job in record['jobs']:
+        assert graph.payload(manager, record, job)['algorithm']['command'] == expected[job['key']]
+    finish(manager, record)
+    retried = graph.retry(manager, record['id'], 'training-quadmix', {'command': 'retry-quadmix-training'})
+    retry_record = manager.records[retried['id']]
+    for job in retry_record['jobs']:
+        command = 'retry-quadmix-training' if job['key'] == 'training-quadmix' else expected[job['key']]
+        assert graph.payload(manager, retry_record, job)['algorithm']['command'] == command
+
+
+def test_removed_resources_validate_actual_individual_commands(manager):
+    value = parallel_config()
+    value['offline_resources'] = []
+    value['commands'] = {stage: manager._command(stage) for stage in ('mixing', 'training', 'evaluation')}
+    for strategy in value['strategies']:
+        strategy.update(mixing_command='custom-mixing', training_command='custom-training')
+    assert create(manager, value)['pipeline_version'] == 4
+    value['strategies'][1]['training_command'] = manager._command('training')
+    with pytest.raises(ValueError, match='默认运行资源'):
+        create(manager, value)
+
+
 def test_api_accepts_parallel_mode(manager):
     from fastapi.testclient import TestClient
     from auto_mixture_tool.api.server import app

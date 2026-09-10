@@ -53,7 +53,8 @@ export function copyWorkflow(config) {
     mixingPriority: item.mixing_priority ?? config.priority ?? 1,
     trainingPriority: item.training_priority ?? config.priority ?? 1,
     mixingJobName: '', trainingJobName: '', modelName: item.model_name || '',
-    mixingCommand: item.mixing_command || '', trainingCommand: item.training_command || '',
+    mixingCommand: item.mixing_command?.trim() ? item.mixing_command : (config.commands?.mixing ?? null),
+    trainingCommand: item.training_command?.trim() ? item.training_command : (config.commands?.training ?? null),
     trainingOverrides: { ...trainingParameters(training), ...structuredClone(item.training || {}) },
   }))
   return { runtime, training, evaluation, strategies }
