@@ -126,7 +126,7 @@ onBeforeUnmount(() => clearInterval(timer))
       <button type="button" class="button secondary" @click="emit('select', '')">返回实验作业</button>
       <article v-if="selected" class="workflow-card">
         <header><div><strong>{{ selected.name }}</strong><small>创建时间 · {{ createdTime(selected) }}</small></div><span class="status-badge" :class="`tone-${statusView(selected.status).tone}`">{{ statusView(selected.status).label }}</span></header>
-        <WorkflowProgress :workflow="error ? { ...selected, message: error } : selected" />
+        <WorkflowProgress :workflow="error ? { ...selected, message: error, statusUnavailable: true } : selected" />
         <p v-if="selected.message" class="error-message">{{ selected.message }}</p>
         <p v-if="selected.reused_from">前序实验：<button class="button secondary" type="button" @click="emit('select', selected.reused_from)">查看原实验</button></p>
         <div v-if="workflows.some(w => w.reused_from === selected.id)" class="workflow-actions"><span>阶段重试记录：</span><button v-for="item in workflows.filter(w => w.reused_from === selected.id)" :key="item.id" class="button secondary" type="button" @click="emit('select', item.id)">{{ item.name }} · {{ statusView(item.status).label }}</button></div>
