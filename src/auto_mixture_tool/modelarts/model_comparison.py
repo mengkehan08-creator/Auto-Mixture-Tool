@@ -3,12 +3,46 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 MAX_METADATA_BYTES = 1024 * 1024
 STRUCTURE_KEYS = {'n_layer', 'n_embd', 'n_head', 'vocab_size', 'sequence_len'}
+DEFAULT_OBS_PREFIX = 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/'
+
+
+def mounted_metadata_path(uri):
+    """Map only the configured OBS subtree; prevent traversal and symlink escapes."""
+    root = os.environ.get('AMT_OBS_MOUNT_ROOT', '/l00916525')
+    if not root:
+        return None
+    prefix = urlsplit(os.environ.get('AMT_OBS_MOUNT_PREFIX', DEFAULT_OBS_PREFIX))
+    parsed = urlsplit(uri)
+    if prefix.scheme != 'obs' or not prefix.netloc or prefix.query or prefix.fragment:
+        raise ValueError('AMT_OBS_MOUNT_PREFIX 必须是 OBS 目录地址')
+    prefix_path = unquote(prefix.path).rstrip('/') + '/'
+    path = unquote(parsed.path)
+    if parsed.scheme != 'obs' or parsed.netloc != prefix.netloc or not path.startswith(prefix_path):
+        return None
+    parts = path[len(prefix_path):].split('/')
+    if any(part in {'', '.', '..'} or any(c in part for c in ('\\', ':', '\x00')) for part in parts):
+        raise ValueError('模型清单路径无效')
+    base = Path(root).resolve()
+    local = base.joinpath(*parts).resolve()
+    if not local.is_relative_to(base):
+        raise ValueError('模型清单路径不能超出挂载目录')
+    return local
+
+
+def decode_metadata(raw):
+    if len(raw) > MAX_METADATA_BYTES:
+        raise ValueError('模型清单超过 1 MiB，拒绝读取')
+    result = json.loads(raw)
+    if not isinstance(result, dict) or result.get('version') != 1:
+        raise ValueError('模型清单版本或格式无效')
+    return result
 
 
 def file_digest(path):
@@ -45,7 +79,7 @@ def build_identity(model_dir, tag):
 
 
 def read_metadata(uri):
-    """Read a single bounded JSON object using the environment's own OBS access."""
+    """Prefer the local mount; use OBS SDK only for unmapped directories."""
     parsed = urlsplit(uri)
     name = parsed.path.rsplit('/', 1)[-1]
     if (parsed.scheme != 'obs' or not re.fullmatch(r'[a-z0-9][a-z0-9.-]{1,62}', parsed.netloc)
@@ -53,6 +87,19 @@ def read_metadata(uri):
             or '..' in unquote(parsed.path).split('/')
             or not (name == 'models_manifest.json' or re.fullmatch(r'model_identity_[A-Za-z0-9_-]{1,128}\.json', name))):
         raise ValueError('只允许读取 OBS 模型清单，不接受权重文件或网页地址')
+    local = mounted_metadata_path(uri)
+    if local is not None:
+        try:
+            if local.stat().st_size > MAX_METADATA_BYTES:
+                raise ValueError('模型清单超过 1 MiB，拒绝读取')
+            with local.open('rb') as stream:
+                return decode_metadata(stream.read(MAX_METADATA_BYTES + 1))
+        except FileNotFoundError:
+            raise ValueError('挂载目录未找到模型清单；请确认挂载可见及清单已生成') from None
+        except PermissionError:
+            raise ValueError('工具进程没有读取挂载目录模型清单的权限') from None
+        except (OSError, ValueError):
+            raise ValueError('挂载目录模型清单读取失败；请检查 JSON 格式、版本及大小不超过 1 MiB') from None
     try:
         import moxing as mox
     except ImportError:
@@ -62,12 +109,7 @@ def read_metadata(uri):
             raise ValueError('模型清单超过 1 MiB，拒绝读取')
         with mox.file.File(uri, 'rb') as stream:
             raw = stream.read(MAX_METADATA_BYTES + 1)
-        if len(raw) > MAX_METADATA_BYTES:
-            raise ValueError('模型清单超过 1 MiB，拒绝读取')
-        result = json.loads(raw)
-        if not isinstance(result, dict) or result.get('version') != 1:
-            raise ValueError('模型清单版本或格式无效')
-        return result
+        return decode_metadata(raw)
     except Exception:
         # SDK exceptions can contain signed requests and credentials.
         raise ValueError('OBS 模型清单读取失败：请检查文件是否存在、大小不超过 1 MiB，以及 OBS 只读权限和网络') from None
@@ -97,8 +139,8 @@ def compare_identity(reference, candidate):
 def training_differences(reference, candidate):
     labels = {'token_budget': '训练 Token 预算', 'device_batch_size': '单卡批量', 'sequence_len': '序列长度',
               'learning_rate': '学习率', 'optimizer': '优化器', 'global_batch_size': '全局批量'}
-    return [f'{label}不同' if key in reference and key in candidate else f'{label}记录不完整'
-            for key, label in labels.items() if key not in reference or key not in candidate or reference[key] != candidate[key]]
+    return [f'{label}不同' for key, label in labels.items()
+            if key in reference and key in candidate and reference[key] != candidate[key]]
 
 
 def parameter_rows(reference, candidate, training_configs, candidate_training):
@@ -149,18 +191,24 @@ def compare_catalog(catalog, reference, reader=None):
         identity = matches[0].get('comparison_identity', {}) if len(matches) == 1 else {}
         if not isinstance(identity, dict):
             identity = {}
-        check = compare_identity(base.get('identity', {}) if isinstance(base.get('identity'), dict) else {}, identity)
-        if model.get('framework') != 'nanochat':
-            check = {'status': 'incompatible', 'reasons': ['当前评测器不支持此训练框架']}
-        check['reasons'] += [e for e in (base_error, error) if e]
+        base_identity = dict(base.get('identity') or {}) if isinstance(base.get('identity'), dict) else {}
+        identity = dict(identity)
+        training_configs = reference.get('training_configs', [])
+        # Framework is already known from submission records, even for legacy outputs.
+        base_identity.setdefault('framework', next((t['framework'] for t in training_configs if t.get('framework')), 'nanochat'))
+        identity.setdefault('framework', model.get('framework') or model.get('training_config', {}).get('framework'))
+        if len(matches) == 1 and isinstance(matches[0].get('model_config'), dict):
+            identity.setdefault('model_config', matches[0]['model_config'])
+        rows = parameter_rows(base_identity, identity, training_configs, model.get('training_config', {}))
+        differences = [row for row in rows if not row['missing'] and not row['same']]
+        check = {'status': 'different' if differences else 'compatible',
+                 'parameters': rows, 'reasons': [row['label'] + '不同' for row in differences]}
+        incomplete = bool(base_error or error or any(row['missing'] for row in rows))
+        check['metadata_notice'] = '部分模型信息未读取或未记录；当前仅比较已记录参数，实际文件未核验' if incomplete else ''
+        check['warnings'] = [e for e in (base_error, error) if e]
         if not error and len(matches) != 1:
-            check['reasons'].append('模型清单中未找到唯一的所选策略')
-        check['parameters'] = parameter_rows(
-            base.get('identity') if isinstance(base.get('identity'), dict) else {}, identity,
-            reference.get('training_configs', []), model.get('training_config', {}))
-        check['status'] = 'compatible' if check['status'] == 'compatible' and all(row['same'] for row in check['parameters']) else 'different'
-        check['warnings'] = []
-        for training in reference.get('training_configs', []):
+            check['warnings'].append('模型清单中未找到唯一的所选策略')
+        for training in training_configs:
             check['warnings'] += training_differences(training, model.get('training_config', {}))
         if reference.get('input_data_obs_uri') != model.get('input_data_obs_uri'):
             check['warnings'].append('候选数据集地址不同')

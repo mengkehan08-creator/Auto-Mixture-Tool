@@ -29,6 +29,8 @@ test('comparison UI allows both types and shows per-parameter colors with text',
   assert.match(ui, /const statusLabels = \{ compatible: '同类型', different: '有差异' \}/)
   assert.doesNotMatch(ui, /comparisonStatus\(entries.value.find|invalidSelection/)
   assert.match(ui, /row.same \? 'parameter-same' : 'parameter-different'/)
+  assert.match(ui, /row.missing \? 'parameter-missing'/)
+  assert.match(ui, /model.comparison\?\.metadata_notice/)
   assert.match(ui, /本次配置<\/th><th>历史模型/)
   assert.match(ui, /headers: \{ 'Content-Type': 'application\/json' \}/)
 })

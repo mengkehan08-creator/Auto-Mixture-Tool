@@ -60,14 +60,15 @@ onBeforeUnmount(() => { requestId++; clearTimeout(refreshTimer) })
     <article v-for="model in pagination.items" :key="model.id" class="model-entry">
       <label class="model-title"><input v-if="selected" type="checkbox" :disabled="loading" :checked="selected.includes(model.id)" @change="toggle(model.id, $event.target.checked)" /><strong>{{ model.name }}</strong><span :class="['status-badge', selected ? tones[comparisonStatus(model)] : 'tone-success']">{{ selected ? statusLabels[comparisonStatus(model)] : '训练成功' }}</span></label>
       <small>{{ model.workflow_name }} · {{ model.strategy_name }} · {{ model.nodes }} 节点</small>
+      <p v-if="selected && model.comparison?.metadata_notice" class="parameter-missing">{{ model.comparison.metadata_notice }}</p>
       <p v-if="selected && model.comparison?.reasons?.length" class="comparison-reasons">{{ model.comparison.reasons.join('；') }}</p>
       <details v-if="selected && model.comparison?.warnings?.length"><summary>对比注意事项 · {{ model.comparison.warnings.length }} 项</summary><ul><li v-for="warning in model.comparison.warnings" :key="warning">{{ warning }}</li></ul></details>
       <details><summary>查看模型参数与保存地址</summary>
         <p class="break-path">模型 ID：{{ model.id }}</p><p class="break-path">{{ model.obs_uri }}</p>
         <template v-if="selected && model.comparison?.parameters?.length">
-          <p class="parameter-legend"><span class="parameter-same">● 参数相同</span><span class="parameter-different">● 参数不同或未记录</span></p>
+          <p class="parameter-legend"><span class="parameter-same">● 参数相同</span><span class="parameter-different">● 参数不同</span><span class="parameter-missing">● 未记录／未读取</span></p>
           <div class="parameter-table"><table><thead><tr><th>参数</th><th>本次配置</th><th>历史模型</th><th>对比</th></tr></thead>
-            <tbody><tr v-for="row in model.comparison.parameters" :key="row.key" :class="row.same ? 'parameter-same' : 'parameter-different'">
+            <tbody><tr v-for="row in model.comparison.parameters" :key="row.key" :class="row.missing ? 'parameter-missing' : row.same ? 'parameter-same' : 'parameter-different'">
               <th scope="row">{{ row.label }}</th><td>{{ parameterValue(row.reference) }}</td><td>{{ parameterValue(row.candidate) }}</td><td>{{ row.missing ? '未记录' : row.same ? '相同' : '不同' }}</td>
             </tr></tbody>
           </table></div>
@@ -94,12 +95,14 @@ onBeforeUnmount(() => { requestId++; clearTimeout(refreshTimer) })
 .parameter-legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; }
 .parameter-same { color: #18754a; }
 .parameter-different { color: #b43746; }
+.parameter-missing { color: #65758a; font-size: 12px; line-height: 1.7; }
 .parameter-table { overflow-x: auto; margin: 12px 0; border: 1px solid #dfe6ee; border-radius: 8px; }
 .parameter-table table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 440px; font-size: 12px; }
 .parameter-table th, .parameter-table td { padding: 10px; text-align: left; overflow-wrap: anywhere; border-bottom: 1px solid #e5eaf0; }
 .parameter-table thead { background: #edf2f8; color: #526583; }
 .parameter-table tr.parameter-same { background: #f2faf5; }
 .parameter-table tr.parameter-different { background: #fff5f5; }
+.parameter-table tr.parameter-missing { background: #f4f6f8; }
 .parameter-table th:last-child { width: 50px; }
 .model-title { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .model-title input[type="checkbox"] { width: 16px; height: 16px; padding: 0; flex-shrink: 0; accent-color: #5277df; }

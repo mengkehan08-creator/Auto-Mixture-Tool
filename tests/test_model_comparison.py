@@ -113,7 +113,8 @@ def test_unreadable_obs_is_different():
         raise ValueError('OBS 只读权限不足')
     result = comparison.compare_catalog(records(), reference(), reader)[0]['comparison']
     assert result['status'] == 'different'
-    assert 'OBS 只读权限不足' in result['reasons']
+    assert result['warnings'].count('OBS 只读权限不足') == 1
+    assert '未核验' in result['metadata_notice']
 
 
 def test_submission_rechecks_even_without_client_policy(monkeypatch):
