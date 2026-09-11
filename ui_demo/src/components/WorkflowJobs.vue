@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ChartColumn, ArrowUpRight } from '@lucide/vue'
 import { apiRequest } from '../api'
 import { newestWorkflows, searchWorkflows, statusView, stageIndex, workflowStages, canRestart, workflowStatusGroup, workflowPage } from '../workflow-state'
 import WorkflowProgress from './WorkflowProgress.vue'
@@ -107,12 +108,11 @@ onBeforeUnmount(() => clearInterval(timer))
         <span role="status">符合条件 {{ filteredWorkflows.length }} 条 · 当前显示 {{ pagination.start }}–{{ pagination.end }} 条</span>
       </div>
       <article v-for="w in pagination.items" :key="w.id" class="workflow-card">
-        <header><div><strong>{{ w.name }}</strong><small>创建时间 · {{ createdTime(w) }}</small></div><span class="status-badge" :class="`tone-${statusView(w.status).tone}`">{{ statusView(w.status).label }}</span></header>
+        <header><div><strong>{{ w.name }}</strong><small>创建时间 · {{ createdTime(w) }}</small></div><div class="workflow-header-actions"><span class="status-badge" :class="`tone-${statusView(w.status).tone}`">{{ statusView(w.status).label }}</span><button v-if="hasEvaluation(w)" type="button" class="button analysis-entry" :aria-label="`查看 ${w.name} 的结果分析`" @click="emit('analysis', w.id)"><ChartColumn :size="17" aria-hidden="true" /><span>结果分析</span><ArrowUpRight :size="15" aria-hidden="true" /></button></div></header>
         <p class="workflow-stage-caption">{{ ['FAILED', 'NEEDS_ATTENTION', 'WAITING_AUTH', 'DELETING', 'DELETE_FAILED'].includes(w.status) ? statusView(w.status).label : `当前阶段：${workflowStages[stageIndex(w)]}` }}</p>
         <p v-if="w.status === 'DELETE_FAILED'" class="error-message">{{ w.message }}</p>
         <div class="workflow-actions">
         <button type="button" class="button secondary" @click="emit('select', w.id)">查看作业详情</button>
-        <button v-if="hasEvaluation(w)" type="button" class="button secondary" @click="emit('analysis', w.id)">结果分析</button>
         <button type="button" class="button secondary" @click="copy(w.id)">复制并调整参数</button>
         <button type="button" class="button delete-workflow" :disabled="w.status === 'DELETING'" @click="confirmDelete(w)">{{ w.status === 'DELETE_FAILED' ? '重试删除' : '删除实验' }}</button>
         </div>
@@ -127,9 +127,8 @@ onBeforeUnmount(() => clearInterval(timer))
     <template v-else>
       <button type="button" class="button secondary" @click="emit('select', '')">返回实验作业</button>
       <article v-if="selected" class="workflow-card">
-        <header><div><strong>{{ selected.name }}</strong><small>创建时间 · {{ createdTime(selected) }}</small></div><span class="status-badge" :class="`tone-${statusView(selected.status).tone}`">{{ statusView(selected.status).label }}</span></header>
+        <header><div><strong>{{ selected.name }}</strong><small>创建时间 · {{ createdTime(selected) }}</small></div><div class="workflow-header-actions"><span class="status-badge" :class="`tone-${statusView(selected.status).tone}`">{{ statusView(selected.status).label }}</span><button v-if="hasEvaluation(selected)" type="button" class="button analysis-entry" :aria-label="`查看 ${selected.name} 的结果分析`" @click="emit('analysis', selected.id)"><ChartColumn :size="17" aria-hidden="true" /><span>结果分析</span><ArrowUpRight :size="15" aria-hidden="true" /></button></div></header>
         <WorkflowProgress :workflow="error ? { ...selected, message: error, statusUnavailable: true } : selected" />
-        <button v-if="hasEvaluation(selected)" type="button" class="button primary" @click="emit('analysis', selected.id)">结果分析</button>
         <p v-if="selected.message" class="error-message">{{ selected.message }}</p>
         <p v-if="selected.reused_from">前序实验：<button class="button secondary" type="button" @click="emit('select', selected.reused_from)">查看原实验</button></p>
         <div v-if="workflows.some(w => w.reused_from === selected.id)" class="workflow-actions"><span>阶段重试记录：</span><button v-for="item in workflows.filter(w => w.reused_from === selected.id)" :key="item.id" class="button secondary" type="button" @click="emit('select', item.id)">{{ item.name }} · {{ statusView(item.status).label }}</button></div>
@@ -174,3 +173,12 @@ onBeforeUnmount(() => clearInterval(timer))
     </dialog>
   </section>
 </template>
+
+<style scoped>
+.workflow-header-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; flex-shrink: 0; }
+.button.analysis-entry { display: inline-flex; align-items: center; gap: 8px; color: #3456b1; background: #edf2ff; border: 1px solid #cedafa; border-radius: 10px; padding: 10px 14px; font-weight: 600; white-space: nowrap; box-shadow: 0 2px 6px #365bb00a; }
+.button.analysis-entry:hover { background: #e0e9ff; border-color: #99b1ed; box-shadow: 0 4px 12px #365bb01a; }
+.workflow-card > header > div:first-child { min-width: 0; }
+@media (max-width: 1100px) { .workflow-card > header { flex-wrap: wrap; } }
+@media (max-width: 650px) { .workflow-header-actions { justify-content: flex-start; width: 100%; } }
+</style>

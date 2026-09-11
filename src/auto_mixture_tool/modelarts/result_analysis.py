@@ -127,6 +127,7 @@ def analyze_report(report):
     for model in models:
         model['mean_accuracy'] = sum(model['metrics'][t]['accuracy'] for t in common) / len(common) if common else None
     conclusions = []
+    best_conclusion = None
     if len(common) < len(tasks):
         warnings.append('部分评测项没有覆盖全部模型；均值只使用全部模型都有有效正确率的共同评测项。')
     if len(models) == 1:
@@ -137,8 +138,13 @@ def analyze_report(report):
         best = max(m['mean_accuracy'] for m in models)
         leaders = [m for m in models if math.isclose(m['mean_accuracy'], best, abs_tol=1e-9, rel_tol=0)]
         names = '、'.join(m['name'] for m in leaders)
-        conclusions.append(f'在共同的 {len(common)} 个评测项上，{names} 的等权平均正确率'
-                           f'{"并列" if len(leaders) > 1 else ""}最高，为 {best:.2%}。此均值不是官方 CORE/STEM 汇总指标。')
+        best_conclusion = [
+            {'text': f'在共同的 {len(common)} 个评测项上，{names} 的等权平均正确率'
+                     f'{"并列" if len(leaders) > 1 else ""}最高，为 '},
+            {'text': f'{best:.2%}', 'best': True},
+            {'text': '。此均值不是官方 CORE/STEM 汇总指标。'},
+        ]
+        conclusions.append(''.join(part['text'] for part in best_conclusion))
         lower = [m for m in models if m not in leaders]
         if lower:
             runner_up = max(lower, key=lambda m: m['mean_accuracy'])
@@ -191,6 +197,8 @@ def analyze_report(report):
     warnings.append('当前报告未提供多随机种子重复实验和逐样本统计检验；结论仅描述本次得分，不能证明某策略普遍更优或具有因果优势。')
     warnings.append('不同模型结构、基础权重、Tokenizer 或训练预算可能影响结果；节点数量本身不作为模型类型差异。')
     return {'models': models, 'tasks': tasks, 'common_tasks': common, 'conclusions': conclusions,
+            'conclusion_parts': [best_conclusion if index == 0 and best_conclusion else [{'text': line}]
+                                 for index, line in enumerate(conclusions)],
             'warnings': list(dict.fromkeys(warnings)),
             'method': '逐项正确率与共同评测项等权均值；缺失值不补零。Centered 和官方汇总值单独展示，不混入均值。'}
 

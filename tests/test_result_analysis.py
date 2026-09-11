@@ -34,6 +34,8 @@ def test_common_mean_excludes_official_aggregate_and_uses_percentage_points():
     assert any('10.00 个百分点' in line for line in result['conclusions'])
     assert any('并列最高：arc' in line for line in result['conclusions'])
     assert any('最大相对落后项为 math，低 20.00' in line for line in result['conclusions'])
+    assert [part['text'] for part in result['conclusion_parts'][0] if part.get('best')] == ['70.00%']
+    assert [''.join(p['text'] for p in parts) for parts in result['conclusion_parts']] == result['conclusions']
     assert not any('同' in line and 'num_iterations' in line for line in result['warnings'])
 
 
@@ -45,6 +47,7 @@ def test_invalid_and_missing_scores_never_become_zero(value):
     assert result['common_tasks'] == ['arc']
     assert result['models'][1]['metrics']['math']['accuracy'] is None
     assert all(model['mean_accuracy'] == .6 for model in result['models'])
+    assert [p['text'] for p in result['conclusion_parts'][0] if p.get('best')] == ['60.00%']
     assert any('并列最高' in line for line in result['conclusions'])
 
 
@@ -55,8 +58,10 @@ def test_no_shared_tasks_and_single_model_do_not_claim_winner():
     assert not result['common_tasks']
     assert all(m['mean_accuracy'] is None for m in result['models'])
     assert '无法' in result['conclusions'][0]
+    assert not any(p.get('best') for parts in result['conclusion_parts'] for p in parts)
     data['models'] = data['models'][:1]
     assert '不能' in analyze_report(data)['conclusions'][0]
+    assert not any(p.get('best') for parts in analyze_report(data)['conclusion_parts'] for p in parts)
 
 
 def test_duplicate_task_and_empty_models_rejected():
