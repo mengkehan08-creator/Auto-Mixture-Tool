@@ -189,6 +189,38 @@ def test_invalid_active_window_rejected(manager, limit):
         create(manager, value)
 
 
+def test_per_strategy_framework_mounts_and_priority_defaults(manager):
+    value = parallel_config()
+    value['strategies'][0].update(training_framework_source='obs', training_framework_obs_uri='obs://bucket/framework-a/')
+    value['strategies'][1].update(training_framework_source='obs', training_framework_obs_uri='obs://bucket/framework-b/')
+    record = create(manager, value)
+    assert all(j['priority'] == 2 for j in record['jobs'])
+    for index, strategy in enumerate(record['config']['strategies']):
+        expected = ['obs://bucket/framework-a/', 'obs://bucket/framework-b/', 'obs://bucket/nanochat/'][index]
+        for stage in ('mixing', 'training'):
+            job = next(j for j in record['jobs'] if j['key'] == stage + '-' + strategy['id'])
+            body = graph.payload(manager, record, job)
+            mount = next(i for i in body['algorithm']['inputs'] if i['name'] == 'nanochat_npu_dir')
+            assert mount['remote']['obs']['obs_url'] == expected
+            assert read_config(body['algorithm']['environments'])['resources']['nanochat_repo_obs_uri'].rstrip('/') == expected.rstrip('/')
+    evaluation = graph.payload(manager, record, record['jobs'][-1])
+    assert next(i for i in evaluation['algorithm']['inputs'] if i['name'] == 'nanochat_npu_dir')['remote']['obs']['obs_url'] == 'obs://bucket/nanochat/'
+    assert record['config']['resources']['nanochat_repo_obs_uri'].rstrip('/') == 'obs://bucket/nanochat'
+    finish(manager, record)
+    retry = graph.retry(manager, record['id'], 'training-quadmix', {})
+    retried = manager.records[retry['id']]
+    assert retried['config']['strategies'][0]['training_framework_obs_uri'].rstrip('/') == 'obs://bucket/framework-a'
+
+
+@pytest.mark.parametrize('source,uri', [('unknown', ''), ('obs', ''), ('obs', '/local/framework')])
+def test_invalid_framework_mount_rejected(manager, source, uri):
+    value = parallel_config()
+    value['strategies'][0].update(training_framework_source=source, training_framework_obs_uri=uri)
+    with pytest.raises(ValueError):
+        create(manager, value)
+    assert manager.client.submissions == []
+
+
 def test_identical_parameters_still_have_unique_auto_names(manager):
     value = many_strategies()
     value['strategies'] = [copy.deepcopy(value['strategies'][0]) for _ in range(3)]

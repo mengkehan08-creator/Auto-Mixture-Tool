@@ -16,7 +16,8 @@ export const stepOptions = [
 
 export function createStrategy(type = 'quadmix') {
   const common = { id: nextId++, type, mixingNodes: type === 'quadmix' ? 2 : 1, trainingNodes: 2,
-    mixingJobName: '', trainingJobName: '', modelName: '', mixingPriority: 2, trainingPriority: 1,
+    mixingJobName: '', trainingJobName: '', modelName: '', mixingPriority: 2, trainingPriority: 2,
+    trainingFrameworkSource: 'builtin', trainingFrameworkObsUri: '',
     trainingOverrides: trainingParameters(), mixingCommand: null, trainingCommand: null }
 
   if (type === 'manual') {
@@ -78,7 +79,7 @@ export function trainingParameters(config = createTrainingConfig()) {
 }
 
 export const createEvaluationConfig = () => ({
-  modelIds: [], jobName: '', priority: 1,
+  modelIds: [], jobName: '', priority: 2,
   obsPackages: [],
   nodes: 1,
   devicesPerNode: 8,

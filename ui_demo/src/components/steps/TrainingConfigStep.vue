@@ -13,9 +13,17 @@ const trainingFields = [
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>训练配置</h2><p>各策略独立设置训练参数，共用下方框架与初始模型。配比成功后自动启动对应训练。</p></div></div>
+    <div class="section-title-row"><div><h2>训练配置</h2><p>各作业独立选择框架、节点和训练参数，共用初始模型。配比成功后自动启动对应训练。</p></div></div>
     <div v-for="strategy in strategies" :key="strategy.id" class="config-block">
       <h3>{{ strategyLabel(strategy) }} · 训练作业</h3>
+      <div class="job-framework">
+        <div class="segmented" role="group" :aria-label="`${strategyLabel(strategy)} 训练框架来源`">
+          <button type="button" :class="{ active: strategy.trainingFrameworkSource === 'builtin' }" @click="strategy.trainingFrameworkSource = 'builtin'">使用内置框架</button>
+          <button type="button" :class="{ active: strategy.trainingFrameworkSource === 'obs' }" @click="strategy.trainingFrameworkSource = 'obs'">OBS 挂载框架</button>
+        </div>
+        <label v-if="strategy.trainingFrameworkSource === 'obs'" class="field"><span>NanoChat 兼容框架 OBS 地址</span><input v-model="strategy.trainingFrameworkObsUri" :placeholder="config.frameworkObsUri" /><small>独立挂载到本策略作业，须兼容 NanoChat 启动接口及模型格式。</small></label>
+        <p v-else>内置 NanoChat · 使用下方默认代码地址</p>
+      </div>
       <div class="form-grid two-cols">
         <label class="field"><span>训练作业名称（可自定义）</span><input v-model="strategy.trainingJobName" maxlength="64" :placeholder="trainingNameHint(strategy)" /></label>
         <label class="field"><span>保存模型名称</span><input v-model="strategy.modelName" maxlength="128" placeholder="留空使用策略名及实验时间" /></label>
@@ -30,10 +38,8 @@ const trainingFields = [
     </div>
 
     <div class="config-block">
-      <h3>训练框架</h3>
-      <div class="segmented"><button type="button" :class="{ active: config.frameworkSource === 'builtin' }" @click="config.frameworkSource = 'builtin'">使用内置框架</button><button type="button" :class="{ active: config.frameworkSource === 'obs' }" @click="config.frameworkSource = 'obs'">OBS 挂载框架</button></div>
-      <div v-if="config.frameworkSource === 'builtin'" class="form-grid two-cols"><label class="field"><span>框架</span><select v-model="config.framework"><option>NanoChat</option></select></label></div>
-      <label class="field"><span>{{ config.frameworkSource === 'builtin' ? 'NanoChat 代码 OBS 地址' : 'NanoChat 兼容框架 OBS 地址' }}</span><input v-model="config.frameworkObsUri" placeholder="obs://bucket/path/nanochat-npu/" /><small>框架须已上传 OBS，并兼容 NanoChat 启动接口。</small></label>
+      <h3>默认 NanoChat 框架</h3>
+      <label class="field"><span>NanoChat 代码 OBS 地址</span><input v-model="config.frameworkObsUri" placeholder="obs://bucket/path/nanochat-npu/" /><small>用于选择内置框架的作业及最终汇总评测；各作业可在上方独立指定 OBS 框架。</small></label>
     </div>
 
     <div class="config-block">
@@ -57,6 +63,9 @@ const trainingFields = [
 </template>
 
 <style scoped>
+.job-framework { margin: 0 0 20px; padding: 16px; background: #f6f8ff; border: 1px solid #e1e8f4; border-radius: 12px; }
+.job-framework p { margin: 10px 0 0; color: #657592; font-size: 13px; }
+.job-framework .segmented { flex-wrap: wrap; }
 .resource-row {
   display: grid;
   grid-template-columns: minmax(140px, 1fr) minmax(0, 2.4fr) auto;

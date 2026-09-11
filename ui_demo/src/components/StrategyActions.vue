@@ -21,5 +21,6 @@ const type = ref('quadmix')
 .strategy-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 14px 16px 2px; }
 .strategy-actions > span { color: #596a82; font-size: 13px; }
 .strategy-add-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.strategy-add-controls select { padding: 9px 12px; border: 1px solid #d4dff1; border-radius: 8px; background: #fff; color: #243957; }
+.strategy-add-controls select { flex: 0 0 auto; width: 172px; min-width: 172px; min-height: 42px; padding: 9px 34px 9px 12px; line-height: 1.5; font: inherit; border: 1px solid #d4dff1; border-radius: 8px; background-color: #fff; color: #243957; }
+.strategy-add-controls .button { flex-shrink: 0; white-space: nowrap; }
 </style>

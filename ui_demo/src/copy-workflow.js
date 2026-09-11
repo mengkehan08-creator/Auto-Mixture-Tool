@@ -39,7 +39,7 @@ export function copyWorkflow(config) {
   evaluation.coreEvalBatchSize = config.evaluation.core_eval_batch_size ?? 16
   evaluation.maxPerTask = config.evaluation.max_per_task ?? -1
   evaluation.modelIds = [...(config.evaluation.model_ids || [])]
-  evaluation.priority = config.evaluation.priority ?? 1
+  evaluation.priority = config.evaluation.priority ?? 2
   evaluation.dataset = { enabled: Boolean(config.evaluation.datasets.length || evaluation.obsPackages.length), source: 'obs',
     names: normalizeEvaluationTasks(config.evaluation.datasets), obsUri: resources.eval_bundle_obs_uri }
   const strategies = config.strategies.map(item => ({ ...createStrategy(item.type),
@@ -52,7 +52,9 @@ export function copyWorkflow(config) {
     mixingNodes: item.mixing_nodes ?? config.mixing_nodes,
     trainingNodes: item.training_nodes ?? config.training_nodes,
     mixingPriority: item.mixing_priority ?? 2,
-    trainingPriority: item.training_priority ?? config.priority ?? 1,
+    trainingPriority: item.training_priority ?? 2,
+    trainingFrameworkSource: item.training_framework_source ?? 'builtin',
+    trainingFrameworkObsUri: item.training_framework_obs_uri || '',
     mixingJobName: '', trainingJobName: '', modelName: item.model_name || '',
     mixingCommand: item.mixing_command?.trim() ? item.mixing_command : (config.commands?.mixing ?? null),
     trainingCommand: item.training_command?.trim() ? item.training_command : (config.commands?.training ?? null),

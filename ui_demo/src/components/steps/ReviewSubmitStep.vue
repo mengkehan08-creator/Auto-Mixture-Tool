@@ -45,6 +45,8 @@ function normalizedStrategies() {
     mixing_nodes: item.mixingNodes, training_nodes: item.trainingNodes,
     mixing_job_name: item.mixingJobName, training_job_name: item.trainingJobName,
     mixing_priority: item.mixingPriority, training_priority: item.trainingPriority,
+    training_framework_source: item.trainingFrameworkSource,
+    training_framework_obs_uri: item.trainingFrameworkObsUri,
     mixing_command: item.mixingCommand, training_command: item.trainingCommand,
     model_name: item.modelName, training: item.trainingOverrides || {},
     ratios: item.ratios,

@@ -20,6 +20,7 @@ def job_name(value):
 
 
 def validate(manager, config):
+    from .workflow import _clean_obs_uri
     if config.get('reuse'):
         raise ValueError('并行实验请在作业详情使用单作业重试接口')
     active_limit = config.get('max_active_jobs', 8)
@@ -29,6 +30,13 @@ def validate(manager, config):
     if config.get('job_reuse'):
         retry_source(manager, config['job_reuse'])
     for strategy in config['strategies']:
+        source = strategy.get('training_framework_source', 'builtin')
+        if source not in ('builtin', 'obs'):
+            raise ValueError('训练框架来源必须为 builtin 或 obs')
+        strategy['training_framework_source'] = source
+        strategy['training_framework_obs_uri'] = (
+            _clean_obs_uri(str(strategy.get('training_framework_obs_uri') or '')) if source == 'obs' else ''
+        )
         devices = strategy.get('devices_per_node', 8)
         if type(devices) is not int or not 1 <= devices <= 8:
             raise ValueError('每节点设备数必须为 1–8')
@@ -40,7 +48,7 @@ def validate(manager, config):
                 raise ValueError(f'{strategy.get("name", strategy["id"])} 的 {key} 必须为 1–16')
             strategy[key] = nodes
             strategy[stage + '_job_name'] = job_name(strategy.get(stage + '_job_name'))
-            priority = strategy.get(stage + '_priority', 2 if stage == 'mixing' else config['priority'])
+            priority = strategy.get(stage + '_priority', 2)
             if type(priority) is not int or priority not in (1, 2, 3):
                 raise ValueError('作业优先级必须为 1、2 或 3')
             strategy[stage + '_priority'] = priority
@@ -66,7 +74,7 @@ def validate(manager, config):
         single['training'].update(overrides)
         strategy['training'] = manager._validate(single)['training']
     config['evaluation']['job_name'] = job_name(config['evaluation'].get('job_name'))
-    priority = config['evaluation'].get('priority', config['priority'])
+    priority = config['evaluation'].get('priority', 2)
     if type(priority) is not int or priority not in (1, 2, 3):
         raise ValueError('评测优先级必须为 1、2 或 3')
     config['evaluation']['priority'] = priority
@@ -319,6 +327,8 @@ def payload(manager, record, job):
         strategy['name'] = job['strategy_name']
         strategy['model_name'] = strategy.get('model_name') or job['strategy_name']
         config['training'] = strategy['training']
+        if strategy.get('training_framework_source') == 'obs':
+            config['resources']['nanochat_repo_obs_uri'] = strategy['training_framework_obs_uri']
         if strategy.get(stage + '_command', '').strip():
             config.setdefault('commands', {})[stage] = strategy[stage + '_command']
         config['training_nodes'] = strategy['training_nodes']
