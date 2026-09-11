@@ -70,6 +70,151 @@ def test_independent_nodes_dependency_and_barrier(manager):
     assert len(set(outputs)) == 3
 
 
+def many_strategies():
+    value = parallel_config()
+    templates = {s['type']: s for s in value['strategies']}
+    value['strategies'] = []
+    for index, kind in enumerate(['quadmix', 'quadmix', 'quadmix', 'manual', 'manual', 'random', 'random']):
+        s = copy.deepcopy(templates[kind])
+        s.update(id=f'{kind}_{index}', name='', model_name='', seed=42 + index,
+                 mixing_nodes=2 if kind == 'quadmix' else 1, training_nodes=index + 1,
+                 training={'token_budget': (index + 1) * 1048576})
+        if kind == 'quadmix':
+            s.update(proxy_experiments=16 + index, proxy_steps=15 + index)
+        if kind == 'manual':
+            s['ratios'] = {'数学': index + 1, '物理': 1}
+        if kind == 'random':
+            s.update(script_obs_uri=f'obs://bucket/strategies/random-{index}.py', script_config={'mode': index})
+        value['strategies'].append(s)
+    return value
+
+
+def test_seven_strategies_create_isolated_pairs_and_evaluate_all_models(manager):
+    record = create(manager, many_strategies())
+    assert len(record['jobs']) == 15
+    assert len(record['branches']) == 7
+    assert len({j['name'] for j in record['jobs']}) == 15
+    assert len(set(record['strategy_names'].values())) == 7
+    assert len({b['outputs']['sampled'] for b in record['branches'].values()}) == 7
+    assert len({b['outputs']['models'] for b in record['branches'].values()}) == 7
+    for s in record['config']['strategies']:
+        mix = next(j for j in record['jobs'] if j['key'] == 'mixing-' + s['id'])
+        train = next(j for j in record['jobs'] if j['key'] == 'training-' + s['id'])
+        assert mix['priority'] == 2
+        assert train['depends_on'] == [mix['key']]
+        assert train['strategy_name'] == mix['strategy_name']
+        for job in (mix, train):
+            payload = graph.payload(manager, record, job)
+            runtime = read_config(payload['algorithm']['environments'])
+            assert len(runtime['strategies']) == 1
+            selected = runtime['strategies'][0]
+            assert selected['id'] == s['id'] and selected['seed'] == s['seed']
+            assert runtime['training']['token_budget'] == s['training']['token_budget']
+            if s['type'] == 'quadmix':
+                assert selected['search_count'] == 5000
+                assert selected['proxy_experiments'] == s['proxy_experiments']
+            if s['type'] == 'random':
+                assert selected['script_config'] == s['script_config']
+            assert payload['spec']['schedule_policy']['priority'] == job['priority']
+        assert train['input_obs_uri'] == mix['outputs']['sampled']
+    graph.tick(manager, record)
+    assert len(manager.client.submissions) == 7
+    finish(manager, record)
+    assert len(manager.client.submissions) == 15
+    assert record['status'] == 'SUCCEEDED'
+    assert len(graph.models(manager)) == 7
+    runtime = read_config(manager.client.submissions[-1]['algorithm']['environments'])
+    assert len(runtime['evaluation_sources']) == 7
+    assert len({s['strategy_id'] for s in runtime['evaluation_sources']}) == 7
+
+
+def test_parameter_names_preserve_custom_names_and_idempotency(manager):
+    value = many_strategies()
+    value['request_id'] = 'multi-strategy-idempotent'
+    value['strategies'][1].update(name='自定义策略', mixing_job_name='custom-mixing', training_job_name='custom-training', mixing_priority=3)
+    result = create(manager, value)
+    first, train = result['jobs'][:2]
+    assert first['name'].startswith('ex-16-15-')
+    assert train['name'].startswith('train-ex-16-15-t1048576-')
+    assert result['jobs'][2]['name'] == 'custom-mixing'
+    assert result['jobs'][3]['name'] == 'custom-training'
+    assert result['jobs'][2]['strategy_name'] == '自定义策略'
+    assert result['jobs'][2]['priority'] == 3
+    assert create(manager, value)['id'] == result['id']
+
+
+def test_hundreds_of_strategies_plan_isolated_jobs_and_bound_submission(manager):
+    value = parallel_config()
+    templates = value['strategies']
+    value['strategies'] = [dict(copy.deepcopy(templates[i % len(templates)]),
+                                id=f'strategy_{i}', name='') for i in range(200)]
+    record = create(manager, value)
+    assert len(record['jobs']) == 401
+    assert len({j['name'] for j in record['jobs']}) == 401
+    assert len({b['outputs']['sampled'] for b in record['branches'].values()}) == 200
+    for strategy in value['strategies']:
+        train = next(j for j in record['jobs'] if j['key'] == 'training-' + strategy['id'])
+        assert train['depends_on'] == ['mixing-' + strategy['id']]
+    evaluation = graph.payload(manager, record, record['jobs'][-1])
+    runtime = read_config(evaluation['algorithm']['environments'])
+    assert len(runtime['evaluation_sources']) == 200
+    assert all('mixing_command' not in s and 'training_command' not in s for s in runtime['strategies'])
+    manager.client.get = lambda _: {'status': 'RUNNING'}
+    graph.tick(manager, record)
+    assert len(manager.client.submissions) == 8
+    graph.tick(manager, record)
+    assert len(manager.client.submissions) == 8
+
+
+def test_active_window_refills_after_success_and_survives_uncertain_submit(manager):
+    value = parallel_config()
+    value['max_active_jobs'] = 1
+    record = create(manager, value)
+    graph.tick(manager, record)
+    assert len(manager.client.submissions) == 1
+    graph.tick(manager, record)
+    assert len(manager.client.submissions) == 2
+    assert record['jobs'][1]['id']  # Own training gets the released slot.
+    record['jobs'][1].update(id=None, status='SUBMITTING')
+    graph.tick(manager, record)
+    assert record['jobs'][1]['status'] == 'NEEDS_ATTENTION'
+    assert len(manager.client.submissions) == 2
+
+
+@pytest.mark.parametrize('limit', [0, -1, True, '8', 1.5, 1001])
+def test_invalid_active_window_rejected(manager, limit):
+    value = parallel_config()
+    value['max_active_jobs'] = limit
+    with pytest.raises(ValueError, match='max_active_jobs'):
+        create(manager, value)
+
+
+def test_identical_parameters_still_have_unique_auto_names(manager):
+    value = many_strategies()
+    value['strategies'] = [copy.deepcopy(value['strategies'][0]) for _ in range(3)]
+    for index, strategy in enumerate(value['strategies']):
+        strategy['id'] = f'quadmix_{index}'
+    record = create(manager, value)
+    assert len({job['name'].lower() for job in record['jobs']}) == 7
+    assert all(len(job['name']) <= 64 for job in record['jobs'])
+    value['strategies'][1]['id'] = value['strategies'][0]['id']
+    with pytest.raises(ValueError, match='唯一 id'):
+        create(manager, value)
+
+
+def test_repeated_strategy_training_retry_reuses_only_its_inputs(manager):
+    source = create(manager, many_strategies())
+    finish(manager, source)
+    result = graph.retry(manager, source['id'], 'training-quadmix_1', {'training': {'token_budget': 999999}})
+    retried = manager.records[result['id']]
+    assert retried['strategy_names'] == source['strategy_names']
+    assert retried['branches']['quadmix_1']['outputs']['sampled'] == source['branches']['quadmix_1']['outputs']['sampled']
+    assert retried['branches']['quadmix_0']['outputs']['models'] == source['branches']['quadmix_0']['outputs']['models']
+    before = len(manager.client.submissions)
+    finish(manager, retried)
+    assert len(manager.client.submissions) - before == 2
+
+
 def test_failure_only_blocks_own_descendants(manager):
     record = create(manager)
     graph.tick(manager, record)

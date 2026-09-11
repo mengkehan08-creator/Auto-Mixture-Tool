@@ -1,5 +1,4 @@
 <script setup>
-import { Plus, Sparkles } from '@lucide/vue'
 import { createStrategy } from '../../data/defaults'
 import StrategyCard from '../strategy/StrategyCard.vue'
 
@@ -8,24 +7,16 @@ const props = defineProps({
   runtime: { type: Object, required: true },
 })
 
-function addStrategy() {
-  props.strategies.push(createStrategy('manual'))
-}
-
 function changeType(index, type) {
   props.strategies.splice(index, 1, createStrategy(type))
 }
 
-function useRecommended() {
-  props.strategies.splice(0, props.strategies.length, createStrategy('quadmix'), createStrategy('manual'), createStrategy('random'))
-}
 </script>
 
 <template>
   <section class="step-panel">
     <div class="section-title-row">
       <div><h2>配比与采样配置</h2><p>每项策略创建独立配比作业，可并行运行。各自完成后自动提交对应训练作业。</p></div>
-      <div class="button-row"><button class="button secondary" type="button" @click="useRecommended"><Sparkles :size="16" />推荐配置</button><button class="button primary" type="button" @click="addStrategy"><Plus :size="16" />增加配比策略</button></div>
     </div>
 
     <div class="config-block">

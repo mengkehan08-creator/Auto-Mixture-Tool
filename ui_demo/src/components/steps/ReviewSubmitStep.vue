@@ -6,6 +6,7 @@ import { apiRequest } from '../../api'
 import { fieldLabels, submissionFailed } from '../../workflow-state'
 import { normalizeEvaluationTasks } from '../../evaluation-selection.js'
 import { initializeJobCommands, validateJobCommands } from '../../job-commands.js'
+import { strategyId, strategyLabel, strategyNameHint, trainingNameHint } from '../../strategy-names'
 
 const props = defineProps({ strategies: Array, training: Object, evaluation: Object, runtime: Object })
 const status = ref('idle')
@@ -25,15 +26,15 @@ const strategyNames = computed(() => props.strategies.map((strategy) => strategy
 const evaluationEnabled = computed(() => props.evaluation.dataset.enabled && (props.evaluation.dataset.names.length || props.evaluation.obsPackages.length))
 const jobPlan = computed(() => [
   ...props.strategies.flatMap(s => [
-    { key: `mixing-${s.id}`, owner: s, commandKey: 'mixingCommand', module: 'mixing', label: `${s.name} · 配比`, name: s.mixingJobName, nodes: s.mixingNodes, priority: s.mixingPriority, depends: '无，可立即提交' },
-    { key: `training-${s.id}`, owner: s, commandKey: 'trainingCommand', module: 'training', label: `${s.name} · 训练`, name: s.trainingJobName, nodes: s.trainingNodes, priority: s.trainingPriority, depends: `${s.name} 配比成功` },
+    { key: `mixing-${s.id}`, owner: s, commandKey: 'mixingCommand', module: 'mixing', label: `${strategyLabel(s)} · 配比`, name: s.mixingJobName, nameHint: strategyNameHint(s), nodes: s.mixingNodes, priority: s.mixingPriority, depends: '无，可立即提交' },
+    { key: `training-${s.id}`, owner: s, commandKey: 'trainingCommand', module: 'training', label: `${strategyLabel(s)} · 训练`, name: s.trainingJobName, nameHint: trainingNameHint(s), nodes: s.trainingNodes, priority: s.trainingPriority, depends: `${strategyLabel(s)} 配比成功` },
   ]),
   ...(evaluationEnabled.value ? [{ key: 'evaluation', owner: props.runtime.commands || {}, commandKey: 'evaluation', module: 'evaluation', label: '汇总评测', name: props.evaluation.jobName, nodes: props.evaluation.nodes, priority: props.evaluation.priority, depends: '本次全部训练成功' }] : []),
 ])
 
 function normalizedStrategies() {
   return props.strategies.map((item) => ({
-    id: item.type === 'manual' ? `manual_${item.id}` : item.type,
+    id: strategyId(item),
     type: item.type,
     name: item.name,
     seed: item.seed,
@@ -56,6 +57,7 @@ function normalizedStrategies() {
 function requestBody() {
   return {
     execution_mode: 'parallel',
+    max_active_jobs: props.runtime.maxActiveJobs ?? 8,
     ...(props.runtime.commands ? { commands: {
       ...props.runtime.commands,
       evaluation: evaluationEnabled.value ? props.runtime.commands.evaluation : (defaultCommands.value?.evaluation || props.runtime.commands.evaluation),
@@ -175,9 +177,9 @@ onBeforeUnmount(() => window.clearInterval(timer))
     <div class="config-block">
       <h3>作业提交清单</h3>
       <div class="job-plan-scroll"><table class="job-plan"><thead><tr><th>module</th><th>name</th><th>node_count</th><th>priority</th><th>depends_on</th></tr></thead>
-        <tbody><tr v-for="(job, index) in jobPlan" :key="index"><td>{{ job.label }}</td><td>{{ job.name || '自动按时间命名' }}</td><td>{{ job.nodes }}</td><td>{{ job.priority }}</td><td>{{ job.depends }}</td></tr></tbody>
+        <tbody><tr v-for="(job, index) in jobPlan" :key="index"><td>{{ job.label }}</td><td>{{ job.name || job.nameHint || '自动按时间命名' }}</td><td>{{ job.nodes }}</td><td>{{ job.priority }}</td><td>{{ job.depends }}</td></tr></tbody>
       </table></div>
-      <p>配比并发最多 {{ strategies.reduce((n, s) => n + s.mixingNodes, 0) }} 节点，训练并发最多 {{ strategies.reduce((n, s) => n + s.trainingNodes, 0) }} 节点。不同策略的配比与训练可能重叠，实际启动取决于资源池容量。</p>
+      <label class="field"><span>max_active_jobs</span><input v-model.number="runtime.maxActiveJobs" type="number" min="1" max="1000" step="1" /><small>本实验同时已提交或运行的作业数，默认 8。其余在工具内等待，完成后自动补交；不限制策略总数。</small></label>
       <p v-if="evaluationEnabled">评测模型：本次 {{ strategies.length }} 个＋历史 {{ evaluation.modelIds.length }} 个。</p>
     </div>
     <p v-if="evaluation.api.enabled" class="path-preview" role="status">自动评估暂未接入：本次不会执行自动评估，也不会创建自动评估作业。</p>
@@ -193,7 +195,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ strategies.length }} 个独立作业 · 各自校验与采样</small></article>
       <article><span>训练作业</span><strong>{{ training.framework }}</strong><small>{{ strategies.length }} 个独立作业 · 可并行训练</small></article>
       <article><span>evaluation_nodes</span><strong>{{ evaluation.dataset.enabled ? `${evaluation.nodes} 节点` : '未启用评测' }}</strong><small>模型输入自动使用前序训练输出</small></article>
-      <article v-for="strategy in strategies" :key="strategy.id"><span>{{ strategy.name }} · training.token_budget</span><strong>{{ Number(strategy.trainingOverrides.token_budget).toLocaleString() }} Token</strong><small>该训练作业的实际配置预算</small></article>
+      <article v-for="strategy in strategies" :key="strategy.id"><span>{{ strategyLabel(strategy) }} · training.token_budget</span><strong>{{ Number(strategy.trainingOverrides.token_budget).toLocaleString() }} Token</strong><small>该训练作业的实际配置预算</small></article>
       <article><span>输出根目录</span><strong class="break-path">{{ runtime.outputRootObsUri }}</strong><small>按实验名称隔离 mixing / sampled / training</small></article>
     </div>
     <div class="job-commands">
@@ -202,7 +204,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <button v-if="!defaultCommands" class="button secondary" type="button" @click="loadCommands">重新加载默认命令</button>
       <article v-for="job in jobPlan" :key="job.key" class="config-block">
         <header class="job-command-heading">
-          <div><h3>{{ job.label }}</h3><small>name：{{ job.name || '自动按时间命名' }} · node_count：{{ job.nodes }} · priority：{{ job.priority }}</small></div>
+          <div><h3>{{ job.label }}</h3><small>name：{{ job.name || job.nameHint || '自动按时间命名' }} · node_count：{{ job.nodes }} · priority：{{ job.priority }}</small></div>
           <button class="button secondary" type="button" :disabled="!defaultCommands || status === 'loading'" @click="job.owner[job.commandKey] = defaultCommands[job.module]">恢复此作业默认命令</button>
         </header>
         <label class="field"><span>command</span><textarea v-model="job.owner[job.commandKey]" rows="8" :disabled="status === 'loading' || job.owner[job.commandKey] == null" spellcheck="false" placeholder="正在加载默认命令…"></textarea></label>

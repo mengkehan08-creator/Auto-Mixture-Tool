@@ -1,6 +1,7 @@
 <script setup>
 import { Trash2 } from '@lucide/vue'
 import { strategyOptions } from '../../data/defaults'
+import { strategyNameHint } from '../../strategy-names'
 import ManualMixConfig from './ManualMixConfig.vue'
 import QuadMixConfig from './QuadMixConfig.vue'
 import RandomMixConfig from './RandomMixConfig.vue'
@@ -21,7 +22,7 @@ const emit = defineEmits(['remove', 'change-type'])
     </header>
 
     <div class="strategy-job-fields form-grid" :class="strategy.type === 'quadmix' ? 'three-cols' : 'two-cols'">
-      <label class="field"><span>配比作业名称</span><input v-model="strategy.mixingJobName" placeholder="留空自动按时间命名" maxlength="64" /></label>
+      <label class="field"><span>配比作业名称（可自定义）</span><input v-model="strategy.mixingJobName" :placeholder="strategyNameHint(strategy)" maxlength="64" /></label>
       <label class="field"><span>配比节点数</span><input v-model.number="strategy.mixingNodes" type="number" min="1" max="16" /></label>
       <label class="field"><span>配比任务优先级</span><select v-model.number="strategy.mixingPriority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
     </div>

@@ -16,13 +16,13 @@ export const stepOptions = [
 
 export function createStrategy(type = 'quadmix') {
   const common = { id: nextId++, type, mixingNodes: type === 'quadmix' ? 2 : 1, trainingNodes: 2,
-    mixingJobName: '', trainingJobName: '', modelName: '', mixingPriority: 1, trainingPriority: 1,
+    mixingJobName: '', trainingJobName: '', modelName: '', mixingPriority: 2, trainingPriority: 1,
     trainingOverrides: trainingParameters(), mixingCommand: null, trainingCommand: null }
 
   if (type === 'manual') {
     return {
       ...common,
-      name: '专家人工配比',
+      name: '',
       source: 'builtin',
       builtinMethod: 'default_manual',
       scriptObsUri: '',
@@ -34,7 +34,7 @@ export function createStrategy(type = 'quadmix') {
   if (type === 'random') {
     return {
       ...common,
-      name: '均匀随机配比',
+      name: '',
       source: 'builtin',
       builtinMethod: 'uniform',
       scriptObsUri: '',
@@ -44,10 +44,10 @@ export function createStrategy(type = 'quadmix') {
 
   return {
     ...common,
-    name: 'QuaDMix 自动配比',
+    name: '',
     proxyExperiments: 16,
     proxySteps: 15,
-    searchCount: 1000,
+    searchCount: 5000,
     seed: 42,
     deviceType: 'NPU',
     devicesPerNode: 8,
@@ -100,6 +100,7 @@ export const createEvaluationConfig = () => ({
 })
 
 export const createRuntimeConfig = () => ({
+  maxActiveJobs: 8,
   priority: 1,
   offlineResources: [
     { role: 'code_obs_uri', name: 'code_dir', uri: `${obsRoot}Auto-Mixture-Tool/` },

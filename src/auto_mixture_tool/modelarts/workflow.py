@@ -631,8 +631,8 @@ class ModelArtsWorkflowManager:
         if not isinstance(strategies, list) or not strategies or any(not isinstance(s, dict) for s in strategies):
             raise ValueError("at least one strategy is required")
         kinds = [item.get("type") for item in strategies]
-        if kinds.count("quadmix") > 1 or kinds.count("random") > 1:
-            raise ValueError("only one quadmix and one random strategy are supported")
+        if value.get('execution_mode') != 'parallel' and (kinds.count("quadmix") > 1 or kinds.count("random") > 1):
+            raise ValueError('多个同类策略须使用 execution_mode=parallel，分别创建配比和训练作业')
         upload_bytes = 0
         seen_ids = set()
         for index, strategy in enumerate(strategies):
@@ -675,7 +675,7 @@ class ModelArtsWorkflowManager:
                 strategy["ratios"] = ratios
             if strategy.get("type") == "quadmix":
                 for key in ("proxy_experiments", "proxy_steps", "search_count"):
-                    number = strategy.get(key, {"proxy_experiments": 16, "proxy_steps": 15, "search_count": 1000}[key])
+                    number = strategy.get(key, {"proxy_experiments": 16, "proxy_steps": 15, "search_count": 5000}[key])
                     if type(number) is not int or number <= 0:
                         raise ValueError(f"quadmix {key} must be positive")
                     strategy[key] = number
@@ -871,6 +871,9 @@ class ModelArtsWorkflowManager:
         if stage != 'mixing':
             for strategy in runtime_config['strategies']:
                 strategy.pop('script_upload', None)
+        for strategy in runtime_config['strategies']:
+            strategy.pop('mixing_command', None)
+            strategy.pop('training_command', None)
         write_config(env, runtime_config)
         for name, item in env.items():
             if len(str(item).encode('utf-8')) > 4096:

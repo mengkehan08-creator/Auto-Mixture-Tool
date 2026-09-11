@@ -7,6 +7,7 @@ export function copyWorkflow(config) {
   const evaluation = createEvaluationConfig()
   const resources = config.resources || {}
   Object.assign(runtime, {
+    maxActiveJobs: config.max_active_jobs ?? 8,
     priority: config.priority ?? 1,
     commands: config.commands ? { ...config.commands } : null,
     experimentName: config.experiment_name || '', inputDataObsUri: config.input_data_obs_uri,
@@ -43,14 +44,14 @@ export function copyWorkflow(config) {
     names: normalizeEvaluationTasks(config.evaluation.datasets), obsUri: resources.eval_bundle_obs_uri }
   const strategies = config.strategies.map(item => ({ ...createStrategy(item.type),
     name: item.name, seed: item.seed ?? 42, proxyExperiments: item.proxy_experiments,
-    proxySteps: item.proxy_steps, searchCount: item.search_count, devicesPerNode: item.devices_per_node,
+    proxySteps: item.proxy_steps ?? 15, searchCount: item.search_count ?? 5000, devicesPerNode: item.devices_per_node,
     ratios: item.ratios ? { ...item.ratios } : undefined,
     source: item.script_obs_uri || item.script_upload ? 'script' : 'builtin', scriptObsUri: item.script_obs_uri || '',
     scriptInput: item.script_upload ? 'upload' : 'obs', scriptUpload: item.script_upload ? structuredClone(item.script_upload) : null,
     scriptConfig: structuredClone(item.script_config || {}),
     mixingNodes: item.mixing_nodes ?? config.mixing_nodes,
     trainingNodes: item.training_nodes ?? config.training_nodes,
-    mixingPriority: item.mixing_priority ?? config.priority ?? 1,
+    mixingPriority: item.mixing_priority ?? 2,
     trainingPriority: item.training_priority ?? config.priority ?? 1,
     mixingJobName: '', trainingJobName: '', modelName: item.model_name || '',
     mixingCommand: item.mixing_command?.trim() ? item.mixing_command : (config.commands?.mixing ?? null),

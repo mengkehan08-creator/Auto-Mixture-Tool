@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import re
 from datetime import datetime
 
@@ -20,8 +22,10 @@ def job_name(value):
 def validate(manager, config):
     if config.get('reuse'):
         raise ValueError('并行实验请在作业详情使用单作业重试接口')
-    if len(config['strategies']) > 32:
-        raise ValueError('一次实验最多选择 32 项策略')
+    active_limit = config.get('max_active_jobs', 8)
+    if type(active_limit) is not int or not 1 <= active_limit <= 1000:
+        raise ValueError('max_active_jobs 必须为 1–1000 的整数')
+    config['max_active_jobs'] = active_limit
     if config.get('job_reuse'):
         retry_source(manager, config['job_reuse'])
     for strategy in config['strategies']:
@@ -36,7 +40,7 @@ def validate(manager, config):
                 raise ValueError(f'{strategy.get("name", strategy["id"])} 的 {key} 必须为 1–16')
             strategy[key] = nodes
             strategy[stage + '_job_name'] = job_name(strategy.get(stage + '_job_name'))
-            priority = strategy.get(stage + '_priority', config['priority'])
+            priority = strategy.get(stage + '_priority', 2 if stage == 'mixing' else config['priority'])
             if type(priority) is not int or priority not in (1, 2, 3):
                 raise ValueError('作业优先级必须为 1、2 或 3')
             strategy[stage + '_priority'] = priority
@@ -51,7 +55,8 @@ def validate(manager, config):
         if not isinstance(overrides, dict) or set(overrides) - (set(config['training']) | {'token_budget', 'output_obs_uri'}):
             raise ValueError('策略训练参数须使用公共训练配置中的字段')
         # Use the same validator for shared and per-job training settings.
-        single = copy.deepcopy(config)
+        single = dict(config)
+        single['training'] = copy.deepcopy(config['training'])
         single.pop('execution_mode', None)
         single['strategies'] = [copy.deepcopy(strategy)]
         single['commands'] = {
@@ -92,6 +97,52 @@ def planned_jobs(config):
         jobs.append({'key': 'evaluation', 'module': 'evaluation', 'name': config['evaluation']['job_name'],
                      'nodes': config['evaluation_nodes'], 'priority': config['evaluation']['priority']})
     return jobs
+
+
+def strategy_stem(strategy):
+    if strategy['type'] == 'quadmix':
+        return f'ex-{strategy["proxy_experiments"]}-{strategy["proxy_steps"]}'
+    stem = f'{strategy["type"]}-s{strategy["seed"]}'
+    if strategy['type'] == 'manual' or strategy.get('script_obs_uri') or strategy.get('script_upload'):
+        parameters = {k: strategy.get(k) for k in ('ratios', 'script_obs_uri', 'script_upload', 'script_config')}
+        digest = hashlib.sha256(json.dumps(parameters, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:6]
+        stem += '-' + digest
+    return stem
+
+
+def assign_names(manager, record, stamp):
+    """Resolve names once without mutating submitted config (idempotency and copies)."""
+    used = {j['name'].casefold() for r in manager.records.values() for j in r['jobs']}
+    used.update(j['name'].casefold() for j in record['jobs'] if j['name'])
+    record['strategy_names'] = {}
+    by_id = {s['id']: s for s in record['config']['strategies']}
+    for index, job in enumerate(record['jobs']):
+        strategy = by_id.get(job.get('strategy_id'))
+        if strategy:
+            stem = strategy_stem(strategy)
+            if job['module'] == 'training':
+                training = strategy['training']
+                budget = (f't{training["token_budget"]}' if training.get('token_budget') else
+                          f'step{training["num_iterations"]}' if training.get('num_iterations') else 'auto')
+                stem = f'train-{stem}-{budget}'
+        else:
+            stem = 'evaluation'
+        if not job['name']:
+            # Reserve space for timestamp and collision suffix under ModelArts' 64-char limit.
+            if len(stem) > 28:
+                stem = stem[:19] + '-' + hashlib.sha256(stem.encode()).hexdigest()[:8]
+            name = f'{stem}-{stamp}'
+            counter = 0
+            while name.casefold() in used:
+                counter += 1
+                name = f'{stem}-{stamp}-{record["id"][:6]}-{index}-{counter}'
+            job['name'] = job_name(name)
+            used.add(name.casefold())
+        if strategy and job['module'] == 'mixing':
+            record['strategy_names'][strategy['id']] = strategy.get('name', '').strip() or job['name']
+    for job in record['jobs']:
+        if job.get('strategy_id'):
+            job['strategy_name'] = record['strategy_names'][job['strategy_id']]
 
 
 def check_names(manager, jobs):
@@ -163,6 +214,7 @@ def initialize(manager, record, stamp):
     record['pipeline_version'] = 4
     record['branches'] = {}
     record['jobs'] = planned_jobs(config)
+    assign_names(manager, record, stamp)
     for strategy in config['strategies']:
         sid = strategy['id']
         root = record['run_root_obs_uri'] + '/strategies/' + sid
@@ -175,7 +227,6 @@ def initialize(manager, record, stamp):
         record['branches'][sid] = {'run_root_obs_uri': root, 'outputs': output}
     for index, job in enumerate(record['jobs']):
         job.update(status='WAITING', id=None)
-        job['name'] = job['name'] or f'{job["module"]}-{job["nodes"]}node-{stamp}-{record["id"][:6]}-{index}'
         job['depends_on'] = ([] if job['module'] == 'mixing' else
                              [f'mixing-{job["strategy_id"]}'] if job['module'] == 'training' else
                              [j['key'] for j in record['jobs'] if j['module'] == 'training'])
@@ -199,11 +250,15 @@ def initialize(manager, record, stamp):
             raise ValueError('重试不能增删策略或评测作业')
         for sid, branch in record['branches'].items():
             previous = source['branches'][sid]['outputs']
+            if f'mixing-{sid}' not in reset:
+                record['strategy_names'][sid] = original[f'mixing-{sid}']['strategy_name']
             for stage, keys in (('mixing', ('sampled', 'mixing')), ('training', ('models', 'training'))):
                 if f'{stage}-{sid}' not in reset:
                     for output in keys:
                         branch['outputs'][output] = previous[output]
         for job in record['jobs']:
+            if job.get('strategy_id'):
+                job['strategy_name'] = record['strategy_names'][job['strategy_id']]
             if job['module'] == 'training':
                 job['input_obs_uri'] = record['branches'][job['strategy_id']]['outputs']['sampled']
             if job['key'] not in reset:
@@ -216,10 +271,11 @@ def initialize(manager, record, stamp):
 
 def model_record(record, strategy, output, job):
     training = strategy.get('training') or record['config']['training']
+    name = record.get('strategy_names', {}).get(strategy['id']) or strategy.get('name') or strategy['id']
     return {'id': f'{record["id"]}:{strategy["id"]}',
-            'name': strategy.get('model_name') or f'{strategy.get("name", strategy["id"])} · {record["name"]}',
+            'name': strategy.get('model_name') or f'{name} · {record["name"]}',
             'workflow_id': record['id'], 'workflow_name': record['name'],
-            'strategy_id': strategy['id'], 'strategy_name': strategy.get('name', strategy['id']),
+            'strategy_id': strategy['id'], 'strategy_name': name,
             'framework': training.get('framework', 'nanochat').lower(),
             'obs_uri': output, 'tokenizer_obs_uri': record['config']['resources']['nanochat_model_obs_uri'] + '/tokenizer/',
             'training_config': copy.deepcopy(training),
@@ -260,6 +316,8 @@ def payload(manager, record, job):
     if stage != 'evaluation':
         strategy = next(s for s in config['strategies'] if s['id'] == job['strategy_id'])
         config['strategies'] = [strategy]
+        strategy['name'] = job['strategy_name']
+        strategy['model_name'] = strategy.get('model_name') or job['strategy_name']
         config['training'] = strategy['training']
         if strategy.get(stage + '_command', '').strip():
             config.setdefault('commands', {})[stage] = strategy[stage + '_command']
@@ -290,9 +348,10 @@ def payload(manager, record, job):
 
 
 def tick(manager, record):
-    """One graph pass: submit all ready jobs, then poll existing jobs once."""
+    """Poll jobs and admit ready work into this experiment's bounded active window."""
     from .workflow import ModelArtsRejected, SUCCESS_STATES, FAILURE_STATES, _state, _remote_error, _console_url, training_console_url
     jobs = {j['key']: j for j in record['jobs']}
+    active_limit = record['config'].get('max_active_jobs', 8)
     for job in record['jobs']:
         if manager._stopping.is_set() or record.get('delete_requested'):
             return
@@ -309,6 +368,10 @@ def tick(manager, record):
             if job['status'] == 'SUBMITTING':
                 job.update(status='NEEDS_ATTENTION', message='上次提交结果不明确，请在 ModelArts 核对，禁止自动重复提交')
                 manager._store(record)
+                continue
+            # Uncertain submissions also reserve a slot until manually resolved.
+            active = sum(j['status'] not in {'WAITING', 'SUCCEEDED', 'FAILED', 'BLOCKED'} for j in record['jobs'])
+            if active >= active_limit:
                 continue
             try:
                 body = payload(manager, record, job)

@@ -70,6 +70,6 @@ test('training defaults are visible and editable independently, including copied
 
 test('title and four-step navigation share one sticky container', () => {
   const app = readFileSync(new URL('./App.vue', import.meta.url), 'utf8')
-  assert.match(app, /class="workspace-header">[\s\S]*?<header[\s\S]*?<StepNavigation[^>]*\/>\s*<\/div>/)
+  assert.match(app, /class="workspace-header">[\s\S]*?<header[\s\S]*?<StepNavigation[^>]*\/>\s*<StrategyActions[^>]*\/>\s*<\/div>/)
   assert.equal((app.match(/<StepNavigation/g) || []).length, 1)
 })

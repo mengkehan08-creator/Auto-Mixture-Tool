@@ -1,4 +1,5 @@
 <script setup>
+import { strategyLabel, trainingNameHint } from '../../strategy-names'
 defineProps({ config: { type: Object, required: true }, runtime: { type: Object, required: true }, strategies: { type: Array, default: () => [] } })
 
 const trainingFields = [
@@ -14,9 +15,9 @@ const trainingFields = [
   <section class="step-panel">
     <div class="section-title-row"><div><h2>训练配置</h2><p>各策略独立设置训练参数，共用下方框架与初始模型。配比成功后自动启动对应训练。</p></div></div>
     <div v-for="strategy in strategies" :key="strategy.id" class="config-block">
-      <h3>{{ strategy.name }} · 训练作业</h3>
+      <h3>{{ strategyLabel(strategy) }} · 训练作业</h3>
       <div class="form-grid two-cols">
-        <label class="field"><span>训练作业名称</span><input v-model="strategy.trainingJobName" maxlength="64" placeholder="留空自动按时间命名" /></label>
+        <label class="field"><span>训练作业名称（可自定义）</span><input v-model="strategy.trainingJobName" maxlength="64" :placeholder="trainingNameHint(strategy)" /></label>
         <label class="field"><span>保存模型名称</span><input v-model="strategy.modelName" maxlength="128" placeholder="留空使用策略名及实验时间" /></label>
         <label class="field"><span>训练节点数</span><input v-model.number="strategy.trainingNodes" type="number" min="1" max="16" /></label>
         <label class="field"><span>训练任务优先级</span><select v-model.number="strategy.trainingPriority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>

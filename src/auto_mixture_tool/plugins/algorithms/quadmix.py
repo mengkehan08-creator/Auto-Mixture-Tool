@@ -21,7 +21,7 @@ class QuadMixAlgorithm(AlgorithmAdapter):
     def build(self, request: dict[str, Any], workspace: Path) -> list[CommandSpec]:
         config = request.get("algorithm_config", {})
         num_experiments = int(config.get("num_experiments", 200))
-        num_search = int(config.get("num_search", 2000))
+        num_search = int(config.get("num_search", 5000))
         tiny_steps = int(config.get("tiny_steps", 3))
         npu_devices = int(config.get("npu_devices", 1))
         device_type = str(config.get("device_type", "cpu"))

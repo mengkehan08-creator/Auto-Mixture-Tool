@@ -6,6 +6,7 @@ import WorkflowJobs from './components/WorkflowJobs.vue'
 import ResultAnalysis from './components/ResultAnalysis.vue'
 import { copyWorkflow } from './copy-workflow'
 import StepNavigation from './components/StepNavigation.vue'
+import StrategyActions from './components/StrategyActions.vue'
 import EvaluationConfigStep from './components/steps/EvaluationConfigStep.vue'
 import MixingStrategyStep from './components/steps/MixingStrategyStep.vue'
 import ReviewSubmitStep from './components/steps/ReviewSubmitStep.vue'
@@ -61,6 +62,7 @@ const runtime = reactive(createRuntimeConfig())
         <span class="user-chip"><span>配</span>配比用户</span>
       </header>
       <StepNavigation v-if="page === 'create'" :current-step="currentStep" @change="navigate('create', $event)" />
+      <StrategyActions v-if="page === 'create' && currentStep === 1" :strategies="strategies" />
       </div>
 
       <WorkflowJobs v-show="page === 'jobs'" :selected-id="selectedId" @select="navigate('jobs', currentStep, $event)" @copy="copyJob" @analysis="navigate('analysis', currentStep, $event)" />

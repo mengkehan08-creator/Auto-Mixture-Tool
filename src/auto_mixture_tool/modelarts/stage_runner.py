@@ -71,7 +71,7 @@ def run_mixing(config: dict[str, Any]) -> None:
         "algorithm_config": {
             "num_experiments": quadmix.get("proxy_experiments", 16),
             "tiny_steps": quadmix.get("proxy_steps", 15),
-            "num_search": quadmix.get("search_count", 1000),
+            "num_search": quadmix.get("search_count", 5000),
             "seed": quadmix.get("seed", 42),
             "device_type": "npu",
             "npu_devices": quadmix.get("devices_per_node", 8),

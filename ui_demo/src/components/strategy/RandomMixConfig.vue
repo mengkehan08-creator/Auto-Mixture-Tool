@@ -1,4 +1,5 @@
 <script setup>
+import { strategyNameHint } from '../../strategy-names'
 import { Code2, Library } from '@lucide/vue'
 import StrategyScriptInput from './StrategyScriptInput.vue'
 
@@ -7,8 +8,8 @@ defineProps({ modelValue: { type: Object, required: true } })
 
 <template>
   <div class="form-grid two-cols">
-    <label class="field"><span>策略名称</span><input v-model="modelValue.name" /></label>
-    <div class="field"><span>随机种子</span><small>当前使用平台统一采样种子，不支持按随机方案单独覆盖。</small></div>
+    <label class="field"><span>策略名称（可自定义）</span><input v-model="modelValue.name" :placeholder="strategyNameHint(modelValue)" /></label>
+    <label class="field"><span>随机种子</span><input v-model.number="modelValue.seed" type="number" min="0" max="4294967295" step="1" /></label>
   </div>
 
   <section class="strategy-source">
