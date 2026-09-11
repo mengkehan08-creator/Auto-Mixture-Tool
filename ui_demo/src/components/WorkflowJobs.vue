@@ -7,7 +7,8 @@ import StageRetryPanel from './StageRetryPanel.vue'
 import ParallelJobRetry from './ParallelJobRetry.vue'
 import ModelLibrary from './ModelLibrary.vue'
 const props = defineProps({ selectedId: { type: String, default: '' } })
-const emit = defineEmits(['select', 'copy'])
+const emit = defineEmits(['select', 'copy', 'analysis'])
+const hasEvaluation = workflow => workflow.jobs?.some(job => job.module === 'evaluation')
 const retryStage = ref('')
 const retryJob = ref(null)
 watch(() => props.selectedId, () => { retryStage.value = ''; retryJob.value = null })
@@ -111,6 +112,7 @@ onBeforeUnmount(() => clearInterval(timer))
         <p v-if="w.status === 'DELETE_FAILED'" class="error-message">{{ w.message }}</p>
         <div class="workflow-actions">
         <button type="button" class="button secondary" @click="emit('select', w.id)">查看作业详情</button>
+        <button v-if="hasEvaluation(w)" type="button" class="button secondary" @click="emit('analysis', w.id)">结果分析</button>
         <button type="button" class="button secondary" @click="copy(w.id)">复制并调整参数</button>
         <button type="button" class="button delete-workflow" :disabled="w.status === 'DELETING'" @click="confirmDelete(w)">{{ w.status === 'DELETE_FAILED' ? '重试删除' : '删除实验' }}</button>
         </div>
@@ -127,6 +129,7 @@ onBeforeUnmount(() => clearInterval(timer))
       <article v-if="selected" class="workflow-card">
         <header><div><strong>{{ selected.name }}</strong><small>创建时间 · {{ createdTime(selected) }}</small></div><span class="status-badge" :class="`tone-${statusView(selected.status).tone}`">{{ statusView(selected.status).label }}</span></header>
         <WorkflowProgress :workflow="error ? { ...selected, message: error, statusUnavailable: true } : selected" />
+        <button v-if="hasEvaluation(selected)" type="button" class="button primary" @click="emit('analysis', selected.id)">结果分析</button>
         <p v-if="selected.message" class="error-message">{{ selected.message }}</p>
         <p v-if="selected.reused_from">前序实验：<button class="button secondary" type="button" @click="emit('select', selected.reused_from)">查看原实验</button></p>
         <div v-if="workflows.some(w => w.reused_from === selected.id)" class="workflow-actions"><span>阶段重试记录：</span><button v-for="item in workflows.filter(w => w.reused_from === selected.id)" :key="item.id" class="button secondary" type="button" @click="emit('select', item.id)">{{ item.name }} · {{ statusView(item.status).label }}</button></div>

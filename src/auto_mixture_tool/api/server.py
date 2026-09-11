@@ -257,6 +257,17 @@ def workflow_configuration(workflow_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get('/api/v1/workflows/{workflow_id}/analysis')
+def result_analysis(workflow_id: str) -> dict[str, Any]:
+    from auto_mixture_tool.modelarts.result_analysis import workflow_analysis
+    manager = _workflow_manager()
+    try:
+        manager.get(workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return workflow_analysis(manager.records[workflow_id])
+
+
 @app.delete("/api/v1/workflows/{workflow_id}", status_code=202)
 def delete_workflow(workflow_id: str, confirmed_not_created: bool = False) -> dict[str, Any]:
     try:

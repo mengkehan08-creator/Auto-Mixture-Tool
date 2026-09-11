@@ -3,6 +3,7 @@ import { reactive, ref } from 'vue'
 import { ChevronLeft, ChevronRight } from '@lucide/vue'
 import AppSidebar from './components/AppSidebar.vue'
 import WorkflowJobs from './components/WorkflowJobs.vue'
+import ResultAnalysis from './components/ResultAnalysis.vue'
 import { copyWorkflow } from './copy-workflow'
 import StepNavigation from './components/StepNavigation.vue'
 import EvaluationConfigStep from './components/steps/EvaluationConfigStep.vue'
@@ -56,13 +57,14 @@ const runtime = reactive(createRuntimeConfig())
       <div class="workspace-header">
       <header class="topbar">
         <button class="button secondary" type="button" :disabled="!navigationHistory.length" @click="goBack" aria-label="返回上一页面"><ChevronLeft :size="16" />返回</button>
-        <div><h1>{{ page === 'jobs' ? '实验作业管理' : '创建配比实验' }}</h1><p>配置算法、训练与评测后提交至 ModelArts</p></div>
+        <div><h1>{{ page === 'analysis' ? '结果分析' : page === 'jobs' ? '实验作业管理' : '创建配比实验' }}</h1><p>配置算法、训练与评测后提交至 ModelArts</p></div>
         <span class="user-chip"><span>配</span>配比用户</span>
       </header>
       <StepNavigation v-if="page === 'create'" :current-step="currentStep" @change="navigate('create', $event)" />
       </div>
 
-      <WorkflowJobs v-show="page === 'jobs'" :selected-id="selectedId" @select="navigate('jobs', currentStep, $event)" @copy="copyJob" />
+      <WorkflowJobs v-show="page === 'jobs'" :selected-id="selectedId" @select="navigate('jobs', currentStep, $event)" @copy="copyJob" @analysis="navigate('analysis', currentStep, $event)" />
+      <ResultAnalysis v-if="page === 'analysis'" :workflow-id="selectedId" @back="navigate('jobs', currentStep, selectedId)" />
       <div v-show="page === 'create'">
       <p v-if="copyNotice" class="path-preview">{{ copyNotice }}</p>
 
