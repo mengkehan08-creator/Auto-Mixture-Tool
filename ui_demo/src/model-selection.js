@@ -9,3 +9,11 @@ export function selectModel(selected, id, checked) {
   if (checked && index < 0) selected.push(id)
   if (!checked && index >= 0) selected.splice(index, 1)
 }
+
+export function comparisonStatus(model) {
+  return model?.comparison?.status === 'compatible' ? 'compatible' : 'different'
+}
+
+export function filterComparable(models, status) {
+  return status === 'all' ? models : models.filter(model => comparisonStatus(model) === status)
+}

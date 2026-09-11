@@ -4,7 +4,19 @@ import { computed } from 'vue'
 import { stemTasks, normalizeEvaluationTasks } from '../../evaluation-selection.js'
 import ModelLibrary from '../ModelLibrary.vue'
 
-const props = defineProps({ config: { type: Object, required: true }, modelOutput: String })
+const props = defineProps({ config: { type: Object, required: true }, modelOutput: String, training: Object, runtime: Object, strategies: Array })
+const comparisonReference = computed(() => ({
+  model_obs_uri: props.training.modelObsUri,
+  base_model_tag: props.training.baseModelTag,
+  input_data_obs_uri: props.runtime.inputDataObsUri,
+  training_configs: props.strategies.map(strategy => ({
+    framework: 'nanochat', model: props.training.model, base_model_tag: props.training.baseModelTag,
+    target_param_data_ratio: props.training.targetParamDataRatio, devices_per_node: props.training.devicesPerNode,
+    token_budget: props.training.tokenBudget, num_iterations: 0, device_batch_size: props.training.deviceBatchSize,
+    eval_every: props.training.evalEvery, core_metric_every: props.training.coreMetricEvery,
+    ...strategy.trainingOverrides,
+  })),
+}))
 const selectedTasks = computed(() => normalizeEvaluationTasks(props.config.dataset.names))
 const allSelected = computed(() => stemTasks.every(name => selectedTasks.value.includes(name)))
 
@@ -53,7 +65,7 @@ function toggleDataset(config, name) {
             </div>
             <label class="field"><span>评测与对比报告输出 OBS 目录</span><input v-model="config.outputObsUri" placeholder="留空沿用实验输出目录" /><small>自动追加 runs/实验名称/。</small></label>
           </section>
-          <ModelLibrary :selected="config.modelIds" />
+          <ModelLibrary :selected="config.modelIds" :reference="comparisonReference" />
         </div>
       </article>
 

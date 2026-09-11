@@ -81,7 +81,7 @@ function requestBody() {
       eval_every: props.training.evalEvery,
       core_metric_every: props.training.coreMetricEvery,
     },
-    evaluation: { job_name: props.evaluation.jobName, priority: props.evaluation.priority, model_ids: props.evaluation.dataset.enabled ? props.evaluation.modelIds : [], obs_packages: props.evaluation.dataset.enabled && props.evaluation.dataset.source === 'obs' ? props.evaluation.obsPackages : [], automatic_api_requested: props.evaluation.api.enabled, output_obs_uri: props.evaluation.outputObsUri, devices_per_node: props.evaluation.devicesPerNode, core_eval_batch_size: props.evaluation.coreEvalBatchSize, max_per_task: -1, datasets: props.evaluation.dataset.enabled ? normalizeEvaluationTasks(props.evaluation.dataset.names) : [] },
+    evaluation: { comparison_policy: 'allow-differences', job_name: props.evaluation.jobName, priority: props.evaluation.priority, model_ids: props.evaluation.dataset.enabled ? props.evaluation.modelIds : [], obs_packages: props.evaluation.dataset.enabled && props.evaluation.dataset.source === 'obs' ? props.evaluation.obsPackages : [], automatic_api_requested: props.evaluation.api.enabled, output_obs_uri: props.evaluation.outputObsUri, devices_per_node: props.evaluation.devicesPerNode, core_eval_batch_size: props.evaluation.coreEvalBatchSize, max_per_task: -1, datasets: props.evaluation.dataset.enabled ? normalizeEvaluationTasks(props.evaluation.dataset.names) : [] },
     resources: {
       code_obs_uri: props.runtime.codeObsUri,
       nanochat_repo_obs_uri: props.training.frameworkObsUri,

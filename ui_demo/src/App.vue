@@ -68,7 +68,7 @@ const runtime = reactive(createRuntimeConfig())
 
       <MixingStrategyStep v-if="currentStep === 1" :strategies="strategies" :runtime="runtime" />
       <TrainingConfigStep v-else-if="currentStep === 2" :config="training" :runtime="runtime" :strategies="strategies" />
-      <EvaluationConfigStep v-else-if="currentStep === 3" :config="evaluation" :model-output="training.outputObsUri ? `${training.outputObsUri.replace(/\/$/, '')}/runs/{实验名称}/` : `${runtime.outputRootObsUri.replace(/\/$/, '')}/runs/{实验名称}/training/checkpoints/`" />
+      <EvaluationConfigStep v-else-if="currentStep === 3" :config="evaluation" :training="training" :runtime="runtime" :strategies="strategies" :model-output="training.outputObsUri ? `${training.outputObsUri.replace(/\/$/, '')}/runs/{实验名称}/` : `${runtime.outputRootObsUri.replace(/\/$/, '')}/runs/{实验名称}/training/checkpoints/`" />
       <ReviewSubmitStep v-else :key="formVersion" :strategies="strategies" :training="training" :evaluation="evaluation" :runtime="runtime" @created="openJob" />
 
       <footer class="page-actions">

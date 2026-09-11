@@ -78,6 +78,13 @@ class WorkflowRequest(BaseModel):
     poll_interval_seconds: int = Field(default=15, ge=2, le=300)
 
 
+class ModelComparisonRequest(BaseModel):
+    model_obs_uri: str = Field(max_length=2048)
+    base_model_tag: str = Field(default='d24', max_length=128)
+    input_data_obs_uri: str = Field(default='', max_length=2048)
+    training_configs: list[dict[str, Any]] = Field(default_factory=list, max_length=32)
+
+
 def _manager() -> PipelineManager:
     if not hasattr(app.state, "manager"):
         workspace = app.state.workspace if hasattr(app.state, "workspace") else None
@@ -216,6 +223,13 @@ def list_workflows() -> list[dict[str, Any]]:
 def list_models() -> list[dict[str, Any]]:
     from auto_mixture_tool.modelarts.parallel_workflow import models
     return models(_workflow_manager())
+
+
+@app.post('/api/v1/models/compare')
+def compare_models(payload: ModelComparisonRequest) -> list[dict[str, Any]]:
+    from auto_mixture_tool.modelarts.parallel_workflow import models
+    from auto_mixture_tool.modelarts.model_comparison import compare_catalog
+    return compare_catalog(models(_workflow_manager()), payload.model_dump())
 
 
 @app.post('/api/v1/workflows/{workflow_id}/jobs/{job_key}/retry', status_code=202)

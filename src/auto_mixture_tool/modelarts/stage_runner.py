@@ -199,6 +199,10 @@ def run_training(config: dict[str, Any]) -> None:
         "EVALUATION_ENABLED": "1" if not config.get('split_evaluation') and config["evaluation"].get("datasets", ["stem"]) else "0",
         "MIX_GENERAL_DATA": "0",
     })
+    identity = None
+    if config.get('split_evaluation') and int(os.environ.get('VC_TASK_INDEX', '0')) == 0:
+        from .model_comparison import build_identity
+        identity = build_identity(env['NANOCHAT_MODEL_DIR'], env['BASE_MODEL_TAG'])
     subprocess.run(
         ["bash", str(WORKSPACE / "nanochat_mid_compare/run_stem_experiment.sh")],
         cwd=WORKSPACE,
@@ -207,7 +211,7 @@ def run_training(config: dict[str, Any]) -> None:
     )
     if config.get('split_evaluation') and int(os.environ.get('VC_TASK_INDEX', '0')) == 0:
         from .evaluation_job import publish_models
-        publish_models(config, Path(env['MID_CHECKPOINTS_OUTPUT_DIR']), data_dir)
+        publish_models(config, Path(env['MID_CHECKPOINTS_OUTPUT_DIR']), data_dir, identity=identity)
 
 
 def main() -> None:

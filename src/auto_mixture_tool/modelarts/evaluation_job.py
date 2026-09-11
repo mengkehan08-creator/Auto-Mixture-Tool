@@ -20,7 +20,7 @@ def digest(path):
     return result.hexdigest()
 
 
-def publish_models(config, root, data):
+def publish_models(config, root, data, identity=None):
     """Publish the completion manifest last, only after all models are present."""
     run = os.environ['AMT_RUN_ID']
     base = config['training'].get('base_model_tag', 'd24')
@@ -42,10 +42,12 @@ def publish_models(config, root, data):
                 raise ValueError(f'训练输出不完整：{path}')
             files.append({'path': path.relative_to(root).as_posix(), 'size': path.stat().st_size,
                           'sha256': digest(path)})
+        model_config = json.loads(meta.read_text(encoding='utf-8')).get('model_config', {})
         models.append({'id': strategy['id'], 'name': strategy.get('model_name') or strategy.get('name', kind),
                        'model_tag': tag, 'step': step, 'files': files,
                        'training_config': config['training'],
-                       'model_config': json.loads(meta.read_text(encoding='utf-8')).get('model_config', {}),
+                       'model_config': model_config,
+                       'comparison_identity': {**(identity or {}), 'model_config': model_config},
                        'configured_ratios': strategy.get('ratios', {})})
     manifest = {'version': 1, 'run': run, 'models': models,
                 'dataset_stats': json.loads((data / 'dataset_stats.json').read_text(encoding='utf-8'))}
@@ -155,6 +157,8 @@ def _run_evaluation(config, bundle, report_name):
     inputs = Path('/home/ma-user/modelarts/inputs')
     manifest = evaluation_models(config, inputs)
     settings = config['evaluation']
+    if settings.get('comparison_policy') in {'same-model-type', 'allow-differences'}:
+        validate_comparison_models(manifest['models'], allow_differences=settings['comparison_policy'] == 'allow-differences')
     nodes = int(os.environ.get('MA_NUM_HOSTS', '1'))
     rank = int(os.environ.get('VC_TASK_INDEX', '0'))
     if nodes != config.get('evaluation_nodes', 1):
@@ -204,6 +208,7 @@ def _run_evaluation(config, bundle, report_name):
             (report / 'comparison_report.json').write_text(json.dumps({
                 'run': manifest['run'], 'models': results, 'dataset_stats': manifest['dataset_stats'],
                 'evaluation': settings,
+                'comparability': settings.get('model_comparison', []),
             }, ensure_ascii=False, indent=2), encoding='utf-8')
             lines = ['# 配比模型评测对比', '', '| 策略 | 评测项 | Accuracy | Centered |', '|---|---|---|---|']
             for model in results:
@@ -212,4 +217,36 @@ def _run_evaluation(config, bundle, report_name):
                     name = str(model['name']).replace('|', '\\|').replace('\n', ' ')
                     lines.append(f"| {name} | {row.get('Task', '')} | {row.get('Accuracy', '')} | {row.get('Centered', '')} |")
             lines += ['', '配比与采样统计详见 comparison_report.json 的 dataset_stats。']
+            for check in settings.get('model_comparison', []):
+                for warning in check.get('reasons', []) + check.get('warnings', []):
+                    lines.append(f'- 对比条件提示：{check["id"]}：{warning}')
             (report / 'comparison_report.md').write_text('\n'.join(lines), encoding='utf-8')
+
+
+def validate_comparison_models(models, allow_differences=False):
+    from .model_comparison import compare_identity, directory_digest
+    reference = None
+    for model in models:
+        identity = dict(model.get('comparison_identity') or {})
+        meta_path = f'{model["model_tag"]}/meta_{model["step"]:06d}.json'
+        if meta_path not in {item['path'] for item in model['files']}:
+            raise ValueError(f'评测模型 {model["name"]} 缺少已校验的结构文件')
+        actual_config = json.loads((Path(model['_root']) / meta_path).read_text(encoding='utf-8')).get('model_config', {})
+        recorded_configs = [value for value in (model.get('model_config'), identity.get('model_config')) if value]
+        if any(actual_config != value for value in recorded_configs) or (not allow_differences and len(recorded_configs) != 2):
+            raise ValueError(f'评测模型 {model["name"]} 的实际结构与清单不同')
+        tokenizer = Path(model['_tokenizer'])
+        actual = directory_digest(tokenizer, [p for p in tokenizer.rglob('*') if p.is_file()])
+        recorded_tokenizer = identity.get('tokenizer_sha256')
+        if not actual or (recorded_tokenizer and actual != recorded_tokenizer) or (not allow_differences and not recorded_tokenizer):
+            raise ValueError(f'评测模型 {model["name"]} 的 Tokenizer 与训练记录不同或记录缺失')
+        identity['model_config'] = actual_config
+        model['model_config'] = actual_config
+        if allow_differences:
+            if identity.get('framework', 'nanochat') != 'nanochat' or identity.get('format', 'nanochat-checkpoint-v1') != 'nanochat-checkpoint-v1':
+                raise ValueError(f'评测器不支持模型 {model["name"]} 的框架或格式')
+            continue
+        reference = reference or identity
+        result = compare_identity(reference, identity)
+        if result['status'] != 'compatible':
+            raise ValueError(f'评测模型 {model["name"]} 不满足同类型对比要求：' + '；'.join(result['reasons']))

@@ -75,6 +75,8 @@ def validate(manager, config):
             raise ValueError(f'历史模型不可用或训练尚未成功：{model_id}')
         if catalog[model_id]['framework'] != 'nanochat':
             raise ValueError('当前评测仅支持 NanoChat 兼容模型')
+    from .model_comparison import validate_selection
+    validate_selection(config, catalog)
 
 
 def planned_jobs(config):
@@ -221,6 +223,8 @@ def model_record(record, strategy, output, job):
             'framework': training.get('framework', 'nanochat').lower(),
             'obs_uri': output, 'tokenizer_obs_uri': record['config']['resources']['nanochat_model_obs_uri'] + '/tokenizer/',
             'training_config': copy.deepcopy(training),
+            'input_data_obs_uri': record['config']['input_data_obs_uri'],
+            'base_model_obs_uri': record['config']['resources']['nanochat_model_obs_uri'],
             'strategy_config': {k: v for k, v in strategy.items() if k not in {'script_upload', 'training'}},
             'nodes': job['nodes'], 'job_name': job['name'], 'created_at': record['created_at'],
             'metadata_source': '提交配置；实际步数及模型结构见 OBS models_manifest.json'}

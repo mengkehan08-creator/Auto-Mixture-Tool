@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { searchModels, selectModel } from './model-selection.js'
+import { searchModels, selectModel, comparisonStatus, filterComparable } from './model-selection.js'
 import { workflowPage } from './workflow-state.js'
 import { createStrategy } from './data/defaults.js'
 import { copyWorkflow } from './copy-workflow.js'
@@ -10,6 +10,28 @@ const models = Array.from({ length: 12 }, (_, index) => ({
   id: `model-${index}`, name: index % 2 ? `随机-${index}` : `QuadMix-${index}`,
   workflow_name: `实验-${index}`, workflow_id: `workflow-${index}`,
 }))
+
+test('compatibility filters do not assume missing metadata is compatible', () => {
+  const entries = models.map((model, index) => ({ ...model, comparison: { status: index < 7 ? 'compatible' : 'incompatible' } }))
+  entries.push({ id: 'legacy', name: '旧模型' })
+  assert.equal(comparisonStatus(entries.at(-1)), 'different')
+  assert.equal(filterComparable(entries, 'compatible').length, 7)
+  assert.equal(filterComparable(entries, 'different').length, 6)
+  assert.equal(filterComparable(entries, 'all').length, 13)
+  assert.equal(workflowPage(filterComparable(entries, 'compatible'), 2).items.length, 2)
+  assert.deepEqual(searchModels(filterComparable(entries, 'different'), '实验-9').map(m => m.id), ['model-9'])
+})
+
+test('comparison UI allows both types and shows per-parameter colors with text', () => {
+  const ui = readFileSync(new URL('./components/ModelLibrary.vue', import.meta.url), 'utf8')
+  assert.match(ui, /const status = ref\('compatible'\)/)
+  assert.match(ui, /current === requestId/)
+  assert.match(ui, /const statusLabels = \{ compatible: '同类型', different: '有差异' \}/)
+  assert.doesNotMatch(ui, /comparisonStatus\(entries.value.find|invalidSelection/)
+  assert.match(ui, /row.same \? 'parameter-same' : 'parameter-different'/)
+  assert.match(ui, /本次配置<\/th><th>历史模型/)
+  assert.match(ui, /headers: \{ 'Content-Type': 'application\/json' \}/)
+})
 
 test('multiple model queries match any keyword, case-insensitively, before pagination', () => {
   assert.equal(searchModels(models, ' QUADMIX，随机 ').length, 12)

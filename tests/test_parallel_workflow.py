@@ -100,7 +100,13 @@ def test_names_duplicate_history_and_idempotency(manager):
         create(manager, value)
 
 
-def test_history_models_and_separate_tokenizer_mounts(manager):
+def test_history_models_and_separate_tokenizer_mounts(manager, monkeypatch):
+    from test_model_comparison import identity
+    from auto_mixture_tool.modelarts import model_comparison
+    monkeypatch.setattr(model_comparison, 'read_metadata', lambda uri: {
+        'version': 1, 'identity': identity(),
+        'models': [{'id': key, 'comparison_identity': identity()} for key in ('quadmix', 'manual', 'random')],
+    })
     first = create(manager)
     finish(manager, first)
     catalog = graph.models(manager)
