@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
+pytestmark = pytest.mark.usefixtures('mock_resource_preflight')
 
 from auto_mixture_tool.modelarts.workflow import ModelArtsClient, ModelArtsWorkflowManager
 from test_modelarts_workflow import config

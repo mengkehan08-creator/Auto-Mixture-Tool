@@ -15,6 +15,9 @@ def check_mounted_assets(config, stage, inputs=Path('/home/ma-user/modelarts/inp
         data = inputs / 'data_dir_0'
         if not data.is_dir() or next(data.rglob('*.parquet'), None) is None:
             errors.append(f'缺少 Parquet 输入数据：{data}')
+        else:
+            from .input_validation import validate_parquet
+            validate_parquet(data)
     elif stage == 'training':
         files += [repo / 'scripts/mid_train.py', repo / 'scripts/base_eval.py']
         directories += [inputs / 'comparison_data_dir_8']

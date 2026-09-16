@@ -1,4 +1,5 @@
 let nextId = 1
+import { defaultSamplingBounds } from '../budget-estimates.js'
 const obsRoot = 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/'
 
 export const strategyOptions = [
@@ -46,8 +47,9 @@ export function createStrategy(type = 'quadmix') {
   return {
     ...common,
     name: '',
-    proxyExperiments: 16,
+    proxyExperiments: 50,
     proxySteps: 15,
+    samplingBounds: defaultSamplingBounds(),
     searchCount: 5000,
     seed: 42,
     deviceType: 'NPU',

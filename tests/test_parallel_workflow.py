@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+pytestmark = pytest.mark.usefixtures('mock_resource_preflight')
 
 from auto_mixture_tool.modelarts.workflow import ModelArtsWorkflowManager
 from auto_mixture_tool.modelarts import parallel_workflow as graph

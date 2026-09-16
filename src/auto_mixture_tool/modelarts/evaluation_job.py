@@ -46,6 +46,7 @@ def publish_models(config, root, data, identity=None):
         models.append({'id': strategy['id'], 'name': strategy.get('model_name') or strategy.get('name', kind),
                        'model_tag': tag, 'step': step, 'files': files,
                        'training_config': config['training'],
+                       'strategy_config': {k: strategy[k] for k in ('type', 'seed', 'proxy_experiments', 'proxy_steps', 'search_count', 'ratios', 'sampling_bounds') if k in strategy},
                        'model_config': model_config,
                        'comparison_identity': {**(identity or {}), 'model_config': model_config},
                        'configured_ratios': strategy.get('ratios', {})})
@@ -97,6 +98,9 @@ def evaluation_models(config, inputs):
         if len(matches) != 1:
             raise ValueError(f'模型清单与所选策略不匹配：{source["name"]}')
         model = matches[0]
+        if not model.get('strategy_config'):
+            model['strategy_config'] = {k: v for k, v in source.get('strategy_config', {}).items()
+                                        if k in {'type', 'seed', 'proxy_experiments', 'proxy_steps', 'search_count', 'ratios', 'sampling_bounds'}}
         model.update(id=f'model_{index}', catalog_id=source['id'], name=source['name'],
                      source_workflow_id=source['workflow_id'], source_obs_uri=source['obs_uri'],
                      _root=str(root), _tokenizer=str(inputs / source['tokenizer_mount']))
@@ -131,7 +135,12 @@ def run_evaluation(config):
 
 def validate_package(source):
     import yaml
+    from nanochat_mid_compare.eval_assets import validate_task_records
+    source = Path(source)
     try:
+        for filename in ('core.yaml', 'eval_meta_data.csv'):
+            if not (source / filename).resolve().is_relative_to(source.resolve()):
+                raise ValueError(f'{filename} 不能链接到评测包外部')
         tasks = yaml.safe_load((source / 'core.yaml').read_text(encoding='utf-8'))['icl_tasks']
         if not isinstance(tasks, list) or not tasks:
             raise ValueError('icl_tasks 不能为空')
@@ -148,6 +157,19 @@ def validate_package(source):
                 raise ValueError('num_fewshot 必须包含非负整数')
             if task['icl_task_type'] == 'generation' and task.get('answer_extractor', 'gsm8k') not in {'gsm8k', 'math'}:
                 raise ValueError('不支持该生成题答案提取方式')
+            validate_task_records(source, task)
+        if not (source / 'eval_meta_data.csv').is_file():
+            raise ValueError('缺少 eval_meta_data.csv')
+        with (source / 'eval_meta_data.csv').open(encoding='utf-8') as stream:
+            baselines = {}
+            for row in csv.DictReader(stream):
+                value = float(row['Random baseline'])
+                if not 0 <= value < 100:
+                    raise ValueError('Random baseline 必须在 [0, 100) 范围')
+                baselines[row['Eval Task']] = value
+            if not labels.issubset(baselines):
+                raise ValueError('eval_meta_data.csv 缺少任务对应基线')
+        return sorted(labels)
     except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError) as exc:
         raise ValueError(f'评测集不符合当前 NanoChat 要求：{source}：{exc}') from None
 

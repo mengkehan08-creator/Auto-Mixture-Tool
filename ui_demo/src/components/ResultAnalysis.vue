@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import { apiRequest } from '../api'
 import { ArrowLeft, RefreshCw, ChartColumn } from '@lucide/vue'
 import AnalysisScore from './AnalysisScore.vue'
+import ScoreComparisonChart from './ScoreComparisonChart.vue'
 import { scoreRanking, formatScore } from '../result-scores'
 
 const props = defineProps({ workflowId: { type: String, required: true } })
@@ -33,6 +34,7 @@ function bestLabel(model, name = null, metric = 'accuracy', section = 'metrics')
   return ranking?.ids.includes(model.id) ? ranking.label : ''
 }
 const conclusionParts = computed(() => report.value?.conclusion_parts || report.value?.conclusions.map(text => [{ text }]) || [])
+const winners = computed(() => report.value?.models.filter(model => rankings.value.mean.ids.includes(model.id)) || [])
 const sampleSummary = model => Object.entries(model.sampling?.domain_ratios || {})
   .map(([name, value]) => `${name} ${percent(value)}`).join(' · ') || '未记录'
 let requestVersion = 0
@@ -74,26 +76,25 @@ watch(() => props.workflowId, () => {
       <button v-for="item in data.reports" :key="item.id" type="button" class="button" :class="report?.id === item.id ? 'primary' : 'secondary'" :aria-pressed="report?.id === item.id" @click="reportId = item.id; task = ''">{{ item.name }}</button>
     </div>
     <template v-if="report">
+      <article v-if="winners.length" class="analysis-panel winner-panel"><h3>平均正确率最高的模型与实验配置</h3>
+        <section v-for="model in winners" :key="model.id"><h4>{{ model.name }} <AnalysisScore :value="model.mean_accuracy" :best-label="bestLabel(model)" /></h4>
+          <p>共同评测项 {{ report.common_tasks.length }} 项 · 模型标签 {{ model.model_tag || '未记录' }} · checkpoint {{ model.step ?? '未记录' }}</p>
+          <div class="winner-config"><div v-for="(value, key) in model.experiment_config || {}" :key="key"><span>{{ key }}</span><strong>{{ typeof value === 'object' ? JSON.stringify(value) : value }}</strong></div><div v-for="(value, key) in model.training" :key="key"><span>{{ key }}</span><strong>{{ value }}</strong></div></div>
+          <p v-if="!Object.keys(model.experiment_config || {}).length">旧报告未记录完整配比配置；这里只展示已知信息，不推测缺失参数。</p>
+        </section>
+      </article>
       <div class="analysis-reading-guide"><strong>{{ report.name }}</strong><span><i aria-hidden="true"></i>红色表示该指标最高分，包含并列</span><span>正确率用 % · 校正分用小数</span></div>
       <div class="analysis-metrics"><div><strong>{{ report.models.length }}</strong><span>参评模型</span></div><div><strong>{{ report.tasks.length }}</strong><span>已记录评测项</span></div><div><strong>{{ report.common_tasks.length }}</strong><span>共同有效评测项</span></div></div>
       <div class="analysis-charts">
         <article class="analysis-panel">
           <h3>平均正确率</h3><p>基于 {{ report.common_tasks.length }} 个共同评测项等权计算，越高越好。</p>
-          <div class="analysis-axis"><span>0%</span><span>50%</span><span>100%</span></div>
-          <div v-for="model in report.models" :key="model.id" class="analysis-bar-row" :class="{ 'bar-best': bestLabel(model) }">
-            <div><span>{{ model.name }}</span><AnalysisScore :value="model.mean_accuracy" :best-label="bestLabel(model)" /></div>
-            <div class="analysis-track" role="img" :aria-label="`${model.name} 平均正确率 ${percent(model.mean_accuracy)} ${bestLabel(model)}`"><span :style="{ width: `${(model.mean_accuracy ?? 0) * 100}%` }"></span></div>
-          </div>
+          <ScoreComparisonChart :models="report.models" />
           <p v-if="!report.common_tasks.length">无共同有效评测项，不进行均值排序。</p>
         </article>
         <article class="analysis-panel">
           <h3>单项表现对比</h3>
           <label class="field"><span>评测项</span><select v-model="selectedTask"><option v-for="name in report.tasks" :key="name" :value="name">{{ name }}</option></select></label>
-          <div class="analysis-axis"><span>0%</span><span>50%</span><span>100%</span></div>
-          <div v-for="model in report.models" :key="model.id" class="analysis-bar-row" :class="{ 'bar-best': bestLabel(model, selectedTask) }">
-            <div><span>{{ model.name }}</span><AnalysisScore :value="model.metrics[selectedTask]?.accuracy" :best-label="bestLabel(model, selectedTask)" /></div>
-            <div class="analysis-track" role="img" :aria-label="`${model.name} ${selectedTask || ''} 正确率 ${percent(model.metrics[selectedTask]?.accuracy)} ${bestLabel(model, selectedTask)}`"><span :style="{ width: `${(model.metrics[selectedTask]?.accuracy ?? 0) * 100}%` }"></span></div>
-          </div>
+          <ScoreComparisonChart :models="report.models" :task="selectedTask" />
         </article>
       </div>
       <article class="analysis-panel analysis-conclusions"><h3>结果解读</h3><ol><li v-for="(parts, index) in conclusionParts" :key="index"><span v-for="(part, partIndex) in parts" :key="partIndex" :class="{ 'conclusion-best': part.best }">{{ part.text }}</span></li></ol></article>
@@ -117,6 +118,11 @@ watch(() => props.workflowId, () => {
 </template>
 
 <style scoped>
+.winner-panel { border-color: #edbcc5 !important; background: linear-gradient(120deg, #fff3f4, #fff) !important; }
+.winner-panel h4 { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; color: #b92339; margin: 10px 0; overflow-wrap: anywhere; }
+.winner-config { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.winner-config > div { display: grid; gap: 4px; padding: 12px; border-radius: 10px; background: #ffffffb3; overflow-wrap: anywhere; }
+.winner-config span { font-size: 12px; color: #6a7890; } .winner-config strong { font-size: 13px; }
 .result-analysis { display: grid; gap: 20px; min-width: 0; color: #203354; }
 .analysis-toolbar, .analysis-tabs { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; }
 .analysis-tabs { justify-content: flex-start; }

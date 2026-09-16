@@ -1,11 +1,12 @@
 <script setup>
 import { CheckCircle2, LoaderCircle, Rocket } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { strategyOptions } from '../../data/defaults'
 import { apiRequest } from '../../api'
 import { fieldLabels, submissionFailed } from '../../workflow-state'
 import { normalizeEvaluationTasks } from '../../evaluation-selection.js'
-import { initializeJobCommands, validateJobCommands } from '../../job-commands.js'
+import { initializeJobCommands, refreshJobCommands, validateJobCommands } from '../../job-commands.js'
+import { trainingParameters } from '../../data/defaults'
 import { strategyId, strategyLabel, strategyNameHint, trainingNameHint } from '../../strategy-names'
 
 const props = defineProps({ strategies: Array, training: Object, evaluation: Object, runtime: Object })
@@ -21,6 +22,36 @@ const emit = defineEmits(['created'])
 let requestId = ''
 let submittedBody = ''
 let timer = null
+let commandTimer = null, commandVersion = 0
+const commandsPending = ref(false)
+const commandError = ref('')
+const commandSettings = computed(() => ({
+  image_url: props.runtime.modelarts.image_url,
+  offline_resources: props.runtime.offlineResources,
+  input_data_obs_uri: props.runtime.inputDataObsUri,
+  model_obs_uri: props.training.modelObsUri,
+  framework_obs_uri: props.training.frameworkObsUri,
+  eval_bundle_obs_uri: props.evaluation.dataset.source === 'obs' ? props.evaluation.dataset.obsUri :
+    (props.runtime.offlineResources.find(r => r.role === 'eval_bundle_obs_uri')?.uri || props.runtime.evalBundleObsUri),
+  eval_packages: props.evaluation.dataset.source === 'obs' ? props.evaluation.obsPackages : [],
+  output_obs_uri: props.runtime.outputRootObsUri,
+  model_output_obs_uri: props.training.outputObsUri,
+  report_output_obs_uri: props.evaluation.outputObsUri,
+}))
+async function updateCommands() {
+  const version = ++commandVersion
+  commandsPending.value = true
+  commandError.value = ''
+  try {
+    const result = await apiRequest('workflow-commands', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(commandSettings.value) })
+    if (version !== commandVersion) return
+    refreshJobCommands(props.strategies, props.runtime, result.commands)
+    defaultCommands.value = result.commands
+  } catch (reason) { if (version === commandVersion) commandError.value = `命令更新失败：${reason.message}` }
+  finally { if (version === commandVersion) commandsPending.value = false }
+}
+watch(commandSettings, () => { commandVersion++; commandsPending.value = true; clearTimeout(commandTimer); commandTimer = setTimeout(updateCommands, 350) }, { deep: true })
+watch(() => [props.runtime, props.training, props.evaluation, props.strategies], () => { validation.value = null }, { deep: true })
 
 const strategyNames = computed(() => props.strategies.map((strategy) => strategyOptions.find((option) => option.value === strategy.type)?.label).join('、'))
 const evaluationEnabled = computed(() => props.evaluation.dataset.enabled && (props.evaluation.dataset.names.length || props.evaluation.obsPackages.length))
@@ -40,15 +71,16 @@ function normalizedStrategies() {
     seed: item.seed,
     proxy_experiments: item.proxyExperiments,
     proxy_steps: item.proxySteps,
+    ...(item.type === 'quadmix' ? { sampling_bounds: item.samplingBounds } : {}),
     search_count: item.searchCount,
     devices_per_node: item.devicesPerNode,
     mixing_nodes: item.mixingNodes, training_nodes: item.trainingNodes,
     mixing_job_name: item.mixingJobName, training_job_name: item.trainingJobName,
     mixing_priority: item.mixingPriority, training_priority: item.trainingPriority,
-    training_framework_source: item.trainingFrameworkSource,
-    training_framework_obs_uri: item.trainingFrameworkObsUri,
+    training_framework_source: props.training.frameworkSource,
+    training_framework_obs_uri: props.training.frameworkSource === 'obs' ? props.training.frameworkObsUri : '',
     mixing_command: item.mixingCommand, training_command: item.trainingCommand,
-    model_name: item.modelName, training: item.trainingOverrides || {},
+    model_name: item.modelName, training: trainingParameters(props.training),
     ratios: item.ratios,
     script_obs_uri: item.source === 'script' && item.scriptInput !== 'upload' ? item.scriptObsUri : '',
     ...(item.source === 'script' && item.scriptInput === 'upload' ? { script_upload: item.scriptUpload || { name: '', content: '' } } : {}),
@@ -121,6 +153,8 @@ async function checkConfiguration() {
   error.value = ''
   validation.value = null
   try {
+    if (commandsPending.value) throw new Error('启动命令正在更新，请稍后检查或提交。')
+    if (commandError.value) throw new Error(commandError.value)
     if (!props.runtime.commands) throw new Error('启动命令尚未加载，请点击重新加载默认命令。')
     validateJobCommands(jobPlan.value)
     validation.value = await apiRequest('workflows/validate', {
@@ -166,11 +200,13 @@ async function loadCommands() {
     for (const [key, value] of Object.entries(defaults.modelarts || {})) {
       if (!props.runtime.modelarts[key]) props.runtime.modelarts[key] = value
     }
+    clearTimeout(commandTimer)
+    await updateCommands()
     error.value = ''
   } catch (reason) { error.value = `加载启动命令失败：${reason.message}` }
 }
 onMounted(() => { loadCommands(); loadWorkflows(); timer = window.setInterval(loadWorkflows, 3000) })
-onBeforeUnmount(() => window.clearInterval(timer))
+onBeforeUnmount(() => { window.clearInterval(timer); clearTimeout(commandTimer); commandVersion++ })
 </script>
 
 <template>
@@ -187,7 +223,7 @@ onBeforeUnmount(() => window.clearInterval(timer))
     <p v-if="evaluation.api.enabled" class="path-preview" role="status">自动评估暂未接入：本次不会执行自动评估，也不会创建自动评估作业。</p>
     <div class="section-title-row modelarts-heading"><div><h3>ModelArts 作业配置</h3><p>已填入脚本默认值，可按资源池与镜像调整。</p></div></div>
     <div class="form-grid two-cols">
-      <label v-for="key in ['endpoint', 'region', 'workspace_id', 'workspace_name', 'image_url', 'image_repo_id', 'flavor_id', 'pool_id']" :key="key" class="field"><span>{{ fieldLabels[key] }}</span><input v-model="runtime.modelarts[key]" autocomplete="off" /></label>
+      <label v-for="key in ['endpoint', 'region', 'workspace_id', 'workspace_name', 'image_url', 'image_repo_id', 'flavor_id', 'pool_id']" :key="key" class="field"><span>{{ fieldLabels[key] }}</span><textarea rows="2" v-model="runtime.modelarts[key]" autocomplete="off" ></textarea></label>
       <label v-if="authMode === 'iam'" class="field"><span>Authorization</span><input value="自动获取（提交时执行）" readonly /><small>已启用私有 IAM 配置；Token 仅用于后端请求，不在页面显示。</small></label>
       <label v-else class="field"><span>Authorization</span><input v-model="runtime.modelarts.authorization" type="password" autocomplete="off" /><small>当前为手动模式。配置 AMT_IAM_PROVIDER 并重启后端，可自动获取。</small></label>
     </div>
@@ -197,18 +233,21 @@ onBeforeUnmount(() => window.clearInterval(timer))
       <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ strategies.length }} 个独立作业 · 各自校验与采样</small></article>
       <article><span>训练作业</span><strong>{{ training.framework }}</strong><small>{{ strategies.length }} 个独立作业 · 可并行训练</small></article>
       <article><span>evaluation_nodes</span><strong>{{ evaluation.dataset.enabled ? `${evaluation.nodes} 节点` : '未启用评测' }}</strong><small>模型输入自动使用前序训练输出</small></article>
-      <article v-for="strategy in strategies" :key="strategy.id"><span>{{ strategyLabel(strategy) }} · training.token_budget</span><strong>{{ Number(strategy.trainingOverrides.token_budget).toLocaleString() }} Token</strong><small>该训练作业的实际配置预算</small></article>
+      <article><span>training.token_budget</span><strong>{{ Number(training.tokenBudget).toLocaleString() }} Token</strong><small>全部策略共用训练预算</small></article>
       <article><span>输出根目录</span><strong class="break-path">{{ runtime.outputRootObsUri }}</strong><small>按实验名称隔离 mixing / sampled / training</small></article>
     </div>
     <div class="job-commands">
       <h3>作业启动命令</h3>
-      <p>每个作业独立编辑，修改仅对当前作业生效。请勿在命令中填写凭据。</p>
+      <p>默认命令随镜像、挂载配置自动更新。手动编辑后保留该作业命令，点击恢复可重新跟随配置。当前支持 Python 3.11 / Ascend 镜像。</p>
+      <p v-if="commandsPending" role="status">正在更新命令…</p>
+      <p v-if="commandError" role="alert" class="error-message">{{ commandError }} <button type="button" class="button secondary" @click="updateCommands">重试更新</button></p>
       <button v-if="!defaultCommands" class="button secondary" type="button" @click="loadCommands">重新加载默认命令</button>
       <article v-for="job in jobPlan" :key="job.key" class="config-block">
         <header class="job-command-heading">
           <div><h3>{{ job.label }}</h3><small>name：{{ job.name || job.nameHint || '自动按时间命名' }} · node_count：{{ job.nodes }} · priority：{{ job.priority }}</small></div>
           <button class="button secondary" type="button" :disabled="!defaultCommands || status === 'loading'" @click="job.owner[job.commandKey] = defaultCommands[job.module]">恢复此作业默认命令</button>
         </header>
+        <p v-if="defaultCommands && job.owner[job.commandKey] !== defaultCommands[job.module]" class="path-preview">手动命令：不会被配置更新覆盖，请核对挂载及解释器；恢复默认可继续自动联动。</p>
         <label class="field"><span>command</span><textarea v-model="job.owner[job.commandKey]" rows="8" :disabled="status === 'loading' || job.owner[job.commandKey] == null" spellcheck="false" placeholder="正在加载默认命令…"></textarea></label>
       </article>
     </div>

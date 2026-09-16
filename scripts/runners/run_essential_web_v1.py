@@ -340,6 +340,10 @@ def build_parser():
                    help="Micro batch size per forward pass")
     p.add_argument("--global-batch-size", type=int, default=8,
                    help="Effective global batch size (grad acc = global/micro)")
+    from quadmix.core.sampling_bounds import DEFAULT_BOUNDS
+    for name, (low, high) in DEFAULT_BOUNDS.items():
+        p.add_argument(f'--{name}-min', type=float, default=low, help=f'Effective {name} lower bound')
+        p.add_argument(f'--{name}-max', type=float, default=high, help=f'Effective {name} upper bound')
     p.add_argument("--rank-ref-size", type=int, default=10000,
                    help="Reference subset size for rank estimation")
     p.add_argument("--checkpoint-interval", type=int, default=1000,
@@ -517,6 +521,9 @@ def main():
             print(f"    [提示] target {target_b:.1f}B 对应 ω > 0.1，可能超出论文推荐范围")
     print(f"════════════════════════════════════════════════════════")
 
+    from quadmix.core.sampling_bounds import sampler_bound_overrides
+    sampling_bounds = {name: [getattr(args, f'{name}_min'), getattr(args, f'{name}_max')]
+                       for name in ('omega', 'epsilon', 'lambda', 'eta')}
     config = QuaDMixConfig(
         num_domains=metadata_manager.num_domains,
         num_quality_criteria=metadata_manager.num_quality_criteria,
@@ -525,6 +532,7 @@ def main():
         target_tokens=int(args.target_tokens * 1e9) if args.target_tokens > 0 else 0,
         search_weight_mode=args.search_mode,
         seed=args.seed,
+        **sampler_bound_overrides(sampling_bounds),
     )
 
     pipeline = QuaDMixPipeline(config)

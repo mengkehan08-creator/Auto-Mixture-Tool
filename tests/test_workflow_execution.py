@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+pytestmark = pytest.mark.usefixtures('mock_resource_preflight')
 import requests
 
 from test_modelarts_workflow import FakeClient, config

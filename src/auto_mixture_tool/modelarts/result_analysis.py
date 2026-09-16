@@ -111,17 +111,20 @@ def analyze_report(report):
                 warnings.append(f'{name} / {task}：正确率缺失或无效，未按零分计算。')
         training = model.get('training_config') or {}
         identity = model.get('comparison_identity') or {}
-        if not isinstance(training, dict) or not isinstance(identity, dict):
+        if not isinstance(training, dict) or not isinstance(identity, dict) or not isinstance(model.get('strategy_config') or {}, dict):
             raise ValueError('模型训练配置或身份信息格式无效')
         identities.append(identity)
         training_configs.append(training)
         models.append({'id': f'model_{index}', 'name': name,
                        'model_tag': model.get('model_tag'), 'step': model.get('step'),
                        'source_workflow_id': model.get('source_workflow_id'),
+                       'experiment_config': {k: v for k, v in (model.get('strategy_config') or {}).items()
+                                             if k in {'type', 'seed', 'proxy_experiments', 'proxy_steps', 'search_count', 'ratios', 'sampling_bounds'}},
                        'metrics': metrics, 'aggregates': aggregates, 'sampling': model_stats(report, model),
                        'configured_ratios': model.get('configured_ratios', {}),
                        'training': {k: training[k] for k in ('token_budget', 'num_iterations', 'device_batch_size',
-                                   'sequence_len', 'learning_rate', 'global_batch_size') if k in training}})
+                                   'sequence_len', 'learning_rate', 'global_batch_size', 'framework', 'model',
+                                   'base_model_tag', 'target_param_data_ratio', 'devices_per_node') if k in training}})
     tasks = sorted(set().union(*(m['metrics'].keys() for m in models)))
     common = [t for t in tasks if all(m['metrics'].get(t, {}).get('accuracy') is not None for m in models)]
     for model in models:

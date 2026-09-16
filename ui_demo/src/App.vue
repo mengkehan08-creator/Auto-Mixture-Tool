@@ -1,7 +1,8 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight } from '@lucide/vue'
 import AppSidebar from './components/AppSidebar.vue'
+import ConfirmationDialog from './components/ConfirmationDialog.vue'
 import WorkflowJobs from './components/WorkflowJobs.vue'
 import ResultAnalysis from './components/ResultAnalysis.vue'
 import { copyWorkflow } from './copy-workflow'
@@ -11,12 +12,13 @@ import EvaluationConfigStep from './components/steps/EvaluationConfigStep.vue'
 import MixingStrategyStep from './components/steps/MixingStrategyStep.vue'
 import ReviewSubmitStep from './components/steps/ReviewSubmitStep.vue'
 import TrainingConfigStep from './components/steps/TrainingConfigStep.vue'
-import { createEvaluationConfig, createRuntimeConfig, createStrategy, createTrainingConfig, stepOptions } from './data/defaults'
+import { createEvaluationConfig, createRuntimeConfig, createStrategy, createTrainingConfig, stepOptions, trainingParameters } from './data/defaults'
 
 const currentStep = ref(1)
 const page = ref('create')
 const selectedId = ref('')
 const formVersion = ref(0)
+const resetVisible = ref(false)
 const copyNotice = ref('')
 const navigationHistory = ref([])
 function navigate(nextPage, step = currentStep.value, id = '') {
@@ -48,12 +50,38 @@ const strategies = reactive([createStrategy('quadmix'), createStrategy('manual')
 const training = reactive(createTrainingConfig())
 const evaluation = reactive(createEvaluationConfig())
 const runtime = reactive(createRuntimeConfig())
+watch(() => runtime.inputDataObsUri, () => {
+  runtime.datasetEstimate = null
+})
+// UI experiments share optimizer/data settings; scheduling remains per job.
+watch(() => [trainingParameters(training), training.frameworkSource, training.frameworkObsUri, strategies.length], () => {
+  for (const strategy of strategies) {
+    strategy.trainingOverrides = trainingParameters(training)
+    strategy.trainingFrameworkSource = training.frameworkSource
+    strategy.trainingFrameworkObsUri = training.frameworkSource === 'obs' ? training.frameworkObsUri : ''
+  }
+}, { deep: true, immediate: true })
+function sidebarNavigate(destination) {
+  if (destination !== 'create') return navigate(destination)
+  resetVisible.value = true
+}
+function resetExperiment() {
+  resetVisible.value = false
+  for (const [target, value] of [[training, createTrainingConfig()], [evaluation, createEvaluationConfig()], [runtime, createRuntimeConfig()]]) {
+    for (const key of Object.keys(target)) delete target[key]
+    Object.assign(target, value)
+  }
+  strategies.splice(0, strategies.length, ...['quadmix', 'manual', 'random'].map(createStrategy))
+  copyNotice.value = ''; formVersion.value++; navigationHistory.value = []
+  page.value = 'create'; currentStep.value = 1; selectedId.value = ''
+}
 
 </script>
 
 <template>
   <div class="app-shell">
-    <AppSidebar :page="page" @navigate="navigate($event)" />
+    <AppSidebar :page="page" @navigate="sidebarNavigate" />
+    <ConfirmationDialog v-if="resetVisible" title="创建新的实验？" message="将恢复全部默认设置，当前未提交的配置会被清空。已提交的实验作业不会受影响。" confirm-label="确认创建" @cancel="resetVisible = false" @confirm="resetExperiment" />
     <main class="main-content">
       <div class="workspace-header">
       <header class="topbar">
@@ -70,7 +98,7 @@ const runtime = reactive(createRuntimeConfig())
       <div v-show="page === 'create'">
       <p v-if="copyNotice" class="path-preview">{{ copyNotice }}</p>
 
-      <MixingStrategyStep v-if="currentStep === 1" :strategies="strategies" :runtime="runtime" />
+      <MixingStrategyStep v-if="currentStep === 1" :strategies="strategies" :runtime="runtime" :training="training" />
       <TrainingConfigStep v-else-if="currentStep === 2" :config="training" :runtime="runtime" :strategies="strategies" />
       <EvaluationConfigStep v-else-if="currentStep === 3" :config="evaluation" :training="training" :runtime="runtime" :strategies="strategies" :model-output="training.outputObsUri ? `${training.outputObsUri.replace(/\/$/, '')}/runs/{实验名称}/` : `${runtime.outputRootObsUri.replace(/\/$/, '')}/runs/{实验名称}/training/checkpoints/`" />
       <ReviewSubmitStep v-else :key="formVersion" :strategies="strategies" :training="training" :evaluation="evaluation" :runtime="runtime" @created="openJob" />

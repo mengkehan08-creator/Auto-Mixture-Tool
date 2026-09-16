@@ -2,6 +2,8 @@
 import { onMounted, reactive, ref } from 'vue'
 import { apiRequest } from '../api'
 import { validateJobCommands } from '../job-commands.js'
+import ConfirmationDialog from './ConfirmationDialog.vue'
+const confirming = ref(false)
 const props = defineProps({ workflow: Object, job: Object })
 const emit = defineEmits(['close', 'created'])
 const draft = reactive({ name: '', nodes: props.job.nodes, priority: props.job.priority, command: '', authorization: '' })
@@ -25,7 +27,10 @@ onMounted(async () => {
     ready.value = true
   } catch (reason) { error.value = reason.message }
 })
-async function submit() {
+async function submit(confirmed = false) {
+  if (pending.value) return
+  if (confirmed !== true) { confirming.value = true; return }
+  confirming.value = false
   pending.value = true; error.value = ''
   try {
     validateJobCommands([{ owner: draft, commandKey: 'command', label: '重试作业' }])
@@ -45,6 +50,7 @@ async function submit() {
 </script>
 <template>
   <form class="config-block" @submit.prevent="submit">
+    <ConfirmationDialog v-if="confirming" title="确认阶段重试？" message="将复用前序成功输出，创建当前阶段及后续依赖的新云作业，可能产生费用。" confirm-label="确认提交重试" @cancel="confirming = false" @confirm="submit(true)" />
     <h3>作业重试 · {{ job.strategy_name || '汇总评测' }}</h3>
     <p>直接复用成功的前序输出，仅重建当前作业及其后续依赖。原实验和其他成功模型保持不变。</p>
     <p v-if="job.input_obs_uri" class="break-path">复用输入：{{ job.input_obs_uri }}</p>
@@ -53,7 +59,7 @@ async function submit() {
       <label class="field"><span>节点数</span><input v-model.number="draft.nodes" type="number" min="1" max="16" required /></label>
       <label class="field"><span>任务优先级</span><select v-model.number="draft.priority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
       <template v-if="job.module === 'training'">
-        <label v-for="[key, label, min] in [['token_budget', '训练 Token 预算', 1], ['devices_per_node', '每节点 NPU 数', 1], ['device_batch_size', '单卡批量大小', 1], ['eval_every', '验证损失检查间隔', -1], ['core_metric_every', '任务评测间隔', -1]]" :key="key" class="field"><span>{{ label }}</span><input v-model.number="training[key]" type="number" :min="min" /></label>
+        <label v-for="[key, label, min] in [['token_budget', '训练 Token 预算', 1], ['devices_per_node', '每节点 NPU 数', 1]]" :key="key" class="field"><span>{{ label }}</span><input v-model.number="training[key]" type="number" :min="min" /></label>
       </template>
       <template v-if="job.module === 'evaluation'">
         <label class="field"><span>每节点 NPU 数</span><input v-model.number="evaluation.devices_per_node" type="number" min="1" max="8" /></label>

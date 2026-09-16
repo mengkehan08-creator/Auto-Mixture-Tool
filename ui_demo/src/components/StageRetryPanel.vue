@@ -3,6 +3,8 @@ import { ref, computed, onMounted } from 'vue'
 import { apiRequest } from '../api'
 import { retryDraft, retryBody } from '../stage-retry'
 import { stemTasks } from '../evaluation-selection'
+import ConfirmationDialog from './ConfirmationDialog.vue'
+const confirming = ref(false)
 
 const props = defineProps({ workflow: Object, stage: String })
 const emit = defineEmits(['close', 'created'])
@@ -31,8 +33,10 @@ async function load() {
     draft.value = retryDraft(config, settings, props.workflow, props.stage)
   } catch (reason) { error.value = reason.message }
 }
-async function submit() {
+async function submit(confirmed = false) {
   if (submitting.value) return
+  if (confirmed !== true) { confirming.value = true; return }
+  confirming.value = false
   submitting.value = true
   error.value = ''
   try {
@@ -55,6 +59,7 @@ onMounted(load)
 
 <template>
   <section class="retry-panel" aria-labelledby="retry-title">
+    <ConfirmationDialog v-if="confirming" title="确认阶段重试？" message="将复用成功输出，并创建后续云作业，可能产生费用。" confirm-label="确认提交重试" @cancel="confirming = false" @confirm="submit(true)" />
     <div class="section-title-row"><h3 id="retry-title">{{ title }}</h3><button class="button secondary" type="button" :disabled="submitting" @click="emit('close')">取消重试</button></div>
     <p>直接复用前序成功输出，不再执行已完成阶段。</p>
     <div class="path-preview"><strong>{{ stage === 'training' ? '采样集输入' : '模型输入' }}</strong><div class="retry-path">{{ input }}</div></div>

@@ -11,12 +11,12 @@ test('navigation and compact delete controls retain accessible labels', () => {
   assert.match(strategy, /:disabled="!removable"/)
 })
 
-test('training help belongs to the matching editable field and distinguishes final evaluation', () => {
+test('training settings are shared and advanced fields are hidden', () => {
   const training = source('./components/steps/TrainingConfigStep.vue')
-  assert.match(training, /v-model.number="strategy.trainingOverrides\[field.key\]"/)
-  assert.match(training, /:aria-describedby="`training-\$\{strategy.id\}-\$\{field.key\}`"/)
-  assert.match(training, /:id="`training-\$\{strategy.id\}-\$\{field.key\}`"/)
-  assert.match(training, /不影响训练后的独立评测/)
+  assert.match(training, /v-model.number="config.tokenBudget"/)
+  assert.match(training, /v-model.number="strategy.trainingNodes"/)
+  assert.match(training, /<SamplingRisk/)
+  assert.doesNotMatch(training, /单卡批量大小|验证损失检查间隔|任务评测间隔/)
 })
 
 test('submission feedback remains explicit and pending submissions remain disabled', () => {

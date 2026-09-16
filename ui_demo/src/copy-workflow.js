@@ -45,6 +45,7 @@ export function copyWorkflow(config) {
   const strategies = config.strategies.map(item => ({ ...createStrategy(item.type),
     name: item.name, seed: item.seed ?? 42, proxyExperiments: item.proxy_experiments,
     proxySteps: item.proxy_steps ?? 15, searchCount: item.search_count ?? 5000, devicesPerNode: item.devices_per_node,
+    ...(item.sampling_bounds ? { samplingBounds: JSON.parse(JSON.stringify(item.sampling_bounds)) } : {}),
     ratios: item.ratios ? { ...item.ratios } : undefined,
     source: item.script_obs_uri || item.script_upload ? 'script' : 'builtin', scriptObsUri: item.script_obs_uri || '',
     scriptInput: item.script_upload ? 'upload' : 'obs', scriptUpload: item.script_upload ? structuredClone(item.script_upload) : null,

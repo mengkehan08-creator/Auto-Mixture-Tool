@@ -1,21 +1,23 @@
 <script setup>
 import { Bot, Database } from '@lucide/vue'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { stemTasks, normalizeEvaluationTasks } from '../../evaluation-selection.js'
 import ModelLibrary from '../ModelLibrary.vue'
+import ResourceGuide from '../ResourceGuide.vue'
+import ResourceCheck from '../ResourceCheck.vue'
+const showGuide = ref(false)
 
 const props = defineProps({ config: { type: Object, required: true }, modelOutput: String, training: Object, runtime: Object, strategies: Array })
 const comparisonReference = computed(() => ({
   model_obs_uri: props.training.modelObsUri,
   base_model_tag: props.training.baseModelTag,
   input_data_obs_uri: props.runtime.inputDataObsUri,
-  training_configs: props.strategies.map(strategy => ({
+  training_configs: [{
     framework: 'nanochat', model: props.training.model, base_model_tag: props.training.baseModelTag,
     target_param_data_ratio: props.training.targetParamDataRatio, devices_per_node: props.training.devicesPerNode,
     token_budget: props.training.tokenBudget, num_iterations: 0, device_batch_size: props.training.deviceBatchSize,
     eval_every: props.training.evalEvery, core_metric_every: props.training.coreMetricEvery,
-    ...strategy.trainingOverrides,
-  })),
+  }],
 }))
 const selectedTasks = computed(() => normalizeEvaluationTasks(props.config.dataset.names))
 const allSelected = computed(() => stemTasks.every(name => selectedTasks.value.includes(name)))
@@ -45,14 +47,15 @@ function toggleDataset(config, name) {
           <label v-if="config.dataset.source === 'obs'" class="field"><span>评测资源 OBS 地址</span><input v-model="config.dataset.obsUri" placeholder="obs://bucket/path/eval_bundle/" /></label>
           <section class="evaluation-job-settings">
             <div v-if="config.dataset.source === 'obs'">
-              <h3>新增 OBS 评测包</h3>
-              <div v-for="(pack, index) in config.obsPackages" :key="index" class="config-block">
+              <div class="section-title-row"><div><h3>OBS 评测包</h3><small>按统一格式接入文本评测任务</small></div><button class="button secondary" type="button" @click="showGuide = true">示例</button></div>
+              <div v-for="(pack, index) in config.obsPackages" :key="index" class="config-block evaluation-package">
+                <header><strong>评测包 {{ index + 1 }}</strong><button type="button" class="resource-action resource-delete" @click="config.obsPackages.splice(index, 1)">删除</button></header>
                 <label class="field"><span>名称</span><input v-model="pack.name" /></label>
-                <label class="field"><span>OBS 目录</span><input v-model="pack.obs_uri" placeholder="obs://bucket/evaluation-package/" /></label>
-                <button type="button" class="button secondary" @click="config.obsPackages.splice(index, 1)">删除</button>
+                <label class="field"><span>OBS 目录</span><textarea rows="2" v-model="pack.obs_uri" placeholder="obs://bucket/evaluation-package/" ></textarea></label>
+                <ResourceCheck kind="evaluation" :uri="pack.obs_uri" />
               </div>
               <button type="button" class="button secondary" @click="config.obsPackages.push({ name: '', obs_uri: '' })">增加</button>
-              <small>新增包按 core.yaml 执行，运行前检查兼容性；可与上方 STEM 同时使用。</small>
+              <p class="package-note">提交前检查任务类型和数据格式，不支持或无法读取时不创建 ModelArts 作业。</p>
             </div>
             <h3>独立评测作业</h3>
             <label class="field"><span>评测作业名称</span><input v-model="config.jobName" maxlength="64" placeholder="留空自动按时间命名" /></label>
@@ -63,7 +66,7 @@ function toggleDataset(config, name) {
               <label class="field"><span>每节点 NPU 数</span><input v-model.number="config.devicesPerNode" type="number" min="1" max="8" /></label>
               <label class="field"><span>评测批量大小</span><input v-model.number="config.coreEvalBatchSize" type="number" min="1" /><small>默认 16，显存不足时调小。</small></label>
             </div>
-            <label class="field"><span>评测与对比报告输出 OBS 目录</span><input v-model="config.outputObsUri" placeholder="留空沿用实验输出目录" /><small>自动追加 runs/实验名称/。</small></label>
+            <label class="field"><span>评测与对比报告输出 OBS 目录</span><textarea rows="2" v-model="config.outputObsUri" placeholder="留空沿用实验输出目录" ></textarea><small>自动追加 runs/实验名称/。</small></label>
           </section>
           <ModelLibrary :selected="config.modelIds" :reference="comparisonReference" />
         </div>
@@ -77,10 +80,15 @@ function toggleDataset(config, name) {
       </article>
     </div>
     <p v-if="!config.dataset.enabled && !config.api.enabled" class="path-preview" role="status">未选择评估方式，本次只运行配比和训练，不创建评测作业。</p>
+    <ResourceGuide v-if="showGuide" kind="evaluation" @close="showGuide = false" />
   </section>
 </template>
 
 <style scoped>
+.evaluation-package { background: linear-gradient(135deg, #f5f8ff, #fff); border: 1px solid #dce6f8; }
+.evaluation-package header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.evaluation-package .field { margin-top: 14px; }
+.package-note { color: #5b6b85; font-size: 12px; line-height: 1.8; }
 .method-grid { align-items: start; grid-template-columns: minmax(0, 2fr) minmax(250px, 1fr); }
 .switch { position: relative; flex-shrink: 0; }
 .switch input { display: block; position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; z-index: 1; cursor: pointer; }

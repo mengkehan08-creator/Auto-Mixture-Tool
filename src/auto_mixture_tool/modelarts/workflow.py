@@ -332,6 +332,8 @@ class ModelArtsWorkflowManager:
 
     def preview(self, config: dict[str, Any]) -> dict[str, Any]:
         value = self._validate(config)
+        from .input_validation import validate_workflow_resources
+        validate_workflow_resources(value)
         from . import parallel_workflow
         if value.get('execution_mode') == 'parallel':
             parallel_workflow.check_names(self, parallel_workflow.planned_jobs(value))
@@ -368,7 +370,7 @@ class ModelArtsWorkflowManager:
             ][({'training': 1, 'evaluation': 2}.get(value.get('reuse', {}).get('stage'), 0)):],
             "input_data_obs_uri": value["input_data_obs_uri"],
             "output_root_obs_uri": value["output_root_obs_uri"],
-            "message": "仅检查配置及服务端模板；不提交任务，也不验证 OBS 文件及权限。",
+            "message": "配置和挂载输入检查通过；未创建云作业，未验证 OBS 写入权限。",
         }
 
     def create(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -388,6 +390,9 @@ class ModelArtsWorkflowManager:
                     if existing["config"] != normalized:
                         raise ValueError("重复请求标识对应的配置不同，请重新检查配置后提交")
                     return self.public(existing)
+        if self.client is not None:
+            from .input_validation import validate_workflow_resources
+            validate_workflow_resources(normalized)
         if self.client is None:
             readiness = self.preview(config)
             if not readiness["ready"]:
@@ -587,7 +592,7 @@ class ModelArtsWorkflowManager:
             if set(roles) - seen_roles:
                 commands = value.get('commands') or {}
                 strategies = value.get('strategies', []) if value.get('execution_mode') == 'parallel' else [{}]
-                if any((strategy.get(stage + '_command') or commands.get(stage, self._command(stage))) == self._command(stage)
+                if any((strategy.get(stage + '_command') or commands.get(stage, self._command(stage))).endswith(self._command(stage))
                        for strategy in strategies for stage in ('mixing', 'training')):
                     raise ValueError('已删除默认运行资源，请恢复资源或为所有配比、训练作业配置不依赖这些资源的自定义 command')
         commands = value.get("commands")
@@ -674,8 +679,10 @@ class ModelArtsWorkflowManager:
                     raise ValueError("manual strategy domains and ratios must be positive")
                 strategy["ratios"] = ratios
             if strategy.get("type") == "quadmix":
+                from quadmix.core.sampling_bounds import validate_sampling_bounds
+                strategy['sampling_bounds'] = validate_sampling_bounds(strategy.get('sampling_bounds'))
                 for key in ("proxy_experiments", "proxy_steps", "search_count"):
-                    number = strategy.get(key, {"proxy_experiments": 16, "proxy_steps": 15, "search_count": 5000}[key])
+                    number = strategy.get(key, {"proxy_experiments": 50, "proxy_steps": 15, "search_count": 5000}[key])
                     if type(number) is not int or number <= 0:
                         raise ValueError(f"quadmix {key} must be positive")
                     strategy[key] = number

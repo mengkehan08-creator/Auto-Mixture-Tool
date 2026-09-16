@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+pytestmark = pytest.mark.usefixtures('mock_resource_preflight')
 
 from auto_mixture_tool.modelarts.config_transport import read_config
 from auto_mixture_tool.modelarts.strategy_upload import validate_script, materialize_scripts

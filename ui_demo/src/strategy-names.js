@@ -1,7 +1,7 @@
 export const strategyId = strategy => `${strategy.type}_${strategy.id}`
 
 export function parameterName(strategy) {
-  if (strategy.type === 'quadmix') return `ex-${strategy.proxyExperiments ?? 16}-${strategy.proxySteps ?? 15}`
+  if (strategy.type === 'quadmix') return `ex-${strategy.proxyExperiments ?? 50}-${strategy.proxySteps ?? 15}`
   return `${strategy.type}-s${strategy.seed ?? 42}`
 }
 

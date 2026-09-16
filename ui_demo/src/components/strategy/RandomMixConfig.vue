@@ -14,7 +14,7 @@ defineProps({ modelValue: { type: Object, required: true } })
 
   <section class="strategy-source">
     <div class="source-tabs" role="group" aria-label="策略来源">
-      <button type="button" :class="{ active: modelValue.source === 'builtin' }" @click="modelValue.source = 'builtin'"><Library :size="17" /><span><strong>选择内置方法</strong><small>使用平台已提供的随机采样方式</small></span></button>
+      <button type="button" :class="{ active: modelValue.source === 'builtin' }" @click="modelValue.source = 'builtin'"><Library :size="17" /><span><strong>选择内置方法</strong><small>从全部候选文档中随机选取</small></span></button>
       <button type="button" :class="{ active: modelValue.source === 'script' }" @click="modelValue.source = 'script'"><Code2 :size="17" /><span><strong>使用自定义采样脚本</strong><small>填写 OBS 地址，或上传、拖拽脚本</small></span></button>
     </div>
 

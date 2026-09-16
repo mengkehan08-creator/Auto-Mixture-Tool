@@ -1,60 +1,53 @@
 <script setup>
 import { strategyLabel, trainingNameHint } from '../../strategy-names'
+import SamplingRisk from '../SamplingRisk.vue'
 defineProps({ config: { type: Object, required: true }, runtime: { type: Object, required: true }, strategies: { type: Array, default: () => [] } })
 
-const trainingFields = [
-  { key: 'token_budget', label: '训练 Token 预算', min: 1, max: 9007199254740991, hint: '本次模型训练的 Token 总量，训练步数据此自动计算。' },
-  { key: 'devices_per_node', label: '每节点 NPU 数', min: 1, max: 8, hint: '每个训练节点使用的卡数。' },
-  { key: 'device_batch_size', label: '单卡批量大小', min: 1, max: 4096, hint: '每张卡一次处理的序列数，显存不足时调小。' },
-  { key: 'eval_every', label: '验证损失检查间隔', min: -1, max: 2147483647, hint: '每隔多少训练步计算验证损失；-1 表示关闭。' },
-  { key: 'core_metric_every', label: '任务评测间隔', min: -1, max: 2147483647, hint: '训练期间的任务评测频率；-1 表示关闭，不影响训练后的独立评测。' },
-]
 </script>
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>训练配置</h2><p>各作业独立选择框架、节点和训练参数，共用初始模型。配比成功后自动启动对应训练。</p></div></div>
-    <div v-for="strategy in strategies" :key="strategy.id" class="config-block">
-      <h3>{{ strategyLabel(strategy) }} · 训练作业</h3>
+    <div class="section-title-row"><div><h2>训练配置</h2><p>全部策略共用训练框架、模型和训练参数；每个作业独立设置名称、节点和启动命令。</p></div></div>
+    <div class="config-block">
+      <h3>统一训练参数</h3>
       <div class="job-framework">
-        <div class="segmented" role="group" :aria-label="`${strategyLabel(strategy)} 训练框架来源`">
-          <button type="button" :class="{ active: strategy.trainingFrameworkSource === 'builtin' }" @click="strategy.trainingFrameworkSource = 'builtin'">使用内置框架</button>
-          <button type="button" :class="{ active: strategy.trainingFrameworkSource === 'obs' }" @click="strategy.trainingFrameworkSource = 'obs'">OBS 挂载框架</button>
+        <div class="segmented" role="group" aria-label="训练框架来源">
+          <button type="button" :class="{ active: config.frameworkSource === 'builtin' }" @click="config.frameworkSource = 'builtin'">使用内置框架</button>
+          <button type="button" :class="{ active: config.frameworkSource === 'obs' }" @click="config.frameworkSource = 'obs'">OBS 挂载框架</button>
         </div>
-        <label v-if="strategy.trainingFrameworkSource === 'obs'" class="field"><span>NanoChat 兼容框架 OBS 地址</span><input v-model="strategy.trainingFrameworkObsUri" :placeholder="config.frameworkObsUri" /><small>独立挂载到本策略作业，须兼容 NanoChat 启动接口及模型格式。</small></label>
-        <p v-else>内置 NanoChat · 使用下方默认代码地址</p>
+        <label class="field"><span>NanoChat 兼容框架 OBS 地址</span><textarea rows="2" v-model="config.frameworkObsUri" ></textarea><small>用于全部策略及最终评测，需兼容现有 NanoChat 模型与启动接口。</small></label>
       </div>
       <div class="form-grid two-cols">
-        <label class="field"><span>训练作业名称（可自定义）</span><input v-model="strategy.trainingJobName" maxlength="64" :placeholder="trainingNameHint(strategy)" /></label>
-        <label class="field"><span>保存模型名称</span><input v-model="strategy.modelName" maxlength="128" placeholder="留空使用策略名及实验时间" /></label>
+        <label class="field"><span>训练 Token 预算</span><input v-model.number="config.tokenBudget" type="number" min="1" /><small>各策略使用同一预算，训练步数自动计算。</small></label>
+        <label class="field"><span>每节点 NPU 数</span><input v-model.number="config.devicesPerNode" type="number" min="1" max="8" /></label>
+      </div>
+      <SamplingRisk v-for="strategy in strategies.filter(s => s.type === 'quadmix')" :key="strategy.id" :strategy="strategy" :budget="config.tokenBudget" :dataset-tokens="runtime.datasetEstimate?.estimated_tokens" />
+    </div>
+    <div class="config-block"><h3>训练作业安排</h3>
+      <div v-for="strategy in strategies" :key="strategy.id" class="training-schedule">
+      <h4>{{ strategyLabel(strategy) }}</h4>
+      <div class="form-grid two-cols">
+        <label class="field"><span>训练作业名称（可自定义）</span><textarea rows="2" v-model="strategy.trainingJobName" maxlength="64" :placeholder="trainingNameHint(strategy)" ></textarea></label>
+        <label class="field"><span>保存模型名称</span><textarea rows="2" v-model="strategy.modelName" maxlength="128" placeholder="留空使用策略名及实验时间" ></textarea></label>
         <label class="field"><span>训练节点数</span><input v-model.number="strategy.trainingNodes" type="number" min="1" max="16" /></label>
         <label class="field"><span>训练任务优先级</span><select v-model.number="strategy.trainingPriority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
-        <label v-for="field in trainingFields" :key="field.key" class="field">
-          <span>{{ field.label }}</span>
-          <input v-model.number="strategy.trainingOverrides[field.key]" type="number" :min="field.min" :max="field.max" :aria-describedby="`training-${strategy.id}-${field.key}`" />
-          <small :id="`training-${strategy.id}-${field.key}`">{{ field.hint }}</small>
-        </label>
       </div>
-    </div>
-
-    <div class="config-block">
-      <h3>默认 NanoChat 框架</h3>
-      <label class="field"><span>NanoChat 代码 OBS 地址</span><input v-model="config.frameworkObsUri" placeholder="obs://bucket/path/nanochat-npu/" /><small>用于选择内置框架的作业及最终汇总评测；各作业可在上方独立指定 OBS 框架。</small></label>
+      </div>
     </div>
 
     <div class="config-block">
       <h3>训练模型</h3>
-      <label class="field"><span>模型输出 OBS 目录</span><input v-model="config.outputObsUri" placeholder="留空沿用实验输出目录" /><small>保存各策略训练后的模型及检查点，自动追加 runs/实验名称/，避免覆盖。</small></label>
+      <label class="field"><span>模型输出 OBS 目录</span><textarea rows="2" v-model="config.outputObsUri" placeholder="留空沿用实验输出目录" ></textarea><small>保存各策略训练后的模型及检查点，自动追加 runs/实验名称/，避免覆盖。</small></label>
       <div class="segmented"><button type="button" :class="{ active: config.modelSource === 'builtin' }" @click="config.modelSource = 'builtin'">使用内置配置</button><button type="button" :class="{ active: config.modelSource === 'obs' }" @click="config.modelSource = 'obs'">OBS 挂载模型</button></div>
       <div v-if="config.modelSource === 'builtin'" class="form-grid two-cols"><label class="field"><span>初始化方式</span><select v-model="config.model"><option>NanoChat-Base</option></select><small>从模型目录的 base_checkpoints/模型标签 加载初始权重。</small></label></div>
-      <div class="form-grid two-cols"><label class="field"><span>NanoChat 模型目录 OBS 地址</span><input v-model="config.modelObsUri" placeholder="obs://bucket/path/nanochat_model_dir/" /></label><label class="field"><span>基础模型标签</span><input v-model="config.baseModelTag" placeholder="d24" /></label></div>
+      <div class="form-grid two-cols"><label class="field"><span>NanoChat 模型目录 OBS 地址</span><textarea rows="2" v-model="config.modelObsUri" placeholder="obs://bucket/path/nanochat_model_dir/" ></textarea></label><label class="field"><span>基础模型标签</span><input v-model="config.baseModelTag" placeholder="d24" /></label></div>
     </div>
 
-    <div class="config-block"><h3>采样预算设置</h3><label class="field"><span>目标参数/数据比例</span><input v-model.number="config.targetParamDataRatio" type="number" min="0.01" step="0.01" /><small>用于计算采样数据规模。各模型的训练 Token 预算在上方对应作业中分别设置。</small></label></div>
+    <div class="config-block"><h3>采样预算设置</h3><label class="field"><span>目标参数/数据比例</span><input v-model.number="config.targetParamDataRatio" type="number" min="0.01" step="0.01" /><small>用于采样数据规模设置，不保证 QuaDMix 子集能达到训练预算。</small></label></div>
     <div class="config-block"><h3>运行依赖配置</h3>
       <div v-for="(resource, index) in runtime.offlineResources" :key="index" class="resource-row">
         <label class="field"><span>name</span><input v-model="resource.name" placeholder="自定义资源名称" /></label>
-        <label class="field"><span>OBS 地址</span><input v-model="resource.uri" /></label>
+        <label class="field"><span>OBS 地址</span><textarea rows="2" v-model="resource.uri" ></textarea></label>
         <button class="resource-action resource-delete" type="button" :aria-label="`删除 ${resource.name || '未命名项'}`" @click="runtime.offlineResources.splice(index, 1)">删除</button>
       </div>
       <button class="resource-action resource-add" type="button" @click="runtime.offlineResources.push({ name: '', uri: '' })">＋ 增加</button>

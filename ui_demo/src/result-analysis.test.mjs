@@ -17,7 +17,11 @@ test('analysis charts use fixed percentage scale and render data without HTML in
   const source = readFileSync(new URL('./components/ResultAnalysis.vue', import.meta.url), 'utf8')
   assert.match(source, /workflows\/\$\{props.workflowId\}\/analysis/)
   assert.match(source, /共同评测项/)
-  assert.match(source, /0%<\/span><span>50%<\/span><span>100%/)
+  const chart = readFileSync(new URL('./components/ScoreComparisonChart.vue', import.meta.url), 'utf8')
+  assert.match(chart, /\[0, .25, .5, .75, 1\]/)
+  assert.match(chart, /<rect /)
+  assert.match(chart, /<line /)
+  assert.doesNotMatch(chart, /v-html|https:\/\/cdn/)
   assert.match(source, /role="alert"/)
   assert.match(source, /requestVersion/)
   assert.doesNotMatch(source, /v-html|https:\/\/cdn|Math.random/)
@@ -47,7 +51,8 @@ test('accuracy uses percentages and centered uses decimal scores without unit mi
 
 test('all comparison views share best-score component and narrative renders structured text', () => {
   const source = readFileSync(new URL('./components/ResultAnalysis.vue', import.meta.url), 'utf8')
-  assert.equal((source.match(/<AnalysisScore /g) || []).length, 5)
+  assert.equal((source.match(/<AnalysisScore /g) || []).length, 4)
+  assert.equal((source.match(/<ScoreComparisonChart /g) || []).length, 2)
   assert.match(source, /conclusion_parts/)
   assert.match(source, /'conclusion-best': part.best/)
   assert.match(source, /\.bar-best .analysis-track > span/)

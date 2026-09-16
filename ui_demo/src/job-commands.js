@@ -7,6 +7,20 @@ export function initializeJobCommands(strategies, runtime, defaults) {
   }
 }
 
+export function refreshJobCommands(strategies, runtime, defaults) {
+  const previous = runtime.autoCommandDefaults || runtime.commands || {}
+  runtime.commands ||= {}
+  for (const stage of ['mixing', 'training', 'evaluation']) {
+    if (runtime.commands[stage] == null || runtime.commands[stage] === previous[stage]) runtime.commands[stage] = defaults[stage]
+    for (const strategy of strategies) {
+      if (stage === 'evaluation') continue
+      const key = `${stage}Command`
+      if (strategy[key] == null || strategy[key] === previous[stage]) strategy[key] = defaults[stage]
+    }
+  }
+  runtime.autoCommandDefaults = { ...defaults }
+}
+
 export function validateJobCommands(jobs) {
   for (const job of jobs) {
     const command = job.owner[job.commandKey]

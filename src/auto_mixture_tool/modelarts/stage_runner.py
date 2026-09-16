@@ -69,9 +69,10 @@ def run_mixing(config: dict[str, Any]) -> None:
         "executor_id": "local",
         "full_scan": bool(config.get("full_scan", False)),
         "algorithm_config": {
-            "num_experiments": quadmix.get("proxy_experiments", 16),
+            "num_experiments": quadmix.get("proxy_experiments", 50),
             "tiny_steps": quadmix.get("proxy_steps", 15),
             "num_search": quadmix.get("search_count", 5000),
+            "sampling_bounds": quadmix.get("sampling_bounds"),
             "seed": quadmix.get("seed", 42),
             "device_type": "npu",
             "npu_devices": quadmix.get("devices_per_node", 8),

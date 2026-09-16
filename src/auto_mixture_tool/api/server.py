@@ -85,6 +85,20 @@ class ModelComparisonRequest(BaseModel):
     training_configs: list[dict[str, Any]] = Field(default_factory=list, max_length=32)
 
 
+class ResourceValidationRequest(BaseModel):
+    kind: str
+    uri: str = Field(max_length=2048)
+
+
+@app.post('/api/v1/resources/validate')
+def validate_resource_request(payload: ResourceValidationRequest):
+    from auto_mixture_tool.modelarts.input_validation import validate_resource
+    try:
+        return validate_resource(payload.kind, payload.uri)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _manager() -> PipelineManager:
     if not hasattr(app.state, "manager"):
         workspace = app.state.workspace if hasattr(app.state, "workspace") else None
@@ -204,6 +218,15 @@ def workflow_defaults() -> dict[str, Any]:
     return {"auth_mode": "iam" if os.environ.get('AMT_IAM_PROVIDER', '').strip() else "manual",
             "modelarts": {key: value for key, value in settings.items() if key in allowed},
             "commands": {stage: ModelArtsWorkflowManager._command(stage) for stage in ("mixing", "training", "evaluation")}}
+
+
+@app.post('/api/v1/workflow-commands')
+def workflow_commands(payload: dict[str, Any]):
+    from auto_mixture_tool.modelarts.command_preview import commands_for_settings
+    try:
+        return {'commands': commands_for_settings(payload)}
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/v1/workflows/{workflow_id}/authorization")

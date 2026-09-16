@@ -2,6 +2,8 @@ import tempfile
 import shutil
 import threading
 import unittest
+import pytest
+pytestmark = pytest.mark.usefixtures('mock_resource_preflight')
 from pathlib import Path
 from unittest.mock import patch
 

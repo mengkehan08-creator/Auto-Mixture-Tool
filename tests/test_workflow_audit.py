@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+pytestmark = pytest.mark.usefixtures('mock_resource_preflight')
 
 from auto_mixture_tool.modelarts.iam_auth import IamTokenProvider
 from auto_mixture_tool.plugins.trainers.nanochat import NanoChatTrainer

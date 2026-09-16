@@ -63,6 +63,10 @@ class QuadMixAlgorithm(AlgorithmAdapter):
             args.extend(["--distributed-nodes", str(nodes)])
         if config.get("seed") is not None:
             args.extend(["--seed", str(int(config["seed"]))])
+        if config.get('sampling_bounds') is not None:
+            from quadmix.core.sampling_bounds import validate_sampling_bounds
+            for name, (low, high) in validate_sampling_bounds(config['sampling_bounds']).items():
+                args.extend([f'--{name}-min', str(low), f'--{name}-max', str(high)])
         if config.get("coordination_uri"):
             args.extend(["--coordination-uri", str(config["coordination_uri"])])
         configurable = {
