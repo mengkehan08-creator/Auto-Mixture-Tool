@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import ExitStack
 
 
 def digest(path):
@@ -110,16 +111,26 @@ def evaluation_models(config, inputs):
 
 
 def run_evaluation(config):
+    from nanochat_mid_compare.eval_formats import prepare_package
+    with ExitStack() as temporary:
+        prepared = []
+        inputs = Path('/home/ma-user/modelarts/inputs')
+        for index, package in enumerate(config['evaluation'].get('obs_packages', [])):
+            source = inputs / f'eval_package_{index}'
+            target = Path(temporary.enter_context(tempfile.TemporaryDirectory(prefix='amt-eval-data-')))
+            prepare_package(source, target)
+            prepared.append((f'package_{index}', target, ['core']))
+        _run_packages(config, prepared)
+
+
+def _run_packages(config, prepared):
     from nanochat_mid_compare.eval_assets import validate_assets, task_definitions
     inputs = Path('/home/ma-user/modelarts/inputs')
     tasks, labels = task_definitions(inputs / 'nanochat_npu_dir_3')
     packages = []
     if config['evaluation']['datasets']:
         packages.append(('builtin', inputs / 'eval_bundle_dir_6', config['evaluation']['datasets']))
-    for index, package in enumerate(config['evaluation'].get('obs_packages', [])):
-        source = inputs / f'eval_package_{index}'
-        validate_package(source)
-        packages.append((f'package_{index}', source, ['core']))
+    packages.extend(prepared)
     # Validate every selected package before any model evaluation starts.
     for name, source, selected in packages:
         with tempfile.TemporaryDirectory() as directory:
@@ -135,41 +146,11 @@ def run_evaluation(config):
 
 def validate_package(source):
     import yaml
-    from nanochat_mid_compare.eval_assets import validate_task_records
+    from nanochat_mid_compare.eval_formats import inspect_package
     source = Path(source)
     try:
-        for filename in ('core.yaml', 'eval_meta_data.csv'):
-            if not (source / filename).resolve().is_relative_to(source.resolve()):
-                raise ValueError(f'{filename} 不能链接到评测包外部')
-        tasks = yaml.safe_load((source / 'core.yaml').read_text(encoding='utf-8'))['icl_tasks']
-        if not isinstance(tasks, list) or not tasks:
-            raise ValueError('icl_tasks 不能为空')
-        labels = set()
-        for task in tasks:
-            if task['icl_task_type'] not in {'multiple_choice', 'generation'}:
-                raise ValueError(f"不支持任务类型：{task['icl_task_type']}")
-            if not isinstance(task['label'], str) or task['label'] in labels:
-                raise ValueError('任务名称无效或重复')
-            labels.add(task['label'])
-            if not isinstance(task['dataset_uri'], str):
-                raise ValueError('dataset_uri 必须是相对路径')
-            if not isinstance(task['num_fewshot'], list) or not task['num_fewshot'] or type(task['num_fewshot'][0]) is not int or task['num_fewshot'][0] < 0:
-                raise ValueError('num_fewshot 必须包含非负整数')
-            if task['icl_task_type'] == 'generation' and task.get('answer_extractor', 'gsm8k') not in {'gsm8k', 'math'}:
-                raise ValueError('不支持该生成题答案提取方式')
-            validate_task_records(source, task)
-        if not (source / 'eval_meta_data.csv').is_file():
-            raise ValueError('缺少 eval_meta_data.csv')
-        with (source / 'eval_meta_data.csv').open(encoding='utf-8') as stream:
-            baselines = {}
-            for row in csv.DictReader(stream):
-                value = float(row['Random baseline'])
-                if not 0 <= value < 100:
-                    raise ValueError('Random baseline 必须在 [0, 100) 范围')
-                baselines[row['Eval Task']] = value
-            if not labels.issubset(baselines):
-                raise ValueError('eval_meta_data.csv 缺少任务对应基线')
-        return sorted(labels)
+        tasks, _ = inspect_package(source)
+        return sorted(task['label'] for task in tasks)
     except (OSError, KeyError, TypeError, ValueError, yaml.YAMLError) as exc:
         raise ValueError(f'评测集不符合当前 NanoChat 要求：{source}：{exc}') from None
 
@@ -192,6 +173,8 @@ def _run_evaluation(config, bundle, report_name):
     if report_name:
         report = report / report_name
     report.mkdir(parents=True, exist_ok=True)
+    if rank == 0 and (bundle / 'adaptation.json').is_file():
+        shutil.copyfile(bundle / 'adaptation.json', report / 'evaluation_adaptation.json')
     repo = inputs / 'nanochat_npu_dir_3'
     with tempfile.TemporaryDirectory(prefix='amt-evaluation-') as directory:
         runtime = Path(directory)

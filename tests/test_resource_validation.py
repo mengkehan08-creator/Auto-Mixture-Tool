@@ -35,7 +35,7 @@ def test_bad_records_are_rejected(package, row):
         validate_package(package)
 
 
-@pytest.mark.parametrize('kind', ['code_execution', 'image', 'audio', 'language_modeling'])
+@pytest.mark.parametrize('kind', ['code_execution', 'image', 'audio', 'unknown_scorer'])
 def test_unsupported_task_type_is_rejected(package, kind):
     path = package / 'core.yaml'
     path.write_text(path.read_text().replace('multiple_choice', kind))
@@ -73,10 +73,9 @@ def test_query_string_uri_is_rejected(package):
         validate_resource('evaluation', 'obs://bucket/prefix/example/?token=private')
 
 
-def test_missing_baseline_fails(package):
+def test_missing_baseline_can_be_generated(package):
     (package / 'eval_meta_data.csv').unlink()
-    with pytest.raises(ValueError, match='eval_meta_data.csv'):
-        validate_package(package)
+    assert validate_package(package) == ['science_example']
 
 
 def test_commands_change_with_mount_and_image_without_credentials():

@@ -47,7 +47,7 @@ function toggleDataset(config, name) {
           <label v-if="config.dataset.source === 'obs'" class="field"><span>评测资源 OBS 地址</span><input v-model="config.dataset.obsUri" placeholder="obs://bucket/path/eval_bundle/" /></label>
           <section class="evaluation-job-settings">
             <div v-if="config.dataset.source === 'obs'">
-              <div class="section-title-row"><div><h3>OBS 评测包</h3><small>按统一格式接入文本评测任务</small></div><button class="button secondary" type="button" @click="showGuide = true">示例</button></div>
+              <div class="section-title-row"><div><h3>OBS 评测数据</h3><small>自动识别常见格式；无法评测时说明原因</small></div><button class="button secondary" type="button" @click="showGuide = true">示例</button></div>
               <div v-for="(pack, index) in config.obsPackages" :key="index" class="config-block evaluation-package">
                 <header><strong>评测包 {{ index + 1 }}</strong><button type="button" class="resource-action resource-delete" @click="config.obsPackages.splice(index, 1)">删除</button></header>
                 <label class="field"><span>名称</span><input v-model="pack.name" /></label>

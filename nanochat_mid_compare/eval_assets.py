@@ -7,40 +7,27 @@ import json
 from pathlib import Path
 
 import yaml
+if __package__:
+    from .eval_formats import normalize_record, read_records, record_path, TASK_TYPES
+else:  # run_stem_experiment.sh also invokes this file directly.
+    from eval_formats import normalize_record, read_records, record_path, TASK_TYPES
 
 
 def validate_task_records(root: Path, task):
     """Validate the actual NanoChat text evaluation contract, not dataset branding."""
     label = task['label']
     kind = task['icl_task_type']
-    if kind not in {'multiple_choice', 'generation'}:
+    if kind not in TASK_TYPES:
         raise ValueError(f'{label}：不支持 {kind}；代码执行、图像、音频任务需要额外评测器')
     if kind == 'generation' and task.get('answer_extractor', 'gsm8k') not in {'gsm8k', 'math'}:
         raise ValueError(f'{label}：不支持该答案提取器')
-    base = (root / 'eval_data').resolve()
-    if not base.is_relative_to(root.resolve()):
-        raise ValueError(f'{label}：eval_data 不能链接到评测包外部')
-    relative = task['dataset_uri']
-    if not isinstance(relative, str) or Path(relative).is_absolute() or '\\' in relative or ':' in relative:
-        raise ValueError(f'{label}：dataset_uri 必须是 eval_data 内的相对路径')
-    path = (base / relative).resolve()
-    if not path.is_relative_to(base):
-        raise ValueError(f'{label}：数据路径越界')
+    path = record_path(root, task['dataset_uri'])
     count = 0
-    with path.open(encoding='utf-8') as stream:
-        for count, line in enumerate(stream, 1):
-            row = json.loads(line)
-            if not isinstance(row, dict) or not isinstance(row.get('query'), str) or not row['query'].strip():
-                raise ValueError(f'{label} 第 {count} 行：缺少非空 query 字符串')
-            if kind == 'multiple_choice':
-                choices = row.get('choices')
-                gold = row.get('gold')
-                if (not isinstance(choices, list) or len(choices) < 2 or
-                        any(not isinstance(c, str) or not c.strip() for c in choices) or
-                        type(gold) is not int or not 0 <= gold < len(choices)):
-                    raise ValueError(f'{label} 第 {count} 行：choices 必须是至少两个选项的字符串数组，gold 为有效的零起始整数索引')
-            elif not isinstance(row.get('answer'), (str, int, float)) or isinstance(row.get('answer'), bool) or str(row['answer']).strip() == '':
-                raise ValueError(f'{label} 第 {count} 行：生成题需要 answer')
+    for count, row in enumerate(read_records(path), 1):
+        try:
+            normalize_record(row, task)
+        except ValueError as exc:
+            raise ValueError(f'{label} 第 {count} 条：{exc}') from None
     fewshot = task.get('num_fewshot', [0])
     if not count or not isinstance(fewshot, list) or not fewshot or type(fewshot[0]) is not int or not 0 <= fewshot[0] < count:
         raise ValueError(f'{label}：数据为空或样本数不足以满足 num_fewshot')

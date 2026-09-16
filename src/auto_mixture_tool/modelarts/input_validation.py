@@ -104,7 +104,7 @@ def validate_resource(kind, uri):
     if kind == 'evaluation':
         from .evaluation_job import validate_package
         labels = validate_package(root)
-        return {'ready': True, 'tasks': labels, 'message': '评测包格式和全部记录检查通过：' + '、'.join(labels)}
+        return {'ready': True, 'tasks': labels, 'message': '已识别可适配的评测任务：' + '、'.join(labels) + '。运行时自动适配字段；未提供任务配置时默认零样本评测，不代表官方评测协议。'}
     raise ValueError('未知校验类型')
 
 

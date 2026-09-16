@@ -51,9 +51,9 @@ sampling_bounds:
 
 ## OBS 评测包
 
-在“评测配置 → OBS 路径 → OBS 评测包”增加名称和目录地址，点击“示例”查看完整约定。可先点“校验数据”；正式提交时再次检查，修改地址后旧结果失效。
+在“评测配置 → OBS 路径 → OBS 评测数据”增加名称和目录地址。工具识别 JSON、JSONL、CSV、Parquet 数据，或保留已有 NanoChat 包。自动适配不会修改 OBS 原始文件；运行时在容器临时目录生成评测器可读取的副本。失败时说明文件、记录及具体原因，而不是强制要求所有题目都使用 query 字段。
 
-完整最小示例：`examples/evaluation/basic/`。上传该文件夹的全部内容，OBS 地址指向包含 `core.yaml` 的目录。
+可选配置示例：`examples/evaluation/basic/`。普通选择题数据无须手工创建下面这些文件；需要明确任务类型、few-shot、答案提取器或参考基线时，仍可以提供配置。
 
 ```text
 basic/
@@ -62,9 +62,12 @@ basic/
   eval_data/science.jsonl
 ```
 
-支持按约定整理的文本多选题，包括 MMLU、CMMLU、C-Eval、ARC、GPQA 等；选择题记录使用 `query`、`choices`、零起始整数 `gold`。生成题仅支持当前的 `gsm8k`、`math` 答案提取器，记录需有 `query`、`answer`。不是任意原始评测数据直接上传就可执行。
+- 题目字段可为 query、question、problem、prompt、input；选择题识别 choices/options 数组、label/text 结构或 A/B/C/D 列，答案支持零起始整数、选项标签及唯一的选项文本。
+- 生成题识别 question/problem 等题目字段及 answer/final_answer/target。无配置时根据 gsm8k、math、math500 文件名匹配现有答案提取器；其他开放问答无法确定评分规则时明确提示，不擅自套用数学评分器。仅有 solution 而无最终答案暂不自动提取。
+- 保留 NanoChat 原有 schema（context_options、continuation、gold）与 language_modeling（context、continuation）任务支持。
+- 未提供配置时采用零样本评测；未提供基线时，选择题按均匀随机选项计算基线，生成/续写题用 0（不调整原始正确率）。这不代表官方评测协议。报告目录的 evaluation_adaptation.json 记录该适配政策；正式对比应统一任务与参数。
 
-不支持的任务类型、无效答案索引、空数据、路径越界、缺少基线文件等会报错并禁止提交。HumanEval / MBPP 代码执行、多模态、BLEU / ROUGE 等需额外评测器，当前不会伪装成可执行任务。
+不能识别的问题/答案、编号有歧义、空数据、路径越界、无法确定的评分规则等会给出原因。不支持的 HumanEval / MBPP 代码执行、多模态、BLEU / ROUGE 或大模型裁判需要对应评测器，不能只靠上传数据解决。当前自动识别并不代表所有业界评测集均完成真机验证；实际运行还取决于挂载的 NanoChat 版本是否具备所需评测函数。
 
 ## 命令联动
 

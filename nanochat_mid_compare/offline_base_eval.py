@@ -7,6 +7,21 @@ import importlib
 import sys
 from pathlib import Path
 from nanochat_mid_compare.eval_assets import validate_assets
+from nanochat_mid_compare.eval_formats import normalize_record
+from functools import wraps
+
+
+def adapt_evaluator(function):
+    @wraps(function)
+    def evaluate(model, tokenizer, data, device, task_meta, *args, **kwargs):
+        records = []
+        for index, row in enumerate(data, 1):
+            try:
+                records.append(normalize_record(row, task_meta))
+            except ValueError as exc:
+                raise ValueError(f"{task_meta.get('label', '评测集')} 第 {index} 条不能评测：{exc}") from None
+        return function(model, tokenizer, records, device, task_meta, *args, **kwargs)
+    return evaluate
 
 
 def prepare_tokenizer_runtime():
@@ -27,6 +42,13 @@ def install_offline_eval():
     os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
     prepare_tokenizer_runtime()
     from scripts import base_eval
+    # Adapt both checks and actual evaluator inputs, not just the preflight.
+    for name in ('evaluate_task', 'evaluate_generation_task'):
+        function = getattr(base_eval, name, None)
+        if callable(function) and not getattr(function, '_amt_adapted', False):
+            wrapper = adapt_evaluator(function)
+            wrapper._amt_adapted = True
+            setattr(base_eval, name, wrapper)
 
     def use_mounted_assets(benchmarks="all"):
         base_dir = os.environ.get("NANOCHAT_BASE_DIR")
