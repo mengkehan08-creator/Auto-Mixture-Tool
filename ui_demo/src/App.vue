@@ -98,10 +98,10 @@ function resetExperiment() {
       <div v-show="page === 'create'">
       <p v-if="copyNotice" class="path-preview">{{ copyNotice }}</p>
 
-      <MixingStrategyStep v-if="currentStep === 1" :strategies="strategies" :runtime="runtime" :training="training" />
-      <TrainingConfigStep v-else-if="currentStep === 2" :config="training" :runtime="runtime" :strategies="strategies" />
+      <MixingStrategyStep v-show="currentStep === 1" :key="formVersion" :strategies="strategies" :runtime="runtime" />
+      <TrainingConfigStep v-if="currentStep === 2" :config="training" :runtime="runtime" :strategies="strategies" />
       <EvaluationConfigStep v-else-if="currentStep === 3" :config="evaluation" :training="training" :runtime="runtime" :strategies="strategies" :model-output="training.outputObsUri ? `${training.outputObsUri.replace(/\/$/, '')}/runs/{实验名称}/` : `${runtime.outputRootObsUri.replace(/\/$/, '')}/runs/{实验名称}/training/checkpoints/`" />
-      <ReviewSubmitStep v-else :key="formVersion" :strategies="strategies" :training="training" :evaluation="evaluation" :runtime="runtime" @created="openJob" />
+      <ReviewSubmitStep v-else-if="currentStep === 4" :key="formVersion" :strategies="strategies" :training="training" :evaluation="evaluation" :runtime="runtime" @created="openJob" />
 
       <footer class="page-actions">
         <button v-if="currentStep > 1" class="button secondary" type="button" @click="navigate('create', currentStep - 1)"><ChevronLeft :size="16" />上一步</button>

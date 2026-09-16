@@ -36,8 +36,20 @@ def commands(payload: dict):
 @app.post('/api/v1/resources/validate')
 def check(payload: dict):
     try:
+        if payload['kind'] == 'dataset':
+            from auto_mixture_tool.modelarts.dataset_checks import start_dataset_check
+            return start_dataset_check(payload['uri'], payload.get('force', False))
         return validate_resource(payload['kind'], payload['uri'])
     except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get('/api/v1/resources/checks/{check_id}')
+def dataset_check_status(check_id: str):
+    from auto_mixture_tool.modelarts.dataset_checks import get_dataset_check
+    try:
+        return get_dataset_check(check_id)
+    except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 

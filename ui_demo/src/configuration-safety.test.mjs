@@ -50,3 +50,19 @@ test('validation is invalidated when the address changes and stale responses are
   assert.match(check, /watch\(\(\) => props.uri/)
   assert.match(check, /current === version/)
 })
+
+test('input auto-check is polled and only successful checks allow submission', () => {
+  const check = source('./components/ResourceCheck.vue')
+  assert.match(check, /setTimeout\(\(\) => check\(false\), 800\)/)
+  assert.match(check, /resources\/checks\//)
+  assert.doesNotMatch(check, /props.kind === 'evaluation' &&/)
+  assert.match(source('./components/steps/ReviewSubmitStep.vue'), /if \(!props.runtime.datasetEstimate\?\.ready\) throw/)
+  assert.match(source('./App.vue'), /MixingStrategyStep v-show=/)
+})
+
+test('dataset volume and sampling estimate are independent of training budget', () => {
+  const data = source('./components/steps/MixingStrategyStep.vue')
+  assert.match(data, /输入数据集预计 Token 数/)
+  assert.doesNotMatch(data, /training.tokenBudget|SamplingRisk|训练 Token 预算（与训练配置同步）/)
+  assert.match(source('./components/strategy/QuadMixConfig.vue'), /预计最终采样 Token 数/)
+})

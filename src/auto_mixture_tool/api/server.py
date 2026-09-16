@@ -88,14 +88,27 @@ class ModelComparisonRequest(BaseModel):
 class ResourceValidationRequest(BaseModel):
     kind: str
     uri: str = Field(max_length=2048)
+    force: bool = False
 
 
 @app.post('/api/v1/resources/validate')
 def validate_resource_request(payload: ResourceValidationRequest):
     from auto_mixture_tool.modelarts.input_validation import validate_resource
     try:
+        if payload.kind == 'dataset':
+            from auto_mixture_tool.modelarts.dataset_checks import start_dataset_check
+            return start_dataset_check(payload.uri, payload.force)
         return validate_resource(payload.kind, payload.uri)
     except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get('/api/v1/resources/checks/{check_id}')
+def dataset_check_status(check_id: str):
+    from auto_mixture_tool.modelarts.dataset_checks import get_dataset_check
+    try:
+        return get_dataset_check(check_id)
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

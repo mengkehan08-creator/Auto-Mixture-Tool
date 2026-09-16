@@ -153,6 +153,7 @@ async function checkConfiguration() {
   error.value = ''
   validation.value = null
   try {
+    if (!props.runtime.datasetEstimate?.ready) throw new Error('输入数据尚未自动校验通过，请返回配比配置等待校验完成或查看失败原因。')
     if (commandsPending.value) throw new Error('启动命令正在更新，请稍后检查或提交。')
     if (commandError.value) throw new Error(commandError.value)
     if (!props.runtime.commands) throw new Error('启动命令尚未加载，请点击重新加载默认命令。')
@@ -256,9 +257,9 @@ onBeforeUnmount(() => { window.clearInterval(timer); clearTimeout(commandTimer);
     <p v-if="validation?.ready" class="success-message" role="status">配置检查通过。{{ validation.message }}</p>
     <div class="submission-actions" :aria-busy="status === 'loading'">
       <button class="button secondary" type="button" :disabled="status === 'loading'" @click="checkConfiguration">检查配置（不创建作业）</button>
-      <button class="button submit-button" type="button" :disabled="status === 'loading' || (status === 'success' && submittedBody === JSON.stringify(requestBody()))" @click="submit">
+      <button class="button submit-button" type="button" :disabled="!runtime.datasetEstimate?.ready || status === 'loading' || (status === 'success' && submittedBody === JSON.stringify(requestBody()))" @click="submit">
       <LoaderCircle v-if="status === 'loading'" class="spin" :size="18" /><Rocket v-else :size="18" />
-      {{ status === 'loading' ? '正在检查并提交实验…' : '提交到 ModelArts' }}
+      {{ status === 'loading' ? '正在检查并提交实验…' : !runtime.datasetEstimate?.ready ? '等待输入数据校验通过' : '提交到 ModelArts' }}
       </button>
     </div>
     <p v-if="error" class="error-message" role="alert">{{ error }}</p>

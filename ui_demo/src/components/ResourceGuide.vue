@@ -51,7 +51,7 @@ function download(name, content) {
     <section class="guide-page" role="dialog" aria-modal="true" aria-labelledby="guide-title" tabindex="-1">
       <header><div class="guide-heading"><BookOpen :size="20" /><h2 id="guide-title">{{ titles[kind] }}</h2></div><button type="button" class="button secondary" autofocus @click="$emit('close')">返回配置</button></header>
       <div class="guide-content">
-      <template v-if="kind === 'dataset'"><p>输入为 Parquet 目录。领域列 domain、正文 text、整数长度 char_count，以及五个数值质量分。领域编码须与 schema 的 domain_names 顺序一致。</p><p>校验全部分片的字段类型，并检查每片前 1000 条记录。原始 JSON 应先转换，校验按钮不会自动修改数据。</p><pre>{{ dataScript }}</pre><button class="button primary" @click="download('quadmix_parquet.py', dataScript)">下载数据示例脚本</button></template>
+      <template v-if="kind === 'dataset'"><p>输入为 Parquet 目录。领域列 domain、正文 text、整数长度 char_count，以及五个数值质量分。领域编码须与 schema 的 domain_names 顺序一致。</p><p>填写地址后自动校验全部分片的字段类型，每片随机抽查 3 条，不足 3 条则全部检查。数据量按抽样文本长度及分片文档数估算，不代表全文合格或精确分词计数。原始 JSON 应先转换，校验不会修改数据。同一地址内容更新后请点击重新校验。</p><pre>{{ dataScript }}</pre><button class="button primary" @click="download('quadmix_parquet.py', dataScript)">下载数据示例脚本</button></template>
       <template v-else-if="kind === 'evaluation'">
         <p>支持按下述统一格式整理的文本选择题（如 MMLU、CMMLU、C-Eval、ARC、GPQA），以及使用现有 gsm8k / math 答案提取器的生成题。不能仅凭评测集名称判断兼容性。</p>
         <p>未经转换的原始数据、HumanEval / MBPP 代码执行、多模态、BLEU / ROUGE 等任务暂不支持。提交前读取挂载目录，检查任务定义、基线和全部 JSONL 记录；无法读取或不兼容时不提交作业。</p>

@@ -122,19 +122,34 @@ def test_parquet_schema_and_values(tmp_path, monkeypatch):
         validate_resource('dataset', 'obs://bucket/prefix/data/')
 
 
-def test_volume_reads_length_column_beyond_content_sample(tmp_path):
+def test_volume_uses_three_random_rows_per_file(tmp_path):
     pa = pytest.importorskip('pyarrow')
     import pyarrow.parquet as pq
     from auto_mixture_tool.modelarts.input_validation import QUALITY, validate_parquet
     row = {'domain': '数学', 'text': 'test', 'char_count': 4, **{k: .5 for k in QUALITY}}
-    rows = [row] * 1000 + [{**row, 'char_count': 400}]
-    pq.write_table(pa.Table.from_pylist(rows), tmp_path / 'part.parquet')
-    result = validate_parquet(tmp_path)
-    assert result['rows'] == 1001 and result['checked_rows'] == 1000
-    assert result['total_chars'] == 4400 and result['estimated_tokens'] == 1100
+    rows = [row] * 1000 + [{**row, 'text': 'x' * 400, 'char_count': 400}]
+    pq.write_table(pa.Table.from_pylist(rows), tmp_path / 'part.parquet', row_group_size=100)
+    with patch('auto_mixture_tool.modelarts.input_validation.random.SystemRandom.sample', return_value=[0, 505, 1000]) as pick:
+        result = validate_parquet(tmp_path)
+    pick.assert_called_once_with(range(1001), 3)
+    assert result['rows'] == 1001 and result['checked_rows'] == 3
+    assert result['estimated_chars'] == 1001 * 136 and result['estimated_tokens'] == 1001 * 34
     assert result['token_is_estimate'] is True
     assert result['size_bytes'] == (tmp_path / 'part.parquet').stat().st_size
     rows[-1] = {**row, 'char_count': -1}
     pq.write_table(pa.Table.from_pylist(rows), tmp_path / 'part.parquet')
-    with pytest.raises(ValueError, match='char_count'):
-        validate_parquet(tmp_path)
+    with patch('auto_mixture_tool.modelarts.input_validation.random.SystemRandom.sample', return_value=[0, 505, 1000]):
+        with pytest.raises(ValueError, match='char_count'):
+            validate_parquet(tmp_path)
+
+
+def test_each_file_samples_three_or_all_when_short(tmp_path):
+    pa = pytest.importorskip('pyarrow')
+    import pyarrow.parquet as pq
+    from auto_mixture_tool.modelarts.input_validation import QUALITY, validate_parquet
+    row = {'domain': '数学', 'text': 'test', 'char_count': 4, **{k: .5 for k in QUALITY}}
+    pq.write_table(pa.Table.from_pylist([row] * 2), tmp_path / 'short.parquet')
+    pq.write_table(pa.Table.from_pylist([row] * 20), tmp_path / 'long.parquet', row_group_size=4)
+    result = validate_parquet(tmp_path)
+    assert result['files'] == 2 and result['checked_rows'] == 5
+    assert result['rows'] == 22 and result['estimated_tokens'] == 22

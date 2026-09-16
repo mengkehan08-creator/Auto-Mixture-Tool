@@ -4,14 +4,12 @@ import StrategyCard from '../strategy/StrategyCard.vue'
 import { ref } from 'vue'
 import ResourceGuide from '../ResourceGuide.vue'
 import ResourceCheck from '../ResourceCheck.vue'
-import SamplingRisk from '../SamplingRisk.vue'
 import { formatTokens } from '../../budget-estimates'
 const showGuide = ref(false)
 
 const props = defineProps({
   strategies: { type: Array, required: true },
   runtime: { type: Object, required: true },
-  training: { type: Object, required: true },
 })
 
 function changeType(index, type) {
@@ -35,11 +33,9 @@ function changeType(index, type) {
       </div>
       <ResourceCheck kind="dataset" :uri="runtime.inputDataObsUri" @checked="runtime.datasetEstimate = $event" />
       <div v-if="runtime.datasetEstimate?.ready" class="path-preview">
-        数据文件大小：{{ (runtime.datasetEstimate.size_bytes / 1024 ** 3).toFixed(3) }} GiB · 预计输入 Token：{{ formatTokens(runtime.datasetEstimate.estimated_tokens) }}
-        <br />估算使用全量字符数 ÷ 4；中文、代码等文本与实际分词可能差异较大。此值不是精确计数，也不是最终采样量。
+        数据文件大小：{{ (runtime.datasetEstimate.size_bytes / 1024 ** 3).toFixed(3) }} GiB · 输入数据集预计 Token 数：{{ formatTokens(runtime.datasetEstimate.estimated_tokens) }}
+        <br />按每片随机至多 3 条文本的平均长度 × 该片文档数 ÷ 4 汇总估算，与训练预算无关。抽样量较小，中文、代码及长度差异大的数据可能偏差明显。
       </div>
-      <label class="field" style="margin-top: 18px"><span>训练 Token 预算（与训练配置同步）</span><input v-model.number="training.tokenBudget" type="number" min="1" /></label>
-      <SamplingRisk v-for="strategy in strategies.filter(s => s.type === 'quadmix')" :key="strategy.id" :strategy="strategy" :budget="training.tokenBudget" :dataset-tokens="runtime.datasetEstimate?.estimated_tokens" />
       <p class="path-preview">输出预览：<code>{{ runtime.outputRootObsUri.replace(/\/$/, '') }}/runs/实验名-时间-编号/strategies/策略编号/</code>，各策略独立保存配比、采样和训练日志。</p>
     </div>
 

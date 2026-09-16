@@ -24,7 +24,7 @@ const scenario = computed(() => sampleScenario(props.datasetTokens, props.modelV
     <p v-if="!validBounds(modelValue.samplingBounds)" class="error-message">范围无效：上下限须为有限非负数，下限不能大于上限；ω、ε、η 上限不能超过 1。提交时会再次校验。</p>
   </div>
   <aside class="sampling-reference"><div><span>最终采样 Token</span><strong>实际值待统计</strong></div><p>以本次最终输出文本经训练 Tokenizer 统计的 Token 总数为准，重复入选的文本也计入。</p></aside>
-  <div class="sampling-estimate" role="status"><template v-if="scenario"><strong>参数范围中点情景：约 {{ formatTokens(scenario.midpoint) }} Token</strong><p>范围端点情景：{{ formatTokens(scenario.low) }} ～ {{ formatTokens(scenario.high) }} Token。修改范围后同步更新。</p></template><p v-else>先校验输入数据，并填写有效参数范围，即可估算这些范围下的选取量。</p><small>按输入 Token 估算量与采样函数计算，假设领域内 Token 排名连续。不是回归搜索预测、置信区间或数量保证；未扣除后续过滤与裁剪，重复文档计入。改变质量权重或范围后，搜索结果也可能改变。</small></div>
+  <div class="sampling-estimate" role="status"><template v-if="scenario"><strong>预计最终采样 Token 数：约 {{ formatTokens(scenario.midpoint) }}</strong><p>按参数范围中点计算；范围端点情景：{{ formatTokens(scenario.low) }} ～ {{ formatTokens(scenario.high) }} Token。修改 ω、ε、λ、η 后自动更新，与训练预算无关。</p></template><p v-else>输入数据自动校验通过、参数范围有效后，显示预计最终采样 Token 数。</p><small>按输入 Token 抽样估算量与采样函数计算，假设领域内 Token 排名连续。不是回归搜索预测、置信区间或数量保证；未扣除后续过滤与裁剪，重复文档计入。改变质量权重或范围后，搜索结果也可能改变。</small></div>
 </template>
 <style scoped>
 .sampling-reference { display: flex; align-items: center; gap: 24px; padding: 16px 18px; margin-top: 22px; border: 1px solid #dce7f3; border-radius: 12px; background: #f2f7fc; }

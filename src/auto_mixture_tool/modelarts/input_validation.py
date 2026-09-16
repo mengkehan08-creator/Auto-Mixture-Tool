@@ -1,6 +1,7 @@
 """Read-only, fail-closed checks of OBS resources mapped to the local mount."""
 from pathlib import Path
 import math
+import random
 from urllib.parse import urlsplit
 
 from .model_comparison import mounted_metadata_path
@@ -23,14 +24,14 @@ def validate_parquet(root):
     try:
         import pyarrow as pa
         import pyarrow.parquet as pq
-        import pyarrow.compute as pc
     except ImportError:
         raise ValueError('数据校验需要开发环境安装 pyarrow；未完成校验，不能提交作业') from None
     root = Path(root).resolve()
     files = sorted(root.rglob('*.parquet'))
     if not files:
         raise ValueError('数据格式不符合算法要求：目录中没有 Parquet 分片')
-    rows = checked = total_chars = size_bytes = 0
+    rows = checked = size_bytes = 0
+    estimated_chars = 0.0
     for file in files:
         if not file.resolve().is_relative_to(root):
             raise ValueError('数据路径不能超出挂载目录')
@@ -54,16 +55,29 @@ def validate_parquet(root):
                 raise ValueError('domain 必须是领域名称或整数编码')
             if not (pa.types.is_string(schema.field('text').type) or pa.types.is_large_string(schema.field('text').type)):
                 raise ValueError('text 必须是字符串列')
-            rows += parquet.metadata.num_rows
+            count = parquet.metadata.num_rows
+            if not count:
+                raise ValueError('数据分片为空')
+            rows += count
             size_bytes += file.stat().st_size
-            # Scan only the compact length column; do not load/tokenize all text.
-            for lengths in parquet.iter_batches(batch_size=65536, columns=['char_count']):
-                column = lengths.column(0)
-                if column.null_count or (len(column) and pc.min(column).as_py() <= 0):
-                    raise ValueError('char_count 全量检查发现缺失或非正整数')
-                total_chars += int(pc.sum(pc.cast(column, pa.decimal128(38, 0))).as_py() or 0)
-            batch = next(parquet.iter_batches(batch_size=1000, columns=list(required)), None)
-            for row in batch.to_pylist() if batch is not None else []:
+            # Uniform document sampling without replacement, across the whole file.
+            # Parquet still needs to decode the row groups containing sampled rows.
+            selected = sorted(random.SystemRandom().sample(range(count), min(3, count)))
+            sample = []
+            offset = 0
+            for group in range(parquet.metadata.num_row_groups):
+                group_count = parquet.metadata.row_group(group).num_rows
+                positions = [i - offset for i in selected if offset <= i < offset + group_count]
+                if positions:
+                    batch_offset = 0
+                    for batch in parquet.iter_batches(batch_size=1024, row_groups=[group], columns=list(required)):
+                        sample.extend(batch.slice(i - batch_offset, 1).to_pylist()[0]
+                                      for i in positions if batch_offset <= i < batch_offset + len(batch))
+                        batch_offset += len(batch)
+                        if batch_offset > positions[-1]:
+                            break
+                offset += group_count
+            for row in sample:
                 if not row['text'] or not row['text'].strip() or row['domain'] is None or str(row['domain']).strip() == '':
                     raise ValueError('text/domain 不能为空')
                 if row['char_count'] is None or row['char_count'] <= 0:
@@ -71,14 +85,16 @@ def validate_parquet(root):
                 if any(row[k] is None or not math.isfinite(row[k]) for k in QUALITY):
                     raise ValueError('质量分不能为缺失值、NaN 或无穷大')
                 checked += 1
+            estimated_chars += count * sum(len(row['text']) for row in sample) / len(sample)
         except Exception as exc:
             raise ValueError(f'数据格式不符合算法要求：{file.name}：{exc}') from None
     if not rows:
         raise ValueError('数据格式不符合算法要求：数据集为空')
     return {'ready': True, 'files': len(files), 'rows': rows, 'checked_rows': checked,
-            'size_bytes': size_bytes, 'total_chars': total_chars,
-            'estimated_tokens': total_chars / 4, 'token_method': 'char_count / 4', 'token_is_estimate': True,
-            'message': f'共 {len(files)} 个分片、{rows:,} 篇文档；预计 {total_chars / 4:,.0f} Token（全量 char_count ÷ 4，非训练 Tokenizer 精确计数）。字段类型全部通过，内容抽查 {checked} 条，不代表全文内容已完成校验。'}
+            'size_bytes': size_bytes, 'estimated_chars': estimated_chars,
+            'estimated_tokens': estimated_chars / 4,
+            'token_method': 'sum(file_rows * sampled_mean_text_length) / 4', 'token_is_estimate': True,
+            'message': f'共 {len(files)} 个分片、{rows:,} 篇文档；每片随机抽查至多 3 条，共 {checked} 条通过。预计 {estimated_chars / 4:,.0f} Token（按各片抽样平均文本长度 × 文档数 ÷ 4 估算），不是全文校验或精确分词计数。'}
 
 
 def validate_resource(kind, uri):
@@ -95,7 +111,8 @@ def validate_resource(kind, uri):
 def validate_workflow_resources(config):
     retry_key = config.get('job_reuse', {}).get('key', '')
     if not config.get('reuse') and not retry_key.startswith(('training-', 'evaluation')):
-        validate_resource('dataset', config['input_data_obs_uri'])
+        from .dataset_checks import require_dataset_check
+        require_dataset_check(config['input_data_obs_uri'])
     settings = config.get('evaluation', {})
     if settings.get('datasets'):
         from nanochat_mid_compare.eval_assets import task_definitions, validate_task_records
