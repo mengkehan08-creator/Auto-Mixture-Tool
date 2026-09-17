@@ -10,7 +10,7 @@ import ResourceGuide from '../ResourceGuide.vue'
 const showGuide = ref(false)
 
 defineProps({ strategy: { type: Object, required: true }, index: Number, removable: Boolean, datasetTokens: Number })
-const emit = defineEmits(['remove', 'change-type'])
+const emit = defineEmits(['remove', 'change-type', 'batch'])
 </script>
 
 <template>
@@ -30,7 +30,7 @@ const emit = defineEmits(['remove', 'change-type'])
       <label class="field"><span>配比任务优先级</span><select v-model.number="strategy.mixingPriority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
     </div>
     <small v-if="strategy.type !== 'quadmix'">人工和随机策略目前由首节点完成采样，建议 1 节点；各策略作业可并行运行。</small>
-    <QuadMixConfig v-if="strategy.type === 'quadmix'" :model-value="strategy" :dataset-tokens="datasetTokens" />
+    <QuadMixConfig v-if="strategy.type === 'quadmix'" :model-value="strategy" :dataset-tokens="datasetTokens" @batch="emit('batch')" />
     <ManualMixConfig v-else-if="strategy.type === 'manual'" :model-value="strategy" />
     <RandomMixConfig v-else :model-value="strategy" />
     <ResourceGuide v-if="showGuide" :kind="strategy.type" @close="showGuide = false" />

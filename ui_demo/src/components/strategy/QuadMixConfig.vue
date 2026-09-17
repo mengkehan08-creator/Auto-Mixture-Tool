@@ -1,13 +1,16 @@
 <script setup>
 import { strategyNameHint } from '../../strategy-names'
 import { computed, watchEffect } from 'vue'
+import { Layers } from '@lucide/vue'
 import { defaultSamplingBounds, samplingFields, validBounds, sampleScenario, formatTokens, proxyTrainingTokens } from '../../budget-estimates'
 const props = defineProps({ modelValue: { type: Object, required: true }, datasetTokens: Number })
+defineEmits(['batch'])
 watchEffect(() => { if (!props.modelValue.samplingBounds) props.modelValue.samplingBounds = defaultSamplingBounds() })
 const scenario = computed(() => sampleScenario(props.datasetTokens, props.modelValue.samplingBounds))
 </script>
 
 <template>
+  <div class="batch-entry"><div><strong>控制变量批量配置</strong><span>一次设置多组实验数、步数或采样参数，预览后批量生成策略。</span></div><button type="button" class="button secondary" @click="$emit('batch')"><Layers :size="16" />批量配置</button></div>
   <div class="form-grid three-cols">
     <label class="field"><span>策略名称（可自定义）</span><input v-model="modelValue.name" :placeholder="strategyNameHint(modelValue)" /></label>
     <label class="field"><span>代理实验数</span><input v-model.number="modelValue.proxyExperiments" type="number" min="1" /><small :class="{ 'few-experiments': modelValue.proxyExperiments < 50 }">建议不少于 50 个。过少可能导致回归无法区分配比、结果不稳定或重复；50 不是效果保证，还需检查验证表现。</small></label>
@@ -27,6 +30,7 @@ const scenario = computed(() => sampleScenario(props.datasetTokens, props.modelV
   <div class="sampling-estimate" role="status"><template v-if="scenario"><strong>预计最终采样 Token 数：约 {{ formatTokens(scenario.midpoint) }}</strong><p>按参数范围中点计算；范围端点情景：{{ formatTokens(scenario.low) }} ～ {{ formatTokens(scenario.high) }} Token。修改 ω、ε、λ、η 后自动更新，与训练预算无关。</p></template><p v-else>输入数据自动校验通过、参数范围有效后，显示预计最终采样 Token 数。</p><small>按输入 Token 抽样估算量与采样函数计算，假设领域内 Token 排名连续。不是回归搜索预测、置信区间或数量保证；未扣除后续过滤与裁剪，重复文档计入。改变质量权重或范围后，搜索结果也可能改变。</small></div>
 </template>
 <style scoped>
+.batch-entry { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding: 16px 18px; margin-bottom: 22px; border: 1px solid #dce6fa; border-radius: 12px; background: linear-gradient(110deg, #eff4ff, #fafcff); } .batch-entry > div { display: grid; gap: 6px; } .batch-entry strong { font-size: 14px; color: #36558e; } .batch-entry span { font-size: 12px; color: #7184a0; } .batch-entry .button { flex-shrink: 0; }
 .sampling-reference { display: flex; align-items: center; gap: 24px; padding: 16px 18px; margin-top: 22px; border: 1px solid #dce7f3; border-radius: 12px; background: #f2f7fc; }
 .sampling-reference > div { flex: 0 0 auto; display: grid; gap: 3px; }
 .sampling-reference span { color: #647792; font-size: 12px; }

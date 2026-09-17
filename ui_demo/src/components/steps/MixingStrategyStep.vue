@@ -1,11 +1,14 @@
 <script setup>
 import { createStrategy } from '../../data/defaults'
 import StrategyCard from '../strategy/StrategyCard.vue'
+import QuadMixBatchDialog from '../strategy/QuadMixBatchDialog.vue'
 import { ref } from 'vue'
 import ResourceGuide from '../ResourceGuide.vue'
 import ResourceCheck from '../ResourceCheck.vue'
 import { formatTokens } from '../../budget-estimates'
 const showGuide = ref(false)
+const batchSource = ref(null)
+const batchNotice = ref('')
 
 const props = defineProps({
   strategies: { type: Array, required: true },
@@ -14,6 +17,15 @@ const props = defineProps({
 
 function changeType(index, type) {
   props.strategies.splice(index, 1, createStrategy(type))
+}
+
+function applyBatch({ strategies, placement }) {
+  const index = props.strategies.findIndex(s => s.id === batchSource.value.id)
+  if (index < 0) return
+  if (placement === 'replace') props.strategies.splice(index, 1, ...strategies)
+  else props.strategies.push(...strategies)
+  batchNotice.value = `已${placement === 'replace' ? '替换当前策略，生成' : '追加'} ${strategies.length} 项 QuaDMix 策略，共 ${strategies.length} 个配比作业和 ${strategies.length} 个对应训练作业。尚未提交。`
+  batchSource.value = null
 }
 
 </script>
@@ -39,7 +51,7 @@ function changeType(index, type) {
       <p class="path-preview">输出预览：<code>{{ runtime.outputRootObsUri.replace(/\/$/, '') }}/runs/实验名-时间-编号/strategies/策略编号/</code>，各策略独立保存配比、采样和训练日志。</p>
     </div>
 
-
+    <p v-if="batchNotice" class="path-preview" role="status">{{ batchNotice }}</p>
     <StrategyCard
       v-for="(strategy, index) in strategies"
       :key="strategy.id"
@@ -49,7 +61,9 @@ function changeType(index, type) {
       :dataset-tokens="runtime.datasetEstimate?.estimated_tokens"
       @remove="strategies.splice(index, 1)"
       @change-type="changeType(index, $event)"
+      @batch="batchSource = strategy"
     />
     <ResourceGuide v-if="showGuide" kind="dataset" @close="showGuide = false" />
+    <QuadMixBatchDialog v-if="batchSource" :source="batchSource" @close="batchSource = null" @apply="applyBatch" />
   </section>
 </template>
