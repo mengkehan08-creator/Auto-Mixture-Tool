@@ -22,5 +22,9 @@ test('batch dialog renders readable preview, inherited settings and explicit con
     assert.equal((html.match(/aria-label="选择组合 /g) || []).length, 15)
     assert.match(html, /搜索下限/)
     assert.match(html, /固定值/)
+    assert.match(html, /本批次节点配置/)
+    assert.match(html, /配比 2 节点 · 训练 2 节点/)
+    assert.equal((html.match(/type="number" min="1" max="16"/g) || []).length, 1)
+    assert.match(html, /使用统一默认值（2 节点）/)
   } finally { await server.close() }
 })

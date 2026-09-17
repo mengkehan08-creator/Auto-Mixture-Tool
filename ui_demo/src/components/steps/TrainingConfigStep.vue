@@ -1,13 +1,15 @@
 <script setup>
-import { strategyLabel, trainingNameHint } from '../../strategy-names'
-import SamplingRisk from '../SamplingRisk.vue'
-defineProps({ config: { type: Object, required: true }, runtime: { type: Object, required: true }, strategies: { type: Array, default: () => [] } })
+import { computed } from 'vue'
+import { strategyLabel } from '../../strategy-names'
+import SamplingRiskSummary from '../SamplingRiskSummary.vue'
+const props = defineProps({ config: { type: Object, required: true }, runtime: { type: Object, required: true }, strategies: { type: Array, default: () => [] } })
+const nodeOverrides = computed(() => props.strategies.filter(s => s.trainingNodesOverride != null))
 
 </script>
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>训练配置</h2><p>全部策略共用训练框架、模型和训练参数；每个作业独立设置名称、节点和启动命令。</p></div></div>
+    <div class="section-title-row"><div><h2>训练配置</h2><p>统一设置训练参数、默认节点数和优先级；批量策略可单独覆盖节点数，作业与模型名称自动生成。</p></div></div>
     <div class="config-block">
       <h3>统一训练参数</h3>
       <div class="job-framework">
@@ -20,19 +22,12 @@ defineProps({ config: { type: Object, required: true }, runtime: { type: Object,
       <div class="form-grid two-cols">
         <label class="field"><span>训练 Token 预算</span><input v-model.number="config.tokenBudget" type="number" min="1" /><small>各策略使用同一预算，训练步数自动计算。</small></label>
         <label class="field"><span>每节点 NPU 数</span><input v-model.number="config.devicesPerNode" type="number" min="1" max="8" /></label>
+        <label class="field"><span>默认训练节点数</span><input v-model.number="config.nodes" type="number" min="1" max="16" step="1" /><small>应用到未单独设置节点数的策略。</small></label>
+        <label class="field"><span>训练任务优先级</span><select v-model.number="config.priority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select><small>本次全部训练作业统一使用。</small></label>
       </div>
-      <SamplingRisk v-for="strategy in strategies.filter(s => s.type === 'quadmix')" :key="strategy.id" :strategy="strategy" :budget="config.tokenBudget" :dataset-tokens="runtime.datasetEstimate?.estimated_tokens" />
-    </div>
-    <div class="config-block"><h3>训练作业安排</h3>
-      <div v-for="strategy in strategies" :key="strategy.id" class="training-schedule">
-      <h4>{{ strategyLabel(strategy) }}</h4>
-      <div class="form-grid two-cols">
-        <label class="field"><span>训练作业名称（可自定义）</span><textarea rows="2" v-model="strategy.trainingJobName" maxlength="64" :placeholder="trainingNameHint(strategy)" ></textarea></label>
-        <label class="field"><span>保存模型名称</span><textarea rows="2" v-model="strategy.modelName" maxlength="128" placeholder="留空使用策略名及实验时间" ></textarea></label>
-        <label class="field"><span>训练节点数</span><input v-model.number="strategy.trainingNodes" type="number" min="1" max="16" /></label>
-        <label class="field"><span>训练任务优先级</span><select v-model.number="strategy.trainingPriority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
-      </div>
-      </div>
+      <p class="training-name-note">训练作业与模型按策略参数和提交时间自动命名，具体名称规则可在任务配置中查看。</p>
+      <details v-if="nodeOverrides.length" class="node-overrides"><summary>{{ nodeOverrides.length }} 项策略使用单独节点数，不随默认值变化</summary><ul><li v-for="strategy in nodeOverrides" :key="strategy.id"><span>{{ strategyLabel(strategy) }} · {{ strategy.trainingNodesOverride }} 节点</span><button type="button" class="button secondary" @click="strategy.trainingNodesOverride = null">恢复统一值</button></li></ul></details>
+      <SamplingRiskSummary :strategies="strategies" :budget="config.tokenBudget" :dataset-tokens="runtime.datasetEstimate?.estimated_tokens" />
     </div>
 
     <div class="config-block">
@@ -56,6 +51,7 @@ defineProps({ config: { type: Object, required: true }, runtime: { type: Object,
 </template>
 
 <style scoped>
+.training-name-note { margin: 14px 0 0; color: #6a7e9a; font-size: 12px; } .node-overrides { margin-top: 14px; padding: 12px 16px; background: #f2f6ff; border-radius: 10px; color: #49689b; font-size: 13px; } .node-overrides summary { cursor: pointer; } .node-overrides ul { padding: 0; list-style: none; max-height: 260px; overflow: auto; } .node-overrides li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; } .node-overrides .button { padding: 6px 10px; font-size: 12px; flex-shrink: 0; }
 .job-framework { margin: 0 0 20px; padding: 16px; background: #f6f8ff; border: 1px solid #e1e8f4; border-radius: 12px; }
 .job-framework p { margin: 10px 0 0; color: #657592; font-size: 13px; }
 .job-framework .segmented { flex-wrap: wrap; }

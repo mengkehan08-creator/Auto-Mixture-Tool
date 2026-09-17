@@ -14,7 +14,9 @@ test('navigation and compact delete controls retain accessible labels', () => {
 test('training settings are shared and advanced fields are hidden', () => {
   const training = source('./components/steps/TrainingConfigStep.vue')
   assert.match(training, /v-model.number="config.tokenBudget"/)
-  assert.match(training, /v-model.number="strategy.trainingNodes"/)
+  assert.match(training, /v-model.number="config.nodes"/)
+  assert.match(training, /v-model.number="config.priority"/)
+  assert.doesNotMatch(training, /v-model="strategy.trainingJobName"|v-model.number="strategy.trainingPriority"|训练作业安排/)
   assert.match(training, /<SamplingRisk/)
   assert.doesNotMatch(training, /单卡批量大小|验证损失检查间隔|任务评测间隔/)
 })

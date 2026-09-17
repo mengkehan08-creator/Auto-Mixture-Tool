@@ -22,6 +22,13 @@ export function planQuadMixBatch(source, settings) {
   if (!validBounds(bounds)) throw new Error('请先修正当前策略的参数搜索范围。')
   const field = samplingFields.find(f => f.key === settings.parameter)
   if (!field || !['upper', 'lower', 'fixed'].includes(settings.mode)) throw new Error('请选择有效的扫描参数和修改方式。')
+  const overrideTrainingNodes = settings.overrideTrainingNodes ?? (source.trainingNodesOverride != null)
+  const nodes = { mixingNodes: settings.mixingNodes ?? source.mixingNodes,
+    trainingNodes: overrideTrainingNodes ? (settings.trainingNodes ?? source.trainingNodesOverride) : (settings.defaultTrainingNodes ?? source.trainingNodes) }
+  const trainingNodesOverride = overrideTrainingNodes ? nodes.trainingNodes : null
+  for (const [key, label] of [['mixingNodes', '配比节点数'], ['trainingNodes', '训练节点数']]) {
+    if (!Number.isInteger(nodes[key]) || nodes[key] < 1 || nodes[key] > 16) throw new Error(`${label}必须为 1～16 的整数。`)
+  }
   const experiments = numbers(settings.experiments, '代理实验数', true)
   const steps = numbers(settings.steps, '代理实验步数', true)
   const values = numbers(settings.values, '参数取值')
@@ -35,7 +42,7 @@ export function planQuadMixBatch(source, settings) {
       throw new Error(`${field.label.split(' · ')[0]} = ${value} 的范围无效：下限不能大于上限${field.max === undefined ? '。' : '，且上限不能超过 1。'}`)
     }
     for (const proxyExperiments of experiments) for (const proxySteps of steps) {
-      rows.push({ key: `${value}:${proxyExperiments}:${proxySteps}`, proxyExperiments, proxySteps,
+      rows.push({ key: `${value}:${proxyExperiments}:${proxySteps}`, proxyExperiments, proxySteps, ...nodes, trainingNodesOverride,
         samplingBounds: JSON.parse(JSON.stringify(samplingBounds)) })
     }
   }
@@ -49,6 +56,8 @@ export function materializeQuadMixBatch(source, rows) {
       // Each new strategy needs its own identity, auto-generated job names and model name.
       id: fresh.id, name: '', mixingJobName: '', trainingJobName: '', modelName: '',
       proxyExperiments: row.proxyExperiments, proxySteps: row.proxySteps,
+      mixingNodes: row.mixingNodes, trainingNodes: row.trainingNodes,
+      trainingNodesOverride: row.trainingNodesOverride,
       samplingBounds: JSON.parse(JSON.stringify(row.samplingBounds)),
     }
   })

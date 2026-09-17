@@ -6,6 +6,7 @@ import ConfirmationDialog from './components/ConfirmationDialog.vue'
 import WorkflowJobs from './components/WorkflowJobs.vue'
 import ResultAnalysis from './components/ResultAnalysis.vue'
 import { copyWorkflow } from './copy-workflow'
+import { syncSharedTraining } from './shared-training.js'
 import StepNavigation from './components/StepNavigation.vue'
 import StrategyActions from './components/StrategyActions.vue'
 import EvaluationConfigStep from './components/steps/EvaluationConfigStep.vue'
@@ -53,14 +54,9 @@ const runtime = reactive(createRuntimeConfig())
 watch(() => runtime.inputDataObsUri, () => {
   runtime.datasetEstimate = null
 })
-// UI experiments share optimizer/data settings; scheduling remains per job.
-watch(() => [trainingParameters(training), training.frameworkSource, training.frameworkObsUri, strategies.length], () => {
-  for (const strategy of strategies) {
-    strategy.trainingOverrides = trainingParameters(training)
-    strategy.trainingFrameworkSource = training.frameworkSource
-    strategy.trainingFrameworkObsUri = training.frameworkSource === 'obs' ? training.frameworkObsUri : ''
-  }
-}, { deep: true, immediate: true })
+// Shared defaults apply to every strategy; explicit batch node overrides survive edits.
+watch(() => [trainingParameters(training), training.frameworkSource, training.frameworkObsUri, training.nodes, training.priority,
+  strategies.map(s => [s.id, s.trainingNodesOverride])], () => syncSharedTraining(strategies, training), { deep: true, immediate: true })
 function sidebarNavigate(destination) {
   if (destination !== 'create') return navigate(destination)
   resetVisible.value = true
@@ -95,17 +91,16 @@ function resetExperiment() {
 
       <WorkflowJobs v-show="page === 'jobs'" :selected-id="selectedId" @select="navigate('jobs', currentStep, $event)" @copy="copyJob" @analysis="navigate('analysis', currentStep, $event)" />
       <ResultAnalysis v-if="page === 'analysis'" :workflow-id="selectedId" @back="navigate('jobs', currentStep, selectedId)" />
-      <div v-show="page === 'create'">
+      <div v-show="page === 'create'" class="creation-form">
       <p v-if="copyNotice" class="path-preview">{{ copyNotice }}</p>
 
-      <MixingStrategyStep v-show="currentStep === 1" :key="formVersion" :strategies="strategies" :runtime="runtime" />
+      <MixingStrategyStep v-show="currentStep === 1" :key="formVersion" :strategies="strategies" :runtime="runtime" :training-nodes="training.nodes" />
       <TrainingConfigStep v-if="currentStep === 2" :config="training" :runtime="runtime" :strategies="strategies" />
       <EvaluationConfigStep v-else-if="currentStep === 3" :config="evaluation" :training="training" :runtime="runtime" :strategies="strategies" :model-output="training.outputObsUri ? `${training.outputObsUri.replace(/\/$/, '')}/runs/{实验名称}/` : `${runtime.outputRootObsUri.replace(/\/$/, '')}/runs/{实验名称}/training/checkpoints/`" />
       <ReviewSubmitStep v-else-if="currentStep === 4" :key="formVersion" :strategies="strategies" :training="training" :evaluation="evaluation" :runtime="runtime" @created="openJob" />
 
-      <footer class="page-actions">
+      <footer class="page-actions" aria-label="实验配置翻页">
         <button v-if="currentStep > 1" class="button secondary" type="button" @click="navigate('create', currentStep - 1)"><ChevronLeft :size="16" />上一步</button>
-        <span v-else></span>
         <button v-if="currentStep < 4" class="button primary" type="button" @click="navigate('create', currentStep + 1)">下一步：{{ stepOptions[currentStep].label }}<ChevronRight :size="16" /></button>
       </footer>
       </div>

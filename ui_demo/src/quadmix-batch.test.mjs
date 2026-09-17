@@ -5,6 +5,26 @@ import { createStrategy } from './data/defaults.js'
 import { parameterName } from './strategy-names.js'
 import { initializeJobCommands } from './job-commands.js'
 
+test('batch nodes default to source and override only newly generated strategies', () => {
+  const source = createStrategy()
+  source.mixingNodes = 3
+  source.trainingNodes = 4
+  const inherited = materializeQuadMixBatch(source, planQuadMixBatch(source, batchExample()))
+  assert.ok(inherited.every(s => s.mixingNodes === 3 && s.trainingNodes === 4))
+  const changed = materializeQuadMixBatch(source, planQuadMixBatch(source, { ...batchExample(), mixingNodes: 1, trainingNodes: 16, overrideTrainingNodes: true }))
+  assert.equal(changed.length, 15)
+  assert.ok(changed.every(s => s.mixingNodes === 1 && s.trainingNodes === 16))
+  assert.equal(source.mixingNodes, 3)
+  assert.equal(source.trainingNodes, 4)
+  assert.ok(inherited.every(s => s.mixingNodes === 3 && s.trainingNodes === 4))
+})
+
+test('batch node counts must be integers from one to sixteen', () => {
+  for (const key of ['mixingNodes', 'trainingNodes']) for (const value of [0, -1, 17, 2.5, '', NaN, Infinity, true]) {
+    assert.throws(() => planQuadMixBatch(createStrategy(), { ...batchExample(), overrideTrainingNodes: true, trainingNodes: 2, [key]: value }), /1～16/)
+  }
+})
+
 test('example generates 15 distinct combinations with omega upper limits, not fixed omega', () => {
   const source = createStrategy()
   const before = JSON.stringify(source)

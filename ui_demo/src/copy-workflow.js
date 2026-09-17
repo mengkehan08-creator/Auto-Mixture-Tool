@@ -19,7 +19,9 @@ export function copyWorkflow(config) {
   })
   Object.assign(training, {
     outputObsUri: config.training.output_obs_uri || '',
-    nodes: config.training_nodes, frameworkObsUri: resources.nanochat_repo_obs_uri,
+    nodes: config.training_nodes ?? training.nodes,
+    priority: config.strategies[0]?.training_priority ?? training.priority,
+    frameworkObsUri: resources.nanochat_repo_obs_uri,
     modelObsUri: resources.nanochat_model_obs_uri, model: config.training.model || 'NanoChat-Base',
     baseModelTag: config.training.base_model_tag || 'd24',
     targetParamDataRatio: config.training.target_param_data_ratio,
@@ -52,6 +54,7 @@ export function copyWorkflow(config) {
     scriptConfig: structuredClone(item.script_config || {}),
     mixingNodes: item.mixing_nodes ?? config.mixing_nodes,
     trainingNodes: item.training_nodes ?? config.training_nodes,
+    trainingNodesOverride: item.training_nodes != null && item.training_nodes !== training.nodes ? item.training_nodes : null,
     mixingPriority: item.mixing_priority ?? 2,
     trainingPriority: item.training_priority ?? 2,
     trainingFrameworkSource: item.training_framework_source ?? 'builtin',

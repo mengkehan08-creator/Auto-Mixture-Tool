@@ -13,6 +13,7 @@ const batchNotice = ref('')
 const props = defineProps({
   strategies: { type: Array, required: true },
   runtime: { type: Object, required: true },
+  trainingNodes: { type: Number, default: 2 },
 })
 
 function changeType(index, type) {
@@ -64,6 +65,6 @@ function applyBatch({ strategies, placement }) {
       @batch="batchSource = strategy"
     />
     <ResourceGuide v-if="showGuide" kind="dataset" @close="showGuide = false" />
-    <QuadMixBatchDialog v-if="batchSource" :source="batchSource" @close="batchSource = null" @apply="applyBatch" />
+    <QuadMixBatchDialog v-if="batchSource" :source="batchSource" :default-training-nodes="trainingNodes" @close="batchSource = null" @apply="applyBatch" />
   </section>
 </template>

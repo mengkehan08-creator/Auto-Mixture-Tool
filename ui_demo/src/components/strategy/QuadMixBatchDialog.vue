@@ -5,17 +5,18 @@ import { batchExample, planQuadMixBatch, materializeQuadMixBatch } from '../../q
 import { samplingFields } from '../../budget-estimates.js'
 import { parameterName } from '../../strategy-names.js'
 
-const props = defineProps({ source: { type: Object, required: true } })
+const props = defineProps({ source: { type: Object, required: true }, defaultTrainingNodes: { type: Number, default: 2 } })
 const emit = defineEmits(['close', 'apply'])
 const dialog = ref(null)
-const settings = reactive(batchExample())
+const settings = reactive({ ...batchExample(), mixingNodes: props.source.mixingNodes,
+  overrideTrainingNodes: props.source.trainingNodesOverride != null, trainingNodes: props.source.trainingNodesOverride ?? props.defaultTrainingNodes })
 const placement = ref('replace')
 const excluded = ref([])
 const plan = computed(() => {
-  try { return { rows: planQuadMixBatch(props.source, settings), error: '' } }
+  try { return { rows: planQuadMixBatch(props.source, { ...settings, defaultTrainingNodes: props.defaultTrainingNodes }), error: '' } }
   catch (error) { return { rows: [], error: error.message } }
 })
-watch(plan, () => { excluded.value = [] })
+watch(() => plan.value.rows.map(row => row.key).join('|'), () => { excluded.value = [] })
 const selected = computed(() => plan.value.rows.filter(row => !excluded.value.includes(row.key)))
 const totalExperiments = computed(() => selected.value.reduce((sum, row) => sum + row.proxyExperiments, 0))
 const field = computed(() => samplingFields.find(f => f.key === settings.parameter))
@@ -52,13 +53,15 @@ onBeforeUnmount(() => dialog.value?.close())
               <label class="field"><span>修改方式</span><select v-model="settings.mode"><option v-for="(label, mode) in modes" :key="mode" :value="mode">{{ label }}</option></select></label>
             </div>
             <label class="field"><span>{{ symbol }} {{ modes[settings.mode] }}取值</span><textarea v-model="settings.values" rows="2" placeholder="0.1, 0.15, 0.2, 0.25, 0.3"></textarea><small v-if="settings.mode === 'fixed'">上下限均设为此值，该参数不再参与搜索。</small><small v-else>另一侧边界保持为 {{ source.samplingBounds[field.key][settings.mode === 'upper' ? 0 : 1] }}。</small></label>
-            <div class="inherited-settings"><h4>保持一致</h4><dl><div><dt>参数搜索次数 / 随机种子</dt><dd>{{ source.searchCount }} / {{ source.seed }}</dd></div><div v-for="item in inherited" :key="item.key"><dt>{{ item.label.split(' · ')[0] }} 搜索范围</dt><dd>{{ source.samplingBounds[item.key].join(' ～ ') }}</dd></div><div><dt>配比 / 训练节点数</dt><dd>{{ source.mixingNodes }} / {{ source.trainingNodes }}</dd></div></dl><p>数据、训练配置及评测设置不变。作业与模型名称重新自动生成；命令沿用当前策略，若曾写死参数，请在任务配置中调整。</p></div>
+            <section class="batch-nodes"><h4>本批次节点配置</h4><label class="field"><span>配比节点数</span><input v-model.number="settings.mixingNodes" type="number" min="1" max="16" step="1" /></label><label class="field"><span>训练节点设置</span><select v-model="settings.overrideTrainingNodes"><option :value="false">使用统一默认值（{{ defaultTrainingNodes }} 节点）</option><option :value="true">本批次单独设置</option></select></label><label v-if="settings.overrideTrainingNodes" class="field"><span>本批次训练节点数</span><input v-model.number="settings.trainingNodes" type="number" min="1" max="16" step="1" /></label><p>节点数按每个作业计算。单独设置仅作用于本批次；优先级在统一训练参数中设置，评测节点数在评测配置中设置。</p></section>
+            <div class="inherited-settings"><h4>保持一致</h4><dl><div><dt>参数搜索次数 / 随机种子</dt><dd>{{ source.searchCount }} / {{ source.seed }}</dd></div><div v-for="item in inherited" :key="item.key"><dt>{{ item.label.split(' · ')[0] }} 搜索范围</dt><dd>{{ source.samplingBounds[item.key].join(' ～ ') }}</dd></div></dl><p>数据、训练参数及评测设置不变。作业与模型名称重新自动生成；命令沿用当前策略，若曾写死参数，请在任务配置中调整。</p></div>
           </section>
           <section class="batch-preview">
             <div class="batch-section-title"><h3>组合预览</h3><span>本批次 {{ plan.rows.length }} 个组合</span></div>
             <div class="batch-metrics" aria-live="polite"><div><strong>{{ selected.length }}</strong><span>已选策略</span></div><div><strong>{{ selected.length * 2 }}</strong><span>配比 + 训练作业</span></div><div><strong>{{ totalExperiments.toLocaleString() }}</strong><span>代理实验总数</span></div></div>
             <p v-if="plan.error" class="batch-error" role="alert">{{ plan.error }}</p>
             <template v-else>
+              <p class="batch-node-summary">本批次每项策略：配比 {{ settings.mixingNodes }} 节点 · 训练 {{ settings.overrideTrainingNodes ? settings.trainingNodes : defaultTrainingNodes }} 节点{{ settings.overrideTrainingNodes ? '（单独设置）' : '（跟随统一值）' }}</p>
               <div class="batch-selection"><span>取消勾选可跳过组合</span><button type="button" class="button secondary" @click="excluded = selected.length === plan.rows.length ? plan.rows.map(row => row.key) : []">{{ selected.length === plan.rows.length ? '取消全选' : '全选' }}</button></div>
               <div class="batch-table-scroll"><table><thead><tr><th>选择</th><th>{{ symbol }} 范围</th><th>实验数</th><th>步数</th><th>自动名称前缀</th></tr></thead><tbody><tr v-for="(row, index) in plan.rows" :key="row.key" :class="{ excluded: excluded.includes(row.key) }"><td><input type="checkbox" :checked="!excluded.includes(row.key)" :aria-label="`选择组合 ${index + 1}`" @change="toggle(row.key)" /></td><td>{{ row.samplingBounds[settings.parameter].join(' ～ ') }}</td><td>{{ row.proxyExperiments }}</td><td>{{ row.proxySteps }}</td><td><code>{{ parameterName({ type: 'quadmix', ...row }) }}</code></td></tr></tbody></table></div>
               <p class="batch-note">正式名称在提交时追加时间，重名自动区分。每项策略独立配比、对应独立训练，全部成功后按原配置汇总评测。</p>
@@ -84,6 +87,7 @@ h2, h3, h4 { margin: 0; } h2 { font-size: 20px; } h3 { font-size: 15px; } h4 { f
 .batch-section-title .button, .batch-selection .button { padding: 6px 10px; font-size: 12px; min-height: 30px; }
 .field small { line-height: 1.65; } .field select { text-overflow: clip; } .batch-inputs .two-cols { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 12px; }
 .inherited-settings { padding: 16px; background: #f7f9fd; border: 1px solid #e4ebf5; border-radius: 12px; } dl { margin: 10px 0; } dl > div { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; font-size: 12px; } dt { color: #72839b; } dd { margin: 0; overflow-wrap: anywhere; } .inherited-settings p, .batch-note { font-size: 12px; color: #6e809a; line-height: 1.8; margin: 10px 0 0; }
+.batch-nodes { margin-bottom: 16px; padding: 16px; border: 1px solid #dce6f8; border-radius: 12px; background: #f5f8ff; } .batch-nodes h4, .batch-nodes > .field { margin-bottom: 12px; } .batch-nodes p, .batch-node-summary { margin: 10px 0 0; font-size: 12px; line-height: 1.8; color: #59739b; }
 .batch-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid #dfe8f7; border-radius: 12px; padding: 16px 8px; background: linear-gradient(120deg, #f0f5ff, #f9fbff); } .batch-metrics > div { display: grid; gap: 6px; text-align: center; border-right: 1px solid #dfe8f7; } .batch-metrics > div:last-child { border-right: 0; } .batch-metrics strong { font-size: 24px; color: #4769ca; font-variant-numeric: tabular-nums; } .batch-metrics span { font-size: 11px; color: #73839b; }
 .batch-selection { display: flex; justify-content: space-between; align-items: center; margin: 14px 0 8px; } .batch-table-scroll { max-height: 400px; overflow: auto; border: 1px solid #e2eaf5; border-radius: 12px; } table { width: 100%; border-collapse: collapse; font-size: 12px; } th { position: sticky; top: 0; background: #f3f6fc; color: #637894; text-align: left; } th, td { padding: 11px 10px; border-bottom: 1px solid #eaf0f7; white-space: nowrap; } tbody tr:last-child td { border-bottom: 0; } tbody tr:nth-child(even) { background: #fbfcff; } tr.excluded { opacity: .45; } td input { width: 16px; height: 16px; accent-color: #5377e2; cursor: pointer; } code { font-size: 11px; color: #466494; }
 .batch-error { padding: 14px 16px; color: #b42335; background: #fff2f3; border-radius: 12px; line-height: 1.7; font-size: 13px; }

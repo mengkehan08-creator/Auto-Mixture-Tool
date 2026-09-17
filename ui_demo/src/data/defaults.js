@@ -17,6 +17,7 @@ export const stepOptions = [
 
 export function createStrategy(type = 'quadmix') {
   const common = { id: nextId++, type, mixingNodes: type === 'quadmix' ? 2 : 1, trainingNodes: 2,
+    trainingNodesOverride: null,
     mixingJobName: '', trainingJobName: '', modelName: '', mixingPriority: 2, trainingPriority: 2,
     trainingFrameworkSource: 'builtin', trainingFrameworkObsUri: '',
     trainingOverrides: trainingParameters(), mixingCommand: null, trainingCommand: null }
@@ -73,6 +74,7 @@ export const createTrainingConfig = () => ({
   coreMetricEvery: -1,
   devicesPerNode: 8,
   nodes: 2,
+  priority: 2,
 })
 
 export function trainingParameters(config = createTrainingConfig()) {
