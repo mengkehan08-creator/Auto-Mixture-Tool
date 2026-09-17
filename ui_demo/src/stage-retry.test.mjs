@@ -37,3 +37,24 @@ test('retry is rendered in workflow details, not routed to the experiment wizard
   assert.ok(panel.includes("apiRequest('workflows'"))
   assert.ok(panel.includes('提交阶段重试'))
 })
+
+test('both retry forms open in a modal with loading errors and confirmation', () => {
+  const jobs = readFileSync(new URL('./components/WorkflowJobs.vue', import.meta.url), 'utf8')
+  const dialog = readFileSync(new URL('./components/RetryDialog.vue', import.meta.url), 'utf8')
+  assert.match(jobs, /<RetryDialog v-if="retryStage \|\| retryJob"/)
+  assert.match(dialog, /dialog.value.showModal\(\)/)
+  assert.match(dialog, /@cancel.prevent/)
+  for (const name of ['StageRetryPanel', 'ParallelJobRetry']) {
+    const panel = readFileSync(new URL(`./components/${name}.vue`, import.meta.url), 'utf8')
+    assert.match(panel, /role="alert"/)
+    assert.match(panel, /重新加载配置/)
+    assert.match(panel, /<ConfirmationDialog/)
+  }
+  const parallel = readFileSync(new URL('./components/ParallelJobRetry.vue', import.meta.url), 'utf8')
+  assert.match(parallel, /resources: \{ ...resources \}/)
+  assert.match(parallel, /v-model="training.output_obs_uri"/)
+  assert.match(parallel, /v-model="item.obs_uri"/)
+  assert.match(parallel, /v-model="evaluation.output_obs_uri"/)
+  const legacy = readFileSync(new URL('./components/StageRetryPanel.vue', import.meta.url), 'utf8')
+  assert.match(legacy, /<form v-if="draft"/)
+})

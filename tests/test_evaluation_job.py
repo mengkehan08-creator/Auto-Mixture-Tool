@@ -92,3 +92,37 @@ def test_invalid_evaluation_parameters(tmp_path, field, value):
     body['evaluation'][field] = value
     with pytest.raises(ValueError, match='评测参数'):
         ModelArtsWorkflowManager(tmp_path, FakeClient())._validate(body)
+
+
+def test_report_keeps_each_models_actual_batch_history(tmp_path, monkeypatch):
+    import json
+    import sys
+    from types import ModuleType
+    from auto_mixture_tool.modelarts import evaluation_job
+    runner = ModuleType('auto_mixture_tool.modelarts.stage_runner')
+    runner.OUTPUT, runner.WORKSPACE = tmp_path / 'output', tmp_path
+    monkeypatch.setitem(sys.modules, runner.__name__, runner)
+    monkeypatch.setenv('MA_NUM_HOSTS', '1')
+    monkeypatch.setenv('VC_TASK_INDEX', '0')
+    models = [{'id': f'm{i}', 'name': f'model{i}', 'model_tag': f'm{i}', 'step': 1,
+               '_root': str(tmp_path / f'weights{i}'), '_tokenizer': str(tmp_path / 'tokenizer')}
+              for i in range(2)]
+    manifest = {'run': 'test', 'models': models, 'dataset_stats': {}}
+    def evaluate(command, cwd, env, check):
+        base = Path(env['NANOCHAT_BASE_DIR']) / 'base_eval'
+        base.mkdir(exist_ok=True)
+        log = base / 'adaptive_batch.jsonl'
+        assert not log.exists(), 'previous model history leaked'
+        log.write_text(json.dumps({'task': 'test', 'final_batch_size': 12}) + '\n')
+        (base / 'mid_model_000001.csv').write_text('Task,Accuracy,Centered\ntest,0.5,0.5\n')
+    body = {'evaluation': {'datasets': ['test']}}
+    with patch.object(evaluation_job, 'evaluation_models', return_value=manifest), \
+         patch.object(evaluation_job.subprocess, 'run', side_effect=evaluate), \
+         patch.object(Path, 'symlink_to'), \
+         patch('nanochat_mid_compare.prepare_offline_eval_bundle.materialize'):
+        evaluation_job._run_evaluation(body, tmp_path / 'bundle', None)
+    folder = runner.OUTPUT / 'training/results'
+    report = json.loads((folder / 'comparison_report.json').read_text(encoding='utf-8'))
+    assert all(model['adaptive_batch'] == [{'task': 'test', 'final_batch_size': 12}] for model in report['models'])
+    assert (folder / 'm0_adaptive_batch.jsonl').exists()
+    assert (folder / 'm1_adaptive_batch.jsonl').exists()

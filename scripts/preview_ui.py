@@ -61,10 +61,34 @@ def models():
 
 @app.get('/api/v1/workflows')
 def workflows():
-    return [{'id': 'visual-check', 'name': '界面验收示例（非真实实验）', 'created_at': '2026-09-15T12:00:00+08:00',
+    record = {'id': 'visual-check', 'name': '界面验收示例（非真实实验）', 'created_at': '2026-09-15T12:00:00+08:00',
              'status': 'SUCCEEDED', 'progress': 100, 'stage': '评测完成', 'message': '只读预览服务，所有云作业提交均被禁止。',
-             'jobs': [{'module': stage, 'id': None, 'nodes': 1, 'status': 'SUCCEEDED', 'name': stage}
-                      for stage in ['mixing', 'training', 'evaluation']], 'outputs': {}}]
+             'pipeline_version': 4, 'run_root_obs_uri': 'obs://preview-only/source/',
+             'jobs': [{'module': stage, 'key': stage, 'strategy_id': 'quadmix', 'strategy_name': 'QuaDMix 示例',
+                       'id': None, 'nodes': 1, 'priority': 2, 'status': 'SUCCEEDED', 'name': stage,
+                       'depends_on': [] if stage == 'mixing' else ['mixing' if stage == 'training' else 'training'],
+                       'input_obs_uri': 'obs://preview-only/source/sampled/' if stage == 'training' else '',
+                       'outputs': {'models': 'obs://preview-only/source/models/'}}
+                      for stage in ['mixing', 'training', 'evaluation']],
+             'outputs': {'sampled': 'obs://preview-only/source/sampled/', 'models': 'obs://preview-only/source/models/'}}
+    return [record, {**record, 'id': 'legacy-check', 'name': '旧版阶段重试验收（非真实实验）', 'pipeline_version': 3}]
+
+
+@app.get('/api/v1/workflows/{workflow_id}/configuration')
+def configuration(workflow_id: str):
+    if workflow_id not in {'visual-check', 'legacy-check'}:
+        raise HTTPException(404, '仅提供本机验收配置')
+    return {'execution_mode': 'parallel' if workflow_id == 'visual-check' else 'sequential',
+            'strategies': [{'id': 'quadmix', 'type': 'quadmix'}],
+            'training_nodes': 1, 'evaluation_nodes': 1, 'priority': 2,
+            'training': {'token_budget': 401395843, 'devices_per_node': 8, 'device_batch_size': 8,
+                         'eval_every': 100, 'core_metric_every': -1, 'base_model_tag': 'd24'},
+            'evaluation': {'datasets': ['stem'], 'devices_per_node': 8, 'core_eval_batch_size': 16,
+                           'obs_packages': [{'name': 'SuperGPQA 示例', 'obs_uri': 'obs://preview-only/supergpqa/'}]},
+            'resources': {key: 'obs://preview-only/' + name + '/' for key, name in (
+                ('code_obs_uri', 'code'), ('nanochat_repo_obs_uri', 'nanochat'), ('nanochat_model_obs_uri', 'model'),
+                ('python_wheels_obs_uri', 'wheels'), ('eval_bundle_obs_uri', 'eval'))},
+            'output_root_obs_uri': 'obs://preview-only/results/', 'modelarts': defaults()['modelarts']}
 
 
 @app.get('/api/v1/workflows/visual-check/analysis')

@@ -64,7 +64,7 @@ function toggleDataset(config, name) {
               <label class="field"><span>评测节点数</span><input v-model.number="config.nodes" type="number" min="1" max="16" /></label>
               <label class="field"><span>评测任务优先级</span><select v-model.number="config.priority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
               <label class="field"><span>每节点 NPU 数</span><input v-model.number="config.devicesPerNode" type="number" min="1" max="8" /></label>
-              <label class="field"><span>评测批量大小</span><input v-model.number="config.coreEvalBatchSize" type="number" min="1" /><small>默认 16，显存不足时调小。</small></label>
+              <label class="field"><span>评测批量大小</span><input v-model.number="config.coreEvalBatchSize" type="number" min="1" /><small>默认 16。批量评分遇到内存不足时自动减 2 重试，最低为 1；仍不足才停止，不跳过样本。逐题生成评测不受此批量控制。</small></label>
             </div>
             <label class="field"><span>评测与对比报告输出 OBS 目录</span><textarea rows="2" v-model="config.outputObsUri" placeholder="留空沿用实验输出目录" ></textarea><small>自动追加 runs/实验名称/。</small></label>
           </section>

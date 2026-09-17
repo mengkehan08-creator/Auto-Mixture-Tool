@@ -7,7 +7,7 @@ import ConfirmationDialog from './ConfirmationDialog.vue'
 const confirming = ref(false)
 
 const props = defineProps({ workflow: Object, stage: String })
-const emit = defineEmits(['close', 'created'])
+const emit = defineEmits(['close', 'created', 'busy'])
 const draft = ref(null)
 const defaults = ref(null)
 const error = ref('')
@@ -25,6 +25,7 @@ const resources = computed(() => [
 let requestId = ''
 let fingerprint = ''
 async function load() {
+  error.value = ''
   try {
     const [config, settings] = await Promise.all([
       apiRequest(`workflows/${props.workflow.id}/configuration`), apiRequest('workflow-defaults'),
@@ -34,10 +35,11 @@ async function load() {
   } catch (reason) { error.value = reason.message }
 }
 async function submit(confirmed = false) {
-  if (submitting.value) return
+  if (submitting.value || !draft.value) return
   if (confirmed !== true) { confirming.value = true; return }
   confirming.value = false
   submitting.value = true
+  emit('busy', true)
   error.value = ''
   try {
     const body = retryBody(JSON.parse(JSON.stringify(draft.value)))
@@ -52,7 +54,7 @@ async function submit(confirmed = false) {
     })
     emit('created', result.id)
   } catch (reason) { error.value = reason.message }
-  finally { submitting.value = false }
+  finally { submitting.value = false; emit('busy', false) }
 }
 onMounted(load)
 </script>
@@ -65,7 +67,8 @@ onMounted(load)
     <div class="path-preview"><strong>{{ stage === 'training' ? '采样集输入' : '模型输入' }}</strong><div class="retry-path">{{ input }}</div></div>
     <p v-if="error" class="error-message" role="alert">{{ error }}</p>
     <p v-if="!draft">{{ error ? '配置加载失败。请关闭后重试。' : '正在读取原作业配置…' }}</p>
-    <form v-else @submit.prevent="submit">
+    <button v-if="error && !draft" class="button secondary" type="button" @click="load">重新加载配置</button>
+    <form v-if="draft" @submit.prevent="submit">
       <fieldset :disabled="submitting">
         <div v-if="stage === 'training'" class="config-block">
           <h3>训练参数</h3>
@@ -122,7 +125,8 @@ onMounted(load)
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .retry-path { overflow-wrap: anywhere; margin-top: 8px; }
 .retry-tasks { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
-.retry-tasks label { display: flex; gap: 6px; align-items: center; }
+.retry-tasks label { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.retry-tasks input { width: 18px; height: 18px; min-height: 18px; flex: 0 0 18px; margin: 0; }
 summary { cursor: pointer; font-weight: 600; margin-bottom: 16px; }
 textarea { width: 100%; font-family: monospace; }
 </style>

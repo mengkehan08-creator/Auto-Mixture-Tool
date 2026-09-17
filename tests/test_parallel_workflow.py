@@ -409,6 +409,59 @@ def test_eval_retry_only_submits_one_job(manager):
     assert all(record['branches'][sid]['outputs']['models'] == b['outputs']['models'] for sid, b in source['branches'].items())
 
 
+def test_retry_can_edit_resources_outputs_and_eval_parameters(manager):
+    from auto_mixture_tool.modelarts.workflow import RESOURCE_INPUTS
+    source = create(manager)
+    finish(manager, source)
+    source['config']['offline_resources'] = [
+        {'role': key, 'name': 'resource_' + str(i), 'uri': uri}
+        for i, (key, uri) in enumerate(source['config']['resources'].items()) if key in RESOURCE_INPUTS]
+    manager._store(source)
+    original = copy.deepcopy(source['config'])
+    edits = {'resources': {'code_obs_uri': 'obs://bucket/fixed-code/'},
+             'output_root_obs_uri': 'obs://bucket/retries/',
+             'evaluation': {'core_eval_batch_size': 2, 'output_obs_uri': 'obs://bucket/new-reports/',
+                            'obs_packages': [{'name': 'supergpqa', 'obs_uri': 'obs://bucket/supergpqa/'}]}}
+    result = graph.retry(manager, source['id'], 'evaluation', edits)
+    record = manager.records[result['id']]
+    assert record['config']['resources']['code_obs_uri'].rstrip('/') == 'obs://bucket/fixed-code'
+    assert next(r for r in record['config']['offline_resources'] if r['role'] == 'code_obs_uri')['uri'].rstrip('/') == 'obs://bucket/fixed-code'
+    assert record['outputs']['reports'].startswith('obs://bucket/new-reports/')
+    assert record['config']['evaluation']['core_eval_batch_size'] == 2
+    assert record['config']['evaluation']['obs_packages'][0]['name'] == 'supergpqa'
+    assert all(record['branches'][sid]['outputs']['models'] == b['outputs']['models'] for sid, b in source['branches'].items())
+    assert manager.records[source['id']]['config'] == original
+    before = len(manager.client.submissions)
+    finish(manager, record)
+    assert len(manager.client.submissions) == before + 1
+
+
+def test_training_retry_preserves_sampled_input_with_new_model_output(manager):
+    value = parallel_config()
+    value['strategies'][0].update(training_framework_source='obs', training_framework_obs_uri='obs://bucket/old-framework/')
+    source = create(manager, value)
+    finish(manager, source)
+    result = graph.retry(manager, source['id'], 'training-quadmix', {
+        'resources': {'nanochat_repo_obs_uri': 'obs://bucket/fixed-framework/'},
+        'training': {'token_budget': 2000000, 'num_iterations': 0, 'output_obs_uri': 'obs://bucket/new-models/'}})
+    record = manager.records[result['id']]
+    assert record['branches']['quadmix']['outputs']['sampled'] == source['branches']['quadmix']['outputs']['sampled']
+    assert record['branches']['quadmix']['outputs']['models'].startswith('obs://bucket/new-models/')
+    assert record['config']['strategies'][0]['training_framework_obs_uri'].rstrip('/') == 'obs://bucket/fixed-framework'
+    before = len(manager.client.submissions)
+    finish(manager, record)
+    assert len(manager.client.submissions) == before + 2  # training + dependent evaluation
+
+
+def test_retry_cannot_replace_base_model_or_accept_invalid_output(manager):
+    source = create(manager)
+    finish(manager, source)
+    for edits in ({'resources': {'nanochat_model_obs_uri': 'obs://bucket/other/'}},
+                  {'output_root_obs_uri': '/not/obs'}, {'modelarts': {'secret': 'not-allowed'}}):
+        with pytest.raises(ValueError):
+            graph.retry(manager, source['id'], 'training-quadmix', edits)
+
+
 def test_recovery_does_not_repost_known_ids(manager):
     record = create(manager)
     graph.tick(manager, record)

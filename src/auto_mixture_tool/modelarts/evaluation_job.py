@@ -188,6 +188,9 @@ def _run_evaluation(config, bundle, report_name):
         env['HCCL_EXEC_TIMEOUT'] = '1200'
         results = []
         for model in manifest['models']:
+            batch_log = runtime / 'base_eval' / 'adaptive_batch.jsonl'
+            if rank == 0:
+                batch_log.unlink(missing_ok=True)
             for name, path in (('mid_checkpoints', model['_root']), ('tokenizer', model['_tokenizer'])):
                 link = runtime / name
                 if link.is_symlink():
@@ -208,7 +211,12 @@ def _run_evaluation(config, bundle, report_name):
                 shutil.copyfile(source, target)
                 with target.open(encoding='utf-8') as stream:
                     metrics = list(csv.DictReader(stream, skipinitialspace=True))
-                results.append({**{k: v for k, v in model.items() if not k.startswith('_')}, 'metrics': metrics})
+                batch_events = []
+                if batch_log.is_file():
+                    shutil.copyfile(batch_log, report / f'{model["id"]}_adaptive_batch.jsonl')
+                    batch_events = [json.loads(line) for line in batch_log.read_text(encoding='utf-8').splitlines() if line]
+                results.append({**{k: v for k, v in model.items() if not k.startswith('_')},
+                                'metrics': metrics, 'adaptive_batch': batch_events})
         if rank == 0:
             (report / 'comparison_report.json').write_text(json.dumps({
                 'run': manifest['run'], 'models': results, 'dataset_stats': manifest['dataset_stats'],

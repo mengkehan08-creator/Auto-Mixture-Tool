@@ -58,4 +58,16 @@ test('risk UI has no manual sampled-token input or override', () => {
   assert.doesNotMatch(source, /sampleTokens|<input|已有实际采样统计/)
   assert.match(source, /sampleScenario\(props.datasetTokens, props.strategy.samplingBounds/)
   assert.match(source, /samplingRisk\(props.budget, scenario.value\)/)
+  assert.match(source, /同一篇文本入选两次/)
+  assert.match(source, /不能再统一乘以 2/)
+  assert.match(source, /累计使用 6 次/)
+  assert.match(source, /:role="risk.warning \? 'alert' : 'status'"/)
+})
+
+test('sampling estimate already includes repeated selections, not a second blanket factor of two', () => {
+  const bounds = { omega: [1, 1], epsilon: [0, 0], lambda: [1000, 1000], eta: [1, 1] }
+  const scenario = sampleScenario(1000000, bounds)
+  assert.ok(scenario.midpoint > 1900000 && scenario.midpoint <= 2000000)
+  assert.equal(samplingRisk(scenario.midpoint * 3, scenario).warning, false)
+  assert.equal(samplingRisk(scenario.midpoint * 3 + 1, scenario).warning, true)
 })

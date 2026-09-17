@@ -46,6 +46,9 @@ def install_offline_eval():
     for name in ('evaluate_task', 'evaluate_generation_task'):
         function = getattr(base_eval, name, None)
         if callable(function) and not getattr(function, '_amt_adapted', False):
+            if name == 'evaluate_task':
+                from nanochat_mid_compare.adaptive_eval import evaluate_task
+                function = evaluate_task
             wrapper = adapt_evaluator(function)
             wrapper._amt_adapted = True
             setattr(base_eval, name, wrapper)

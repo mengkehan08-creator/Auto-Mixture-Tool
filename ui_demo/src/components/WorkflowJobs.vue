@@ -6,12 +6,14 @@ import { newestWorkflows, searchWorkflows, statusView, stageIndex, workflowStage
 import WorkflowProgress from './WorkflowProgress.vue'
 import StageRetryPanel from './StageRetryPanel.vue'
 import ParallelJobRetry from './ParallelJobRetry.vue'
+import RetryDialog from './RetryDialog.vue'
 import ModelLibrary from './ModelLibrary.vue'
 const props = defineProps({ selectedId: { type: String, default: '' } })
 const emit = defineEmits(['select', 'copy', 'analysis'])
 const hasEvaluation = workflow => workflow.jobs?.some(job => job.module === 'evaluation')
 const retryStage = ref('')
 const retryJob = ref(null)
+const retryBusy = ref(false)
 watch(() => props.selectedId, () => { retryStage.value = ''; retryJob.value = null })
 function canRetryJob(workflow, job) {
   return workflow.pipeline_version === 4 && !workflow.delete_requested && ['SUCCEEDED', 'FAILED'].includes(workflow.status) &&
@@ -151,8 +153,10 @@ onBeforeUnmount(() => clearInterval(timer))
         <button type="button" class="button delete-workflow" :disabled="selected.status === 'DELETING'" @click="confirmDelete(selected)">{{ selected.status === 'DELETE_FAILED' ? '重试删除' : '删除实验' }}</button>
         <label class="field"><span>更新身份认证凭据</span><input v-model="credential" type="password" autocomplete="off" /></label>
         <button type="button" class="button secondary" @click="renew">更新此实验凭据</button>
-        <StageRetryPanel v-if="retryStage" :key="`${selected.id}-${retryStage}`" :workflow="selected" :stage="retryStage" @close="retryStage = ''" @created="retryCreated" />
-        <ParallelJobRetry v-if="retryJob" :key="`${selected.id}-${retryJob.key}`" :workflow="selected" :job="retryJob" @close="retryJob = null" @created="retryCreated" />
+        <RetryDialog v-if="retryStage || retryJob" :busy="retryBusy" @close="retryStage = ''; retryJob = null">
+          <StageRetryPanel v-if="retryStage" :key="`${selected.id}-${retryStage}`" :workflow="selected" :stage="retryStage" @busy="retryBusy = $event" @close="retryStage = ''" @created="retryCreated" />
+          <ParallelJobRetry v-if="retryJob" :key="`${selected.id}-${retryJob.key}`" :workflow="selected" :job="retryJob" @busy="retryBusy = $event" @close="retryJob = null" @created="retryCreated" />
+        </RetryDialog>
         <ModelLibrary :key="`${selected.id}-${selected.progress}`" :workflow-id="selected.id" />
       </article>
       <p v-else-if="!error">正在加载作业详情…</p>

@@ -181,9 +181,25 @@ def retry_source(manager, reuse):
 
 def retry(manager, workflow_id, key, edits):
     source = retry_source(manager, {'workflow_id': workflow_id, 'key': key})
-    if set(edits) - {'name', 'nodes', 'priority', 'training', 'evaluation', 'authorization', 'command', 'request_id'}:
+    if set(edits) - {'name', 'nodes', 'priority', 'training', 'evaluation', 'authorization', 'command', 'request_id',
+                     'resources', 'modelarts', 'output_root_obs_uri'}:
         raise ValueError('重试参数包含不支持的字段')
     config = copy.deepcopy(source['config'])
+    resources = edits.get('resources', {})
+    if not isinstance(resources, dict) or set(resources) - {'code_obs_uri', 'nanochat_repo_obs_uri',
+                                                          'python_wheels_obs_uri', 'eval_bundle_obs_uri'}:
+        raise ValueError('重试只能调整代码、训练框架、安装包和评测资源地址；前序采样及模型输入保持复用')
+    modelarts = edits.get('modelarts', {})
+    if not isinstance(modelarts, dict) or set(modelarts) - {'endpoint', 'region', 'workspace_id', 'workspace_name',
+                                                         'image_url', 'image_repo_id', 'flavor_id', 'pool_id'}:
+        raise ValueError('不支持的 ModelArts 重试配置')
+    config['resources'].update(resources)
+    for resource in config.get('offline_resources') or []:
+        if resource.get('role') in resources:
+            resource['uri'] = resources[resource['role']]
+    config.setdefault('modelarts', {}).update(modelarts)
+    if 'output_root_obs_uri' in edits:
+        config['output_root_obs_uri'] = edits['output_root_obs_uri']
     config.pop('request_id', None)
     config['job_reuse'] = {'workflow_id': workflow_id, 'key': key}
     if edits.get('request_id'):
@@ -203,10 +219,12 @@ def retry(manager, workflow_id, key, edits):
         strategy[stage + '_nodes'] = edits.get('nodes', job['nodes'])
         strategy[stage + '_priority'] = edits.get('priority', job['priority'])
         if stage == 'training':
+            if strategy.get('training_framework_source') == 'obs' and 'nanochat_repo_obs_uri' in resources:
+                strategy['training_framework_obs_uri'] = resources['nanochat_repo_obs_uri']
             updates = edits.get('training', {})
             # Changing the base model invalidates the tokenizer-dependent sampling output.
-            if set(updates) - {'token_budget', 'num_iterations', 'device_batch_size', 'devices_per_node', 'eval_every', 'core_metric_every'}:
-                raise ValueError('训练阶段重试只能修改训练预算、批量、设备数和间隔；更换基础模型须重跑配比')
+            if set(updates) - {'token_budget', 'num_iterations', 'device_batch_size', 'devices_per_node', 'eval_every', 'core_metric_every', 'output_obs_uri'}:
+                raise ValueError('训练阶段重试只能修改训练预算、批量、设备数、间隔和输出目录；更换基础模型须重跑配比')
             strategy['training'].update(updates)
         if edits.get('command'):
             strategy[stage + '_command'] = edits['command']
