@@ -135,13 +135,40 @@ def test_parameter_names_preserve_custom_names_and_idempotency(manager):
     value['strategies'][1].update(name='自定义策略', mixing_job_name='custom-mixing', training_job_name='custom-training', mixing_priority=3)
     result = create(manager, value)
     first, train = result['jobs'][:2]
-    assert first['name'].startswith('ex-16-15-')
-    assert train['name'].startswith('train-ex-16-15-t1048576-')
+    assert first['name'].startswith('ex-16-15-0p1-')
+    assert train['name'].startswith('train-ex-16-15-0p1-t1048576-')
     assert result['jobs'][2]['name'] == 'custom-mixing'
     assert result['jobs'][3]['name'] == 'custom-training'
     assert result['jobs'][2]['strategy_name'] == '自定义策略'
     assert result['jobs'][2]['priority'] == 3
     assert create(manager, value)['id'] == result['id']
+
+
+@pytest.mark.parametrize('upper,suffix', [(0.2, '0p2'), (1.0, '1'), (0.0, '0'), (1e-7, '0p0000001')])
+def test_quadmix_name_uses_omega_search_upper_bound(upper, suffix):
+    strategy = {'type': 'quadmix', 'proxy_experiments': 50, 'proxy_steps': 15,
+                'sampling_bounds': {'omega': [0, upper]}}
+    assert graph.strategy_stem(strategy) == f'ex-50-15-{suffix}'
+    strategy['sampling_bounds']['omega'][0] = upper / 2
+    assert graph.strategy_stem(strategy) == f'ex-50-15-{suffix}'
+
+
+def test_short_job_timestamp_and_same_second_collisions(manager):
+    value = parallel_config()
+    value['strategies'] = [dict(copy.deepcopy(value['strategies'][0]), id=f'q{i}', name='',
+                                proxy_experiments=50, proxy_steps=15,
+                                sampling_bounds={'omega': [0, 0.2]}) for i in range(2)]
+    with patch('auto_mixture_tool.modelarts.workflow.datetime') as clock:
+        from datetime import datetime
+        clock.now.return_value = datetime.fromisoformat('2026-09-17T14:30:25.123+08:00')
+        record = create(manager, value)
+        second = create(manager, dict(value, request_id='second-submission'))
+    assert record['jobs'][0]['name'] == 'ex-50-15-0p2-0917-143025'
+    assert record['jobs'][1]['name'] == 'train-ex-50-15-0p2-t1048576-0917-143025'
+    jobs = record['jobs'] + second['jobs']
+    assert len({j['name'] for j in jobs}) == len(jobs)
+    assert all(graph.job_name(j['name']) == j['name'] for j in jobs)
+    assert value['strategies'][0]['name'] == ''
 
 
 def test_hundreds_of_strategies_plan_isolated_jobs_and_bound_submission(manager):

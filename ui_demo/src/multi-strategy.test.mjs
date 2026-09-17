@@ -17,8 +17,8 @@ test('repeated types retain unique ids, independent parameters and new defaults'
   assert.equal(strategies[1].proxySteps, 15)
   assert.equal(strategies[4].ratios['数学'], .6)
   assert.equal(strategies[6].seed, 42)
-  assert.equal(strategyNameHint(strategies[0]), 'ex-50-100-{提交时间}')
-  assert.match(trainingNameHint(strategies[0]), /^train-ex-50-100-t401395843-/)
+  assert.equal(strategyNameHint(strategies[0]), 'ex-50-100-0p1-{提交时间}')
+  assert.match(trainingNameHint(strategies[0]), /^train-ex-50-100-0p1-t401395843-/)
   strategies[0].name = '自定义'
   assert.equal(strategyLabel(strategies[0]), '自定义')
 })

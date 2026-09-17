@@ -1,7 +1,11 @@
 export const strategyId = strategy => `${strategy.type}_${strategy.id}`
 
 export function parameterName(strategy) {
-  if (strategy.type === 'quadmix') return `ex-${strategy.proxyExperiments ?? 50}-${strategy.proxySteps ?? 15}`
+  if (strategy.type === 'quadmix') {
+    const omega = Number(strategy.samplingBounds?.omega?.[1] ?? 0.1)
+      .toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 }).replace('.', 'p')
+    return `ex-${strategy.proxyExperiments ?? 50}-${strategy.proxySteps ?? 15}-${omega}`
+  }
   return `${strategy.type}-s${strategy.seed ?? 42}`
 }
 

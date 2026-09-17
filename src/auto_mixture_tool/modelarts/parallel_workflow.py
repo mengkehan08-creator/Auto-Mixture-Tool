@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from datetime import datetime
+from decimal import Decimal
 
 import requests
 
@@ -109,7 +110,12 @@ def planned_jobs(config):
 
 def strategy_stem(strategy):
     if strategy['type'] == 'quadmix':
-        return f'ex-{strategy["proxy_experiments"]}-{strategy["proxy_steps"]}'
+        upper = strategy.get('sampling_bounds', {}).get('omega', [0, 0.1])[1]
+        omega = format(Decimal(str(upper)), 'f')
+        if '.' in omega:
+            omega = omega.rstrip('0').rstrip('.')
+        omega = omega.replace('.', 'p')
+        return f'ex-{strategy["proxy_experiments"]}-{strategy["proxy_steps"]}-{omega}'
     stem = f'{strategy["type"]}-s{strategy["seed"]}'
     if strategy['type'] == 'manual' or strategy.get('script_obs_uri') or strategy.get('script_upload'):
         parameters = {k: strategy.get(k) for k in ('ratios', 'script_obs_uri', 'script_upload', 'script_config')}
@@ -120,6 +126,7 @@ def strategy_stem(strategy):
 
 def assign_names(manager, record, stamp):
     """Resolve names once without mutating submitted config (idempotency and copies)."""
+    stamp = datetime.strptime(stamp, '%Y%m%d-%H%M%S-%f').strftime('%m%d-%H%M%S')
     used = {j['name'].casefold() for r in manager.records.values() for j in r['jobs']}
     used.update(j['name'].casefold() for j in record['jobs'] if j['name'])
     record['strategy_names'] = {}
@@ -137,8 +144,8 @@ def assign_names(manager, record, stamp):
             stem = 'evaluation'
         if not job['name']:
             # Reserve space for timestamp and collision suffix under ModelArts' 64-char limit.
-            if len(stem) > 28:
-                stem = stem[:19] + '-' + hashlib.sha256(stem.encode()).hexdigest()[:8]
+            if len(stem) > 36:
+                stem = stem[:27] + '-' + hashlib.sha256(stem.encode()).hexdigest()[:8]
             name = f'{stem}-{stamp}'
             counter = 0
             while name.casefold() in used:

@@ -8,9 +8,19 @@ import { readFileSync } from 'node:fs'
 test('new strategies default to 50 experiments and explicit counts remain editable', () => {
   const strategy = createStrategy()
   assert.equal(strategy.proxyExperiments, 50)
-  assert.equal(parameterName({ type: 'quadmix' }), 'ex-50-15')
+  assert.equal(parameterName({ type: 'quadmix' }), 'ex-50-15-0p1')
   strategy.proxyExperiments = 16
-  assert.equal(parameterName(strategy), 'ex-16-15')
+  assert.equal(parameterName(strategy), 'ex-16-15-0p1')
+})
+
+test('QuadMix names follow omega search upper bound, including decimal and boundary values', () => {
+  const strategy = createStrategy()
+  for (const [upper, suffix] of [[0.2, '0p2'], [1, '1'], [0, '0'], [0.0000001, '0p0000001']]) {
+    strategy.samplingBounds.omega = [0, upper]
+    assert.equal(parameterName(strategy), `ex-50-15-${suffix}`)
+  }
+  strategy.samplingBounds.omega = [0.05, 0.2]
+  assert.equal(parameterName(strategy), 'ex-50-15-0p2')
 })
 
 test('proxy consumption is per experiment and changes with training steps only', () => {
