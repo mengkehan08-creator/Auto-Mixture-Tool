@@ -55,3 +55,7 @@ platform-server-error.log
 iam_token_provider.local.py
 iam_tokens.json
 private_auth/
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+.DS_Store
