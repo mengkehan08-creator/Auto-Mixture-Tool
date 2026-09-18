@@ -32,6 +32,8 @@ async function load() {
     ])
     defaults.value = settings
     draft.value = retryDraft(config, settings, props.workflow, props.stage)
+    draft.value.training.devices_per_node = 8
+    draft.value.evaluation.devices_per_node = 8
   } catch (reason) { error.value = reason.message }
 }
 async function submit(confirmed = false) {
@@ -74,7 +76,7 @@ onMounted(load)
           <h3>训练参数</h3>
           <div class="form-grid two-cols">
             <label class="field"><span>训练节点数</span><input v-model.number="draft.training_nodes" type="number" min="1" max="16" required /></label>
-            <label class="field"><span>每节点设备数</span><input v-model.number="draft.training.devices_per_node" type="number" min="1" max="8" required /></label>
+            <label class="field"><span>每节点设备数</span><input value="8" readonly aria-label="每节点固定 8 张 NPU" /></label>
             <label class="field"><span>训练 Token 预算</span><input v-model.number="draft.training.token_budget" type="number" min="1" step="1" placeholder="留空沿用采样统计预算" @input="draft.training.num_iterations = 0" /></label>
             <label class="field"><span>训练批量大小（每设备）</span><input v-model.number="draft.training.device_batch_size" type="number" min="1" required /></label>
             <label class="field"><span>训练中验证间隔</span><input v-model.number="draft.training.eval_every" type="number" min="-1" required /></label>
@@ -87,7 +89,7 @@ onMounted(load)
           <h3>{{ stage === 'training' ? '后续评测参数' : '评测参数' }}</h3>
           <div class="form-grid two-cols">
             <label class="field"><span>评测节点数</span><input v-model.number="draft.evaluation_nodes" type="number" min="1" max="16" required /></label>
-            <label class="field"><span>每节点设备数</span><input v-model.number="draft.evaluation.devices_per_node" type="number" min="1" max="8" required /></label>
+            <label class="field"><span>每节点设备数</span><input value="8" readonly aria-label="每节点固定 8 张 NPU" /></label>
             <label class="field"><span>评测批量大小</span><input v-model.number="draft.evaluation.core_eval_batch_size" type="number" min="1" required /></label>
             <label class="field"><span>报告输出 OBS 目录</span><input v-model="draft.evaluation.output_obs_uri" placeholder="留空沿用输出根目录" /></label>
           </div>

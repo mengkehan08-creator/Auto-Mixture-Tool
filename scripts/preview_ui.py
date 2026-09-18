@@ -100,7 +100,7 @@ def analysis():
          'training_config': {'token_budget': 401395843},
          'metrics': [{'Task': task, 'Accuracy': score} for task, score in zip(['arc_easy', 'mmlu_stem', 'gsm8k_cot'], scores)]}
         for i, (name, kind, scores) in enumerate([('QuaDMix · 示例', 'quadmix', [.71, .46, .32]),
-                                                ('人工配比 · 示例', 'manual', [.67, .47, .30]),
+                                                ('自定义配比 · 示例', 'manual', [.67, .47, .30]),
                                                 ('随机配比 · 示例', 'random', [.61, .40, .25])])],
         'dataset_stats': {'config': {'domain_names': ['数学', '化学', '生物学', '物理'], 'token_method': 'nanochat tokenizer'},
                           '0': {'tokens': 165000000, 'train_docs': 45000,

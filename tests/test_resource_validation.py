@@ -134,6 +134,8 @@ def test_volume_uses_three_random_rows_per_file(tmp_path):
     assert result['rows'] == 1001 and result['checked_rows'] == 3
     assert result['estimated_chars'] == 1001 * 136 and result['estimated_tokens'] == 1001 * 34
     assert result['token_is_estimate'] is True
+    assert 'Token（' in result['message'] and 'B Token' in result['message']
+    assert '1 B = 10 亿 Token' in result['message']
     assert result['size_bytes'] == (tmp_path / 'part.parquet').stat().st_size
     rows[-1] = {**row, 'char_count': -1}
     pq.write_table(pa.Table.from_pylist(rows), tmp_path / 'part.parquet')

@@ -29,7 +29,7 @@ const emit = defineEmits(['remove', 'change-type', 'batch'])
       <label class="field"><span>配比节点数</span><input v-model.number="strategy.mixingNodes" type="number" min="1" max="16" /></label>
       <label class="field"><span>配比任务优先级</span><select v-model.number="strategy.mixingPriority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
     </div>
-    <small v-if="strategy.type !== 'quadmix'">人工和随机策略目前由首节点完成采样，建议 1 节点；各策略作业可并行运行。</small>
+    <small v-if="strategy.type !== 'quadmix'">自定义和随机策略目前由首节点完成采样，建议 1 节点；各策略作业可并行运行。</small>
     <QuadMixConfig v-if="strategy.type === 'quadmix'" :model-value="strategy" :dataset-tokens="datasetTokens" @batch="emit('batch')" />
     <ManualMixConfig v-else-if="strategy.type === 'manual'" :model-value="strategy" />
     <RandomMixConfig v-else :model-value="strategy" />

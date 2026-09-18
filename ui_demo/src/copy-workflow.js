@@ -1,4 +1,5 @@
 import { createRuntimeConfig, createTrainingConfig, createEvaluationConfig, createStrategy, trainingParameters } from './data/defaults.js'
+import { upperOnlyBounds } from './budget-estimates.js'
 import { normalizeEvaluationTasks } from './evaluation-selection.js'
 
 export function copyWorkflow(config) {
@@ -25,7 +26,7 @@ export function copyWorkflow(config) {
     modelObsUri: resources.nanochat_model_obs_uri, model: config.training.model || 'NanoChat-Base',
     baseModelTag: config.training.base_model_tag || 'd24',
     targetParamDataRatio: config.training.target_param_data_ratio,
-    devicesPerNode: config.training.devices_per_node,
+    devicesPerNode: 8,
     tokenBudget: config.training.token_budget ?? training.tokenBudget,
     deviceBatchSize: config.training.device_batch_size ?? 1,
     evalEvery: config.training.eval_every ?? -1,
@@ -37,7 +38,7 @@ export function copyWorkflow(config) {
   evaluation.obsPackages = structuredClone(config.evaluation.obs_packages || [])
   evaluation.api.enabled = config.evaluation.automatic_api_requested === true
   evaluation.nodes = config.evaluation_nodes ?? 1
-  evaluation.devicesPerNode = config.evaluation.devices_per_node ?? 8
+  evaluation.devicesPerNode = 8
   evaluation.coreEvalBatchSize = config.evaluation.core_eval_batch_size ?? 16
   evaluation.maxPerTask = config.evaluation.max_per_task ?? -1
   evaluation.modelIds = [...(config.evaluation.model_ids || [])]
@@ -46,8 +47,8 @@ export function copyWorkflow(config) {
     names: normalizeEvaluationTasks(config.evaluation.datasets), obsUri: resources.eval_bundle_obs_uri }
   const strategies = config.strategies.map(item => ({ ...createStrategy(item.type),
     name: item.name, seed: item.seed ?? 42, proxyExperiments: item.proxy_experiments,
-    proxySteps: item.proxy_steps ?? 15, searchCount: item.search_count ?? 5000, devicesPerNode: item.devices_per_node,
-    ...(item.sampling_bounds ? { samplingBounds: JSON.parse(JSON.stringify(item.sampling_bounds)) } : {}),
+    proxySteps: item.proxy_steps ?? 15, searchCount: item.search_count ?? 5000, devicesPerNode: 8,
+    ...(item.sampling_bounds ? { samplingBounds: upperOnlyBounds(item.sampling_bounds) } : {}),
     ratios: item.ratios ? { ...item.ratios } : undefined,
     source: item.script_obs_uri || item.script_upload ? 'script' : 'builtin', scriptObsUri: item.script_obs_uri || '',
     scriptInput: item.script_upload ? 'upload' : 'obs', scriptUpload: item.script_upload ? structuredClone(item.script_upload) : null,
@@ -62,7 +63,7 @@ export function copyWorkflow(config) {
     mixingJobName: '', trainingJobName: '', modelName: item.model_name || '',
     mixingCommand: item.mixing_command?.trim() ? item.mixing_command : (config.commands?.mixing ?? null),
     trainingCommand: item.training_command?.trim() ? item.training_command : (config.commands?.training ?? null),
-    trainingOverrides: { ...trainingParameters(training), ...structuredClone(item.training || {}) },
+    trainingOverrides: { ...trainingParameters(training), ...structuredClone(item.training || {}), devices_per_node: 8 },
   }))
   return { runtime, training, evaluation, strategies }
 }

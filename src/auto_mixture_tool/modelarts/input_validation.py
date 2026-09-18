@@ -90,11 +90,12 @@ def validate_parquet(root):
             raise ValueError(f'数据格式不符合算法要求：{file.name}：{exc}') from None
     if not rows:
         raise ValueError('数据格式不符合算法要求：数据集为空')
+    billions = '<0.001' if 0 < estimated_chars / 4 < 1e6 else f'{estimated_chars / 4 / 1e9:.3f}'
     return {'ready': True, 'files': len(files), 'rows': rows, 'checked_rows': checked,
             'size_bytes': size_bytes, 'estimated_chars': estimated_chars,
             'estimated_tokens': estimated_chars / 4,
             'token_method': 'sum(file_rows * sampled_mean_text_length) / 4', 'token_is_estimate': True,
-            'message': f'共 {len(files)} 个分片、{rows:,} 篇文档；每片随机抽查至多 3 条，共 {checked} 条通过。预计 {estimated_chars / 4:,.0f} Token（按各片抽样平均文本长度 × 文档数 ÷ 4 估算），不是全文校验或精确分词计数。'}
+            'message': f'共 {len(files)} 个分片、{rows:,} 篇文档；每片随机抽查至多 3 条，共 {checked} 条通过。预计 {estimated_chars / 4:,.0f} Token（{billions} B Token；1 B = 10 亿 Token；按各片抽样平均文本长度 × 文档数 ÷ 4 估算），不是全文校验或精确分词计数。'}
 
 
 def validate_resource(kind, uri):

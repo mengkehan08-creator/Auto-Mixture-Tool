@@ -32,7 +32,8 @@ async function load() {
     for (const key of ['token_budget', 'device_batch_size', 'devices_per_node', 'eval_every', 'core_metric_every']) if (t[key] !== undefined) training[key] = t[key]
     if (!t.token_budget) training.num_iterations = t.num_iterations || 0
     training.output_obs_uri = t.output_obs_uri || ''
-    Object.assign(evaluation, config.evaluation, { datasets: normalizeEvaluationTasks(config.evaluation?.datasets || []), obs_packages: config.evaluation?.obs_packages || [] })
+    training.devices_per_node = 8
+    Object.assign(evaluation, config.evaluation, { datasets: normalizeEvaluationTasks(config.evaluation?.datasets || []), obs_packages: config.evaluation?.obs_packages || [], devices_per_node: 8 })
     for (const [key] of resourceFields) if (config.resources?.[key] !== undefined) resources[key] = config.resources[key]
     if (props.job.module === 'training' && strategy?.training_framework_source === 'obs') resources.nanochat_repo_obs_uri = strategy.training_framework_obs_uri
     for (const key of modelartsFields) modelarts[key] = config.modelarts?.[key] ?? defaults.modelarts?.[key] ?? ''
@@ -80,11 +81,11 @@ async function submit(confirmed = false) {
       <label class="field"><span>节点数</span><input v-model.number="draft.nodes" type="number" min="1" max="16" required /></label>
       <label class="field"><span>任务优先级</span><select v-model.number="draft.priority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
       <template v-if="job.module === 'training'">
-        <label v-for="[key, label, min] in [['token_budget', '训练 Token 预算', 1], ['devices_per_node', '每节点 NPU 数', 1]]" :key="key" class="field"><span>{{ label }}</span><input v-model.number="training[key]" type="number" :min="min" :required="key === 'devices_per_node'" @input="key === 'token_budget' && (training.num_iterations = 0)" /></label>
+        <label v-for="[key, label, min] in [['token_budget', '训练 Token 预算', 1]]" :key="key" class="field"><span>{{ label }}</span><input v-model.number="training[key]" type="number" :min="min" :required="key === 'devices_per_node'" @input="key === 'token_budget' && (training.num_iterations = 0)" /></label>
         <label class="field"><span>模型输出 OBS 目录</span><input v-model="training.output_obs_uri" placeholder="留空沿用输出根目录" /></label>
       </template>
       <template v-if="job.module === 'evaluation'">
-        <label class="field"><span>每节点 NPU 数</span><input v-model.number="evaluation.devices_per_node" type="number" min="1" max="8" /></label>
+        <label class="field"><span>每节点 NPU 数</span><input value="8" readonly aria-label="每节点固定 8 张 NPU" /></label>
         <label class="field"><span>评测批量大小</span><input v-model.number="evaluation.core_eval_batch_size" type="number" min="1" /></label>
         <label class="field"><span>报告输出 OBS 目录</span><input v-model="evaluation.output_obs_uri" placeholder="留空沿用输出根目录" /></label>
       </template>

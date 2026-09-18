@@ -654,14 +654,14 @@ class ModelArtsWorkflowManager:
             strategy.pop('local_script_path', None)
             if strategy.get('script_upload') is not None:
                 if strategy.get('type') not in {'manual', 'random'} or strategy.get('script_obs_uri'):
-                    raise ValueError('人工或随机策略只能选择一种脚本来源：OBS 地址或上传文件')
+                    raise ValueError('自定义或随机策略只能选择一种脚本来源：OBS 地址或上传文件')
                 upload_bytes += validate_script(strategy['script_upload'])
                 if upload_bytes > MAX_TOTAL_BYTES:
                     raise ValueError('本次上传脚本总大小不能超过 128 KiB')
             script = str(strategy.get("script_obs_uri") or "").strip()
             if script:
                 if strategy.get('type') not in {'manual', 'random'}:
-                    raise ValueError('当前仅人工和随机策略支持上传采样脚本')
+                    raise ValueError('当前仅自定义和随机策略支持上传采样脚本')
                 strategy["script_obs_uri"] = _clean_obs_uri(script)
                 if not script.lower().endswith(".py"):
                     raise ValueError("自定义采样策略必须指向 OBS 中的 .py 文件")
@@ -681,14 +681,16 @@ class ModelArtsWorkflowManager:
             if strategy.get("type") == "quadmix":
                 from quadmix.core.sampling_bounds import validate_sampling_bounds
                 strategy['sampling_bounds'] = validate_sampling_bounds(strategy.get('sampling_bounds'))
+                if any(pair[0] != 0 for pair in strategy['sampling_bounds'].values()):
+                    raise ValueError('采样参数下限固定为 0，仅支持设置搜索上限')
                 for key in ("proxy_experiments", "proxy_steps", "search_count"):
                     number = strategy.get(key, {"proxy_experiments": 50, "proxy_steps": 15, "search_count": 5000}[key])
                     if type(number) is not int or number <= 0:
                         raise ValueError(f"quadmix {key} must be positive")
                     strategy[key] = number
                 devices = strategy.get('devices_per_node', 8)
-                if type(devices) is not int or not 1 <= devices <= 8:
-                    raise ValueError('QuaDMix devices_per_node 必须为 1–8 的整数')
+                if type(devices) is not int or devices != 8:
+                    raise ValueError('QuaDMix 每节点仅支持 8 张 NPU（devices_per_node=8）')
                 strategy['devices_per_node'] = devices
                 seed = strategy.get('seed', 42)
                 if type(seed) is not int or not 0 <= seed < 2**32:
@@ -703,8 +705,8 @@ class ModelArtsWorkflowManager:
         if str(training.get("framework", "nanochat")).lower() != "nanochat":
             raise ValueError("the current training adapter supports NanoChat only")
         devices = training.get("devices_per_node", 8)
-        if type(devices) is not int or not 1 <= devices <= 8:
-            raise ValueError("training devices_per_node must be between 1 and 8")
+        if type(devices) is not int or devices != 8:
+            raise ValueError("训练每节点仅支持 8 张 NPU（devices_per_node=8）")
         training["devices_per_node"] = devices
         tag = training.get('base_model_tag', 'd24')
         if not isinstance(tag, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}', tag):
@@ -737,12 +739,12 @@ class ModelArtsWorkflowManager:
                 raise ValueError('请填写 OBS 评测包名称')
             package['obs_uri'] = _clean_obs_uri(str(package.get('obs_uri', '')))
         for key, default, minimum, maximum in (
-            ('devices_per_node', 8, 1, 8), ('core_eval_batch_size', 16, 1, 4096),
+            ('devices_per_node', 8, 8, 8), ('core_eval_batch_size', 16, 1, 4096),
             ('max_per_task', -1, -1, 2147483647),
         ):
             number = evaluation.get(key, default)
             if type(number) is not int or not minimum <= number <= maximum or number == 0:
-                raise ValueError(f'评测参数 {key} 无效')
+                raise ValueError('评测参数 devices_per_node 无效：每节点仅支持 8 张 NPU' if key == 'devices_per_node' else f'评测参数 {key} 无效')
             evaluation[key] = number
         allowed = {"stem", "core", "all", "arc_easy", "arc_challenge", "mmlu_stem",
                    "gpqa_diamond", "gsm8k_cot", "math_cot_500", "mmlu_zeroshot"}

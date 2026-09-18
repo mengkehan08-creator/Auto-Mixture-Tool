@@ -1,5 +1,5 @@
 import { createStrategy } from './data/defaults.js'
-import { defaultSamplingBounds, samplingFields, validBounds } from './budget-estimates.js'
+import { upperOnlyBounds, samplingFields, validBounds } from './budget-estimates.js'
 
 export const batchExample = () => ({
   experiments: '100, 300, 500', steps: '5000', parameter: 'omega',
@@ -18,10 +18,10 @@ function numbers(text, label, integer = false) {
 
 export function planQuadMixBatch(source, settings) {
   if (source.type !== 'quadmix') throw new Error('批量配置仅适用于 QuaDMix 策略。')
-  const bounds = source.samplingBounds || defaultSamplingBounds()
+  const bounds = upperOnlyBounds(source.samplingBounds)
   if (!validBounds(bounds)) throw new Error('请先修正当前策略的参数搜索范围。')
   const field = samplingFields.find(f => f.key === settings.parameter)
-  if (!field || !['upper', 'lower', 'fixed'].includes(settings.mode)) throw new Error('请选择有效的扫描参数和修改方式。')
+  if (!field || (settings.mode && settings.mode !== 'upper')) throw new Error('请选择有效的扫描参数；仅支持设置搜索上限。')
   const overrideTrainingNodes = settings.overrideTrainingNodes ?? (source.trainingNodesOverride != null)
   const nodes = { mixingNodes: settings.mixingNodes ?? source.mixingNodes,
     trainingNodes: overrideTrainingNodes ? (settings.trainingNodes ?? source.trainingNodesOverride) : (settings.defaultTrainingNodes ?? source.trainingNodes) }
@@ -36,10 +36,9 @@ export function planQuadMixBatch(source, settings) {
   const rows = []
   for (const value of values) {
     const samplingBounds = JSON.parse(JSON.stringify(bounds))
-    if (settings.mode === 'fixed') samplingBounds[field.key] = [value, value]
-    else samplingBounds[field.key][settings.mode === 'lower' ? 0 : 1] = value
+    samplingBounds[field.key] = [0, value]
     if (!validBounds(samplingBounds)) {
-      throw new Error(`${field.label.split(' · ')[0]} = ${value} 的范围无效：下限不能大于上限${field.max === undefined ? '。' : '，且上限不能超过 1。'}`)
+      throw new Error(`${field.label.split(' · ')[0]} = ${value} 的上限无效：必须为有限非负数${field.max === undefined ? '。' : '，且上限不能超过 1。'}`)
     }
     for (const proxyExperiments of experiments) for (const proxySteps of steps) {
       rows.push({ key: `${value}:${proxyExperiments}:${proxySteps}`, proxyExperiments, proxySteps, ...nodes, trainingNodesOverride,
@@ -54,7 +53,7 @@ export function materializeQuadMixBatch(source, rows) {
     const fresh = createStrategy('quadmix')
     return { ...fresh, ...JSON.parse(JSON.stringify(source)),
       // Each new strategy needs its own identity, auto-generated job names and model name.
-      id: fresh.id, name: '', mixingJobName: '', trainingJobName: '', modelName: '',
+      id: fresh.id, devicesPerNode: 8, name: '', mixingJobName: '', trainingJobName: '', modelName: '',
       proxyExperiments: row.proxyExperiments, proxySteps: row.proxySteps,
       mixingNodes: row.mixingNodes, trainingNodes: row.trainingNodes,
       trainingNodesOverride: row.trainingNodesOverride,

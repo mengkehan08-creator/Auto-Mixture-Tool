@@ -22,7 +22,6 @@ const totalExperiments = computed(() => selected.value.reduce((sum, row) => sum 
 const field = computed(() => samplingFields.find(f => f.key === settings.parameter))
 const symbol = computed(() => field.value.label.split(' · ')[0])
 const inherited = computed(() => samplingFields.filter(f => f.key !== settings.parameter))
-const modes = { upper: '搜索上限', lower: '搜索下限', fixed: '固定值' }
 function toggle(key) {
   excluded.value = excluded.value.includes(key) ? excluded.value.filter(k => k !== key) : [...excluded.value, key]
 }
@@ -50,11 +49,11 @@ onBeforeUnmount(() => dialog.value?.close())
             <label class="field"><span>代理实验步数</span><input v-model="settings.steps" placeholder="5000" /></label>
             <div class="form-grid two-cols">
               <label class="field"><span>扫描参数</span><select v-model="settings.parameter"><option v-for="item in samplingFields" :key="item.key" :value="item.key">{{ item.label }}</option></select></label>
-              <label class="field"><span>修改方式</span><select v-model="settings.mode"><option v-for="(label, mode) in modes" :key="mode" :value="mode">{{ label }}</option></select></label>
+              <div class="field"><span>搜索方式</span><small>下限固定为 0，只调整上限。</small></div>
             </div>
-            <label class="field"><span>{{ symbol }} {{ modes[settings.mode] }}取值</span><textarea v-model="settings.values" rows="2" placeholder="0.1, 0.15, 0.2, 0.25, 0.3"></textarea><small v-if="settings.mode === 'fixed'">上下限均设为此值，该参数不再参与搜索。</small><small v-else>另一侧边界保持为 {{ source.samplingBounds[field.key][settings.mode === 'upper' ? 0 : 1] }}。</small></label>
+            <label class="field"><span>{{ symbol }} 搜索上限取值</span><textarea v-model="settings.values" rows="2" placeholder="0.1, 0.15, 0.2, 0.25, 0.3"></textarea><small>每个取值代表一组搜索上限，下限均为 0。</small></label>
             <section class="batch-nodes"><h4>本批次节点配置</h4><label class="field"><span>配比节点数</span><input v-model.number="settings.mixingNodes" type="number" min="1" max="16" step="1" /></label><label class="field"><span>训练节点设置</span><select v-model="settings.overrideTrainingNodes"><option :value="false">使用统一默认值（{{ defaultTrainingNodes }} 节点）</option><option :value="true">本批次单独设置</option></select></label><label v-if="settings.overrideTrainingNodes" class="field"><span>本批次训练节点数</span><input v-model.number="settings.trainingNodes" type="number" min="1" max="16" step="1" /></label><p>节点数按每个作业计算。单独设置仅作用于本批次；优先级在统一训练参数中设置，评测节点数在评测配置中设置。</p></section>
-            <div class="inherited-settings"><h4>保持一致</h4><dl><div><dt>参数搜索次数 / 随机种子</dt><dd>{{ source.searchCount }} / {{ source.seed }}</dd></div><div v-for="item in inherited" :key="item.key"><dt>{{ item.label.split(' · ')[0] }} 搜索范围</dt><dd>{{ source.samplingBounds[item.key].join(' ～ ') }}</dd></div></dl><p>数据、训练参数及评测设置不变。作业与模型名称重新自动生成；命令沿用当前策略，若曾写死参数，请在任务配置中调整。</p></div>
+            <div class="inherited-settings"><h4>保持一致</h4><dl><div><dt>参数搜索次数 / 随机种子</dt><dd>{{ source.searchCount }} / {{ source.seed }}</dd></div><div v-for="item in inherited" :key="item.key"><dt>{{ item.label.split(' · ')[0] }} 搜索上限</dt><dd>{{ source.samplingBounds[item.key][1] }}</dd></div></dl><p>数据、训练参数及评测设置不变。作业与模型名称重新自动生成；命令沿用当前策略，若曾写死参数，请在任务配置中调整。</p></div>
           </section>
           <section class="batch-preview">
             <div class="batch-section-title"><h3>组合预览</h3><span>本批次 {{ plan.rows.length }} 个组合</span></div>
@@ -63,7 +62,7 @@ onBeforeUnmount(() => dialog.value?.close())
             <template v-else>
               <p class="batch-node-summary">本批次每项策略：配比 {{ settings.mixingNodes }} 节点 · 训练 {{ settings.overrideTrainingNodes ? settings.trainingNodes : defaultTrainingNodes }} 节点{{ settings.overrideTrainingNodes ? '（单独设置）' : '（跟随统一值）' }}</p>
               <div class="batch-selection"><span>取消勾选可跳过组合</span><button type="button" class="button secondary" @click="excluded = selected.length === plan.rows.length ? plan.rows.map(row => row.key) : []">{{ selected.length === plan.rows.length ? '取消全选' : '全选' }}</button></div>
-              <div class="batch-table-scroll"><table><thead><tr><th>选择</th><th>{{ symbol }} 范围</th><th>实验数</th><th>步数</th><th>自动名称前缀</th></tr></thead><tbody><tr v-for="(row, index) in plan.rows" :key="row.key" :class="{ excluded: excluded.includes(row.key) }"><td><input type="checkbox" :checked="!excluded.includes(row.key)" :aria-label="`选择组合 ${index + 1}`" @change="toggle(row.key)" /></td><td>{{ row.samplingBounds[settings.parameter].join(' ～ ') }}</td><td>{{ row.proxyExperiments }}</td><td>{{ row.proxySteps }}</td><td><code>{{ parameterName({ type: 'quadmix', ...row }) }}</code></td></tr></tbody></table></div>
+              <div class="batch-table-scroll"><table><thead><tr><th>选择</th><th>{{ symbol }} 上限</th><th>实验数</th><th>步数</th><th>自动名称前缀</th></tr></thead><tbody><tr v-for="(row, index) in plan.rows" :key="row.key" :class="{ excluded: excluded.includes(row.key) }"><td><input type="checkbox" :checked="!excluded.includes(row.key)" :aria-label="`选择组合 ${index + 1}`" @change="toggle(row.key)" /></td><td>{{ row.samplingBounds[settings.parameter][1] }}</td><td>{{ row.proxyExperiments }}</td><td>{{ row.proxySteps }}</td><td><code>{{ parameterName({ type: 'quadmix', ...row }) }}</code></td></tr></tbody></table></div>
               <p class="batch-note">正式名称在提交时追加时间，重名自动区分。每项策略独立配比、对应独立训练，全部成功后按原配置汇总评测。</p>
             </template>
           </section>

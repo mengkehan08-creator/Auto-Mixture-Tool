@@ -9,7 +9,7 @@ import { computed } from 'vue'
 import { ArrowRight, BookOpen, Download, Info } from '@lucide/vue'
 const props = defineProps({ kind: String })
 defineEmits(['close'])
-const titles = { dataset: 'QuaDMix 输入数据示例', evaluation: '评测包格式与支持范围', quadmix: 'QuaDMix 算法', manual: '人工配比', random: '随机配比' }
+const titles = { dataset: 'QuaDMix 输入数据示例', evaluation: '评测包格式与支持范围', quadmix: 'QuaDMix 算法', manual: '自定义配比', random: '随机配比' }
 const guides = {
   quadmix: {
     tag: '算法寻找配比', headline: '先做小规模试验，再决定怎么选数据。',
@@ -17,7 +17,7 @@ const guides = {
     steps: [['整理候选数据', '读取每篇文本的领域和质量分，形成不同的选取规则。'], ['试验与搜索', '用小模型做多次代理实验，再搜索预测表现较好的配比参数。'], ['生成训练子集', '按找到的规则抽取整篇文本，交给后续模型训练。']],
     example: '例如：算法比较不同数学、物理等数据组合的验证表现，再决定各类数据的选取权重；不是简单地只选质量分最高的文本。',
     use: '希望通过实验寻找配比，愿意投入额外计算资源。',
-    caution: '最终采样量不是由代理实验步数直接决定的；同一篇文本可能被选中多次。搜索结果也不保证优于人工或随机策略。',
+    caution: '最终采样量不是由代理实验步数直接决定的；同一篇文本可能被选中多次。搜索结果也不保证优于自定义或随机策略。',
     output: '采样文本、实际配比和实验结果',
   },
   manual: {
@@ -34,7 +34,7 @@ const guides = {
     intro: '所有候选文档参与随机选择，不按领域分配固定份额，也不按质量分优先选择。无需运行代理实验。',
     steps: [['汇总候选文本', '将各领域的可用文档放入同一个候选池。'], ['随机选文本', '按随机种子打乱文档，按预算依次选取。'], ['核算并输出', '统计实际 Token 数，按预算上限裁剪，写出训练数据。']],
     example: '例如：候选池里数学文档较多，随机结果中数学通常也较多。随机选文档，不代表每个领域各占相同份额。',
-    use: '建立简单的对照基线，判断算法或人工配比是否带来收益。',
+    use: '建立简单的对照基线，判断算法或自定义配比是否带来收益。',
     caution: '不同随机种子可能产生不同子集。按文档随机，不等于按 Token 均匀抽样；脚本可替换默认选文规则。',
     output: '采样文本、实际配比和数据统计',
   },

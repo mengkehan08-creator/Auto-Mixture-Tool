@@ -36,6 +36,30 @@ def create(manager, value=None):
     return manager.records[result['id']]
 
 
+@pytest.mark.parametrize('stage', ['quadmix', 'manual', 'training', 'evaluation', 'training_override'])
+@pytest.mark.parametrize('devices', [1, 4, 7, 9, True, '8'])
+def test_only_eight_npus_per_node(manager, stage, devices):
+    value = parallel_config()
+    if stage in ('quadmix', 'manual'):
+        next(s for s in value['strategies'] if s['type'] == stage)['devices_per_node'] = devices
+    elif stage == 'training_override':
+        value['strategies'][0]['training'] = {'devices_per_node': devices}
+    else:
+        value[stage]['devices_per_node'] = devices
+    with pytest.raises(ValueError, match='8 张 NPU'):
+        manager.create(value)
+    assert not manager.client.submissions
+
+
+@pytest.mark.parametrize('key', ['omega', 'epsilon', 'lambda', 'eta'])
+def test_web_sampling_lower_bounds_are_not_configurable(manager, key):
+    value = parallel_config()
+    value['strategies'][0]['sampling_bounds'] = {key: [0.001, 0.01]}
+    with pytest.raises(ValueError, match='下限固定为 0'):
+        manager.create(value)
+    assert not manager.client.submissions
+
+
 def finish(manager, record):
     for _ in range(12):
         graph.tick(manager, record)

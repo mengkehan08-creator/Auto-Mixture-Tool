@@ -39,10 +39,10 @@ def test_adapter_cli_and_core_preserve_effective_values():
     assert raw['epsilon_min'] * .001 == pytest.approx(.002)
 
 
-def test_workflow_normalization_preserves_ranges(tmp_path):
+def test_workflow_normalization_preserves_upper_bound(tmp_path):
     from auto_mixture_tool.modelarts.workflow import ModelArtsWorkflowManager
     from test_modelarts_workflow import config
     settings = config()
-    settings['strategies'][0]['sampling_bounds'] = {'omega': [.1, .3]}
+    settings['strategies'][0]['sampling_bounds'] = {'omega': [0, .3]}
     result = ModelArtsWorkflowManager(tmp_path)._validate(settings)
-    assert result['strategies'][0]['sampling_bounds']['omega'] == [.1, .3]
+    assert result['strategies'][0]['sampling_bounds']['omega'] == [0, .3]

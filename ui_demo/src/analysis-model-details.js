@@ -6,7 +6,7 @@ const tokens = value => Number.isFinite(value) ? `${formatTokens(value)}（${for
 
 export function modelDetailRows(model) {
   const config = model.experiment_config || {}, sampling = model.sampling || {}
-  const types = { quadmix: 'QuaDMix 算法', manual: '人工配比', random: '随机配比' }
+  const types = { quadmix: 'QuaDMix 算法', manual: '自定义配比', random: '随机配比' }
   const rows = [{ label: '配比策略', value: types[config.type] || config.type || missing }]
   if (config.type === 'quadmix') {
     rows.push({ label: '代理实验数', value: count(config.proxy_experiments) },
@@ -23,11 +23,14 @@ export function modelDetailRows(model) {
   return rows
 }
 
-export function domainTokenSummary(model) {
+export function domainTokenShares(model) {
   const sampling = model.sampling || {}
   const aliases = { math: '数学', mathematics: '数学', chemistry: '化学', biology: '生物学', physics: '物理' }
   return Object.entries(sampling.domain_token_ratios_named || sampling.domain_ratios || {})
     .filter(([, value]) => Number.isFinite(value) && value >= 0 && value <= 1)
-    .map(([name, value]) => `${aliases[name.toLowerCase()] || (/^\d+$/.test(name) ? `领域 ${name}（名称未记录）` : name)} ${(value * 100).toFixed(2)}%`)
-    .join(' · ') || '未记录'
+    .map(([name, value]) => ({ name: aliases[name.toLowerCase()] || (/^\d+$/.test(name) ? `领域 ${name}（名称未记录）` : name), value }))
+}
+
+export function domainTokenSummary(model) {
+  return domainTokenShares(model).map(({ name, value }) => `${name} ${(value * 100).toFixed(2)}%`).join(' · ') || '未记录'
 }

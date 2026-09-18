@@ -21,7 +21,7 @@ const nodeOverrides = computed(() => props.strategies.filter(s => s.trainingNode
       </div>
       <div class="form-grid two-cols">
         <label class="field"><span>训练 Token 预算</span><input v-model.number="config.tokenBudget" type="number" min="1" /><small>各策略使用同一预算，训练步数自动计算。</small></label>
-        <label class="field"><span>每节点 NPU 数</span><input v-model.number="config.devicesPerNode" type="number" min="1" max="8" /></label>
+        <label class="field"><span>每节点 NPU 数</span><input value="8" readonly aria-label="每节点固定 8 张 NPU" /></label>
         <label class="field"><span>默认训练节点数</span><input v-model.number="config.nodes" type="number" min="1" max="16" step="1" /><small>应用到未单独设置节点数的策略。</small></label>
         <label class="field"><span>训练任务优先级</span><select v-model.number="config.priority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select><small>本次全部训练作业统一使用。</small></label>
       </div>

@@ -39,8 +39,8 @@ def validate(manager, config):
             _clean_obs_uri(str(strategy.get('training_framework_obs_uri') or '')) if source == 'obs' else ''
         )
         devices = strategy.get('devices_per_node', 8)
-        if type(devices) is not int or not 1 <= devices <= 8:
-            raise ValueError('每节点设备数必须为 1–8')
+        if type(devices) is not int or devices != 8:
+            raise ValueError('配比每节点仅支持 8 张 NPU（devices_per_node=8）')
         strategy['devices_per_node'] = devices
         for stage in ('mixing', 'training'):
             key = stage + '_nodes'

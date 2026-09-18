@@ -39,17 +39,16 @@ test('example generates 15 distinct combinations with omega upper limits, not fi
   assert.equal(JSON.stringify(source), before)
 })
 
-test('supports one-factor sweeps, multiple steps, alternate bounds and fixed values', () => {
+test('only upper sweeps are allowed; all copied lower bounds reset to zero', () => {
   const source = createStrategy()
+  source.samplingBounds.lambda = [500, 1000]
   for (const parameter of ['omega', 'epsilon', 'lambda', 'eta']) {
-    const plan = planQuadMixBatch(source, { experiments: '50', steps: '15,30', parameter, mode: 'fixed', values: '0, 0.001' })
+    const plan = planQuadMixBatch(source, { experiments: '50', steps: '15,30', parameter, mode: 'upper', values: '0, 0.001' })
     assert.equal(plan.length, 4)
-    assert.deepEqual(plan[2].samplingBounds[parameter], [.001, .001])
-    assert.equal(plan[3].proxySteps, 30)
+    assert.deepEqual(plan[2].samplingBounds[parameter], [0, .001])
+    assert.ok(plan.every(row => Object.values(row.samplingBounds).every(pair => pair[0] === 0)))
   }
-  const plan = planQuadMixBatch(source, { ...batchExample(), experiments: '50', parameter: 'lambda', mode: 'lower', values: '0, 500' })
-  assert.equal(plan.length, 2)
-  assert.deepEqual(plan[1].samplingBounds.lambda, [500, 1000])
+  for (const mode of ['lower', 'fixed']) assert.throws(() => planQuadMixBatch(source, { ...batchExample(), mode }), /仅支持设置搜索上限/)
 })
 
 test('parsing deduplicates values and accepts Chinese commas, spaces and newlines', () => {

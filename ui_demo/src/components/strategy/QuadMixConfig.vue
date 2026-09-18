@@ -2,10 +2,14 @@
 import { strategyNameHint } from '../../strategy-names'
 import { computed, watchEffect } from 'vue'
 import { Layers } from '@lucide/vue'
-import { defaultSamplingBounds, samplingFields, validBounds, sampleScenario, formatTokens, proxyTrainingTokens } from '../../budget-estimates'
+import { upperOnlyBounds, samplingFields, validBounds, sampleScenario, formatTokens, proxyTrainingTokens } from '../../budget-estimates'
 const props = defineProps({ modelValue: { type: Object, required: true }, datasetTokens: Number })
 defineEmits(['batch'])
-watchEffect(() => { if (!props.modelValue.samplingBounds) props.modelValue.samplingBounds = defaultSamplingBounds() })
+watchEffect(() => {
+  props.modelValue.devicesPerNode = 8
+  if (!props.modelValue.samplingBounds || Object.values(props.modelValue.samplingBounds).some(pair => pair[0] !== 0))
+    props.modelValue.samplingBounds = upperOnlyBounds(props.modelValue.samplingBounds)
+})
 const scenario = computed(() => sampleScenario(props.datasetTokens, props.modelValue.samplingBounds))
 </script>
 
@@ -18,13 +22,13 @@ const scenario = computed(() => sampleScenario(props.datasetTokens, props.modelV
     <label class="field"><span>参数搜索次数</span><input v-model.number="modelValue.searchCount" type="number" min="1" /></label>
     <label class="field"><span>随机种子</span><input v-model.number="modelValue.seed" type="number" /></label>
     <label class="field"><span>设备类型</span><select v-model="modelValue.deviceType"><option>NPU</option></select><small>当前 ModelArts 启动模板适配 Ascend NPU。</small></label>
-    <label class="field"><span>每节点设备数</span><input v-model.number="modelValue.devicesPerNode" type="number" min="1" /></label>
+    <label class="field"><span>每节点 NPU 数</span><input value="8" readonly aria-label="每节点固定 8 张 NPU" /><small>当前仅支持每节点 8 卡，节点数可独立配置。</small></label>
   </div>
-  <div class="sampling-bounds"><h3>采样参数搜索范围</h3><p>填写实际参数值；上下限相同可固定该参数。各领域在这些范围内独立搜索。</p>
+  <div class="sampling-bounds"><h3>采样参数搜索上限</h3><p>只需设置上限，各参数下限固定为 0；各领域独立搜索。</p>
     <div class="form-grid two-cols"><section v-for="field in samplingFields" :key="field.key" class="bound-card"><h4>{{ field.label }}</h4><div class="form-grid two-cols">
-      <label v-for="(label, index) in ['下限', '上限']" :key="label" class="field"><span>{{ label }}</span><input v-model.number="modelValue.samplingBounds[field.key][index]" :aria-label="`${field.key} ${label}`" type="number" min="0" :max="field.max" :step="field.step" /></label>
+      <label class="field"><span>搜索上限</span><input v-model.number="modelValue.samplingBounds[field.key][1]" :aria-label="`${field.key} 搜索上限`" type="number" min="0" :max="field.max" :step="field.step" /></label>
     </div><small>{{ field.help }}</small></section></div>
-    <p v-if="!validBounds(modelValue.samplingBounds)" class="error-message">范围无效：上下限须为有限非负数，下限不能大于上限；ω、ε、η 上限不能超过 1。提交时会再次校验。</p>
+    <p v-if="!validBounds(modelValue.samplingBounds)" class="error-message">上限无效：须为有限非负数；ω、ε、η 上限不能超过 1。提交时会再次校验。</p>
   </div>
   <aside class="sampling-reference"><div><span>最终采样 Token</span><strong>实际值待统计</strong></div><p>以本次最终输出文本经训练 Tokenizer 统计的 Token 总数为准，重复入选的文本也计入。</p></aside>
   <div class="sampling-estimate" role="status"><template v-if="scenario"><strong>预计最终采样 Token 数：约 {{ formatTokens(scenario.midpoint) }}</strong><p>按参数范围中点计算；范围端点情景：{{ formatTokens(scenario.low) }} ～ {{ formatTokens(scenario.high) }} Token。修改 ω、ε、λ、η 后自动更新，与训练预算无关。</p></template><p v-else>输入数据自动校验通过、参数范围有效后，显示预计最终采样 Token 数。</p><small>按输入 Token 抽样估算量与采样函数计算，假设领域内 Token 排名连续。不是回归搜索预测、置信区间或数量保证；未扣除后续过滤与裁剪，重复文档计入。改变质量权重或范围后，搜索结果也可能改变。</small></div>

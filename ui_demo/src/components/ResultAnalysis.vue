@@ -76,8 +76,8 @@ watch(() => props.workflowId, () => {
       <button v-for="item in data.reports" :key="item.id" type="button" class="button" :class="report?.id === item.id ? 'primary' : 'secondary'" :aria-pressed="report?.id === item.id" @click="reportId = item.id; task = ''">{{ item.name }}</button>
     </div>
     <template v-if="report">
-      <article v-if="winners.length" class="analysis-panel winner-panel"><h3>平均正确率最高的模型与实验配置</h3>
-        <section v-for="model in winners" :key="model.id"><h4>{{ model.name }} <AnalysisScore :value="model.mean_accuracy" :best-label="bestLabel(model)" /></h4>
+      <article v-if="winners.length" class="analysis-panel winner-panel"><div class="winner-heading"><span class="winner-kicker">本次最佳表现</span><h3>平均正确率最高的模型与实验配置</h3><p>按共同评测项比较，保留全部并列最优模型。</p></div>
+        <section v-for="model in winners" :key="model.id" class="winner-model"><div class="winner-model-heading"><h4>{{ model.name }}</h4><div class="winner-score"><span>平均正确率</span><AnalysisScore :value="model.mean_accuracy" :best-label="bestLabel(model)" /></div></div>
           <p>共同评测项 {{ report.common_tasks.length }} 项 · 模型标签 {{ model.model_tag || '未记录' }} · checkpoint {{ model.step ?? '未记录' }}</p>
           <ModelExperimentSummary :model="model" />
           <p v-if="!Object.keys(model.experiment_config || {}).length">旧报告未记录完整配比配置；这里只展示已知信息，不推测缺失参数。</p>
@@ -118,7 +118,16 @@ watch(() => props.workflowId, () => {
 </template>
 
 <style scoped>
-.winner-panel { border-color: #edbcc5 !important; background: linear-gradient(120deg, #fff3f4, #fff) !important; }
+.winner-panel { border-color: #e5d2da !important; background: #fff !important; padding: 0 !important; overflow: hidden; }
+.winner-heading { padding: 24px 28px; background: linear-gradient(115deg, #fff1f3, #f6f8ff); border-bottom: 1px solid #eee3e9; }
+.winner-heading h3 { margin: 8px 0; font-size: 20px; line-height: 1.6; } .winner-heading p { margin: 0; font-size: 13px; color: #738098; }
+.winner-kicker { font-size: 11px; font-weight: 700; color: #b92339; letter-spacing: 2px; }
+.winner-model { padding: 24px 28px; } .winner-model + .winner-model { border-top: 1px solid #e9edf4; }
+.winner-model-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 18px; }
+.winner-model-heading h4 { flex: 1; min-width: 180px; font-size: 18px; }
+.winner-score { padding: 12px 20px; background: #fff1f3; border-radius: 12px; display: grid; gap: 5px; color: #b92339; }
+.winner-score > span { font-size: 11px; } .winner-score :deep(.analysis-score) { font-size: 24px; }
+@media (max-width: 680px) { .winner-heading, .winner-model { padding: 18px; } }
 .winner-panel h4 { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; color: #b92339; margin: 10px 0; overflow-wrap: anywhere; }
 .result-analysis { display: grid; gap: 20px; min-width: 0; color: #203354; }
 .analysis-toolbar, .analysis-tabs { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; }

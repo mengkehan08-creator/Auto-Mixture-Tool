@@ -4,6 +4,10 @@ export function repeatEstimate(budget, tokens) {
 }
 
 export const defaultSamplingBounds = () => ({ omega: [0, 0.1], epsilon: [0, 0.001], lambda: [0, 1000], eta: [0, 1] })
+// New UI configurations expose upper bounds only; history keeps its original ranges.
+export function upperOnlyBounds(bounds) {
+  return Object.fromEntries(Object.entries(defaultSamplingBounds()).map(([key, pair]) => [key, [0, bounds?.[key]?.[1] ?? pair[1]]]))
+}
 export const samplingFields = [
   { key: 'omega', label: 'ω · 质量排名范围', step: 0.01, max: 1, help: '排名 r ≤ ω 的文本优先选取。扩大范围通常增加采样量；不是原始质量分的上限。' },
   { key: 'epsilon', label: 'ε · 尾部采样率', step: 0.0001, max: 1, help: '非优先区域的基础入选概率。提高 ε 会增加尾部数据；0 表示不选尾部。' },

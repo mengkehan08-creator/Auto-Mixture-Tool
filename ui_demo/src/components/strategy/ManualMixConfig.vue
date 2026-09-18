@@ -19,7 +19,7 @@ defineProps({ modelValue: { type: Object, required: true } })
     </div>
 
     <div v-if="modelValue.source === 'builtin'" class="source-content">
-      <label class="field"><span>内置采样方法</span><select v-model="modelValue.builtinMethod"><option value="default_manual">默认人工比例采样</option></select></label>
+      <label class="field"><span>内置采样方法</span><select v-model="modelValue.builtinMethod"><option value="default_manual">默认比例采样</option></select></label>
     </div>
     <div v-else class="source-content">
       <StrategyScriptInput :model-value="modelValue" />

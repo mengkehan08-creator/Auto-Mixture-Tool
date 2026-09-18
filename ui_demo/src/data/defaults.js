@@ -4,7 +4,7 @@ const obsRoot = 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/'
 
 export const strategyOptions = [
   { value: 'quadmix', label: 'QuaDMix 算法', description: '内置算法 · 可独立运行' },
-  { value: 'manual', label: '人工配比', description: '内置方法或完整策略脚本' },
+  { value: 'manual', label: '自定义配比', description: '内置方法或完整策略脚本' },
   { value: 'random', label: '随机配比', description: '内置方法或完整策略脚本' },
 ]
 
@@ -79,7 +79,7 @@ export const createTrainingConfig = () => ({
 
 export function trainingParameters(config = createTrainingConfig()) {
   return { token_budget: config.tokenBudget, device_batch_size: config.deviceBatchSize,
-    devices_per_node: config.devicesPerNode, eval_every: config.evalEvery, core_metric_every: config.coreMetricEvery }
+    devices_per_node: 8, eval_every: config.evalEvery, core_metric_every: config.coreMetricEvery }
 }
 
 export const createEvaluationConfig = () => ({
