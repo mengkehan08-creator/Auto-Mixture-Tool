@@ -22,6 +22,11 @@ export function proxyTrainingTokens(steps) {
 export function formatTokens(tokens) {
   return Number.isFinite(tokens) ? Math.round(tokens).toLocaleString('en-US') : '待统计'
 }
+export function formatBillions(tokens) {
+  if (!Number.isFinite(tokens) || tokens < 0) return '待统计'
+  if (tokens > 0 && tokens < 1000000) return '<0.001 B Token'
+  return `${(tokens / 1e9).toFixed(3)} B Token`
+}
 // Approximate the token-weighted rank integral of the sampling function.
 // This is a scenario before filters/trim, not a prediction of searched parameters.
 function samplingFraction({ omega, epsilon, lambda, eta }) {

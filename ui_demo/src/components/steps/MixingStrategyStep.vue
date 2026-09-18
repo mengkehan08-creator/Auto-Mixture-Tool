@@ -5,7 +5,7 @@ import QuadMixBatchDialog from '../strategy/QuadMixBatchDialog.vue'
 import { ref } from 'vue'
 import ResourceGuide from '../ResourceGuide.vue'
 import ResourceCheck from '../ResourceCheck.vue'
-import { formatTokens } from '../../budget-estimates'
+import { formatTokens, formatBillions } from '../../budget-estimates'
 const showGuide = ref(false)
 const batchSource = ref(null)
 const batchNotice = ref('')
@@ -46,7 +46,8 @@ function applyBatch({ strategies, placement }) {
       </div>
       <ResourceCheck kind="dataset" :uri="runtime.inputDataObsUri" @checked="runtime.datasetEstimate = $event" />
       <div v-if="runtime.datasetEstimate?.ready" class="path-preview">
-        数据文件大小：{{ (runtime.datasetEstimate.size_bytes / 1024 ** 3).toFixed(3) }} GiB · 输入数据集预计 Token 数：{{ formatTokens(runtime.datasetEstimate.estimated_tokens) }}
+        <strong>输入数据集预计规模：{{ formatBillions(runtime.datasetEstimate.estimated_tokens) }}</strong>
+        <br />输入数据集预计 Token 数：{{ formatTokens(runtime.datasetEstimate.estimated_tokens) }}（1 B = 10 亿 Token） · 数据文件大小：{{ (runtime.datasetEstimate.size_bytes / 1024 ** 3).toFixed(3) }} GiB
         <br />按每片随机至多 3 条文本的平均长度 × 该片文档数 ÷ 4 汇总估算，与训练预算无关。抽样量较小，中文、代码及长度差异大的数据可能偏差明显。
       </div>
       <p class="path-preview">输出预览：<code>{{ runtime.outputRootObsUri.replace(/\/$/, '') }}/runs/实验名-时间-编号/strategies/策略编号/</code>，各策略独立保存配比、采样和训练日志。</p>

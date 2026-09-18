@@ -72,11 +72,31 @@ def model_stats(report, model):
         return {}
     candidates = {k: v for k, v in stats.items() if isinstance(v, dict) and 'tokens' in v}
     selected = candidates.get(model.get('id'))
+    if selected is None:
+        kind = (model.get('strategy_config') or {}).get('type')
+        selected = candidates.get('manual_ratio' if kind == 'manual' else kind)
     if selected is None and len(candidates) == 1:
         selected = next(iter(candidates.values()))
     if not selected:
         return {}
-    return {k: selected[k] for k in ('tokens', 'train_docs', 'domain_ratios', 'domain_doc_ratios') if k in selected}
+    result = {k: selected[k] for k in ('tokens', 'train_docs', 'domain_ratios', 'domain_doc_ratios') if k in selected}
+    config = stats.get('config') or {}
+    names = config.get('domain_names') or []
+    aliases = {'math': '数学', 'mathematics': '数学', 'chemistry': '化学',
+               'biology': '生物学', 'physics': '物理'}
+    named = {}
+    for domain, ratio in (selected.get('domain_ratios') or {}).items():
+        name = str(domain)
+        if name.isdecimal():
+            index = int(name)
+            name = str(names[index]) if isinstance(names, list) and index < len(names) else f'领域 {name}（名称未记录）'
+        name = aliases.get(name.lower(), name)
+        value = score(ratio, accuracy=True)
+        if value is not None:
+            named[name] = named.get(name, 0) + value
+    result['domain_token_ratios_named'] = named
+    result['token_method'] = config.get('token_method')
+    return result
 
 
 def analyze_report(report):

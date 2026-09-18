@@ -92,6 +92,37 @@ def test_historical_models_and_sampling_stats_preserve_identity():
     assert model['sampling']['domain_ratios']['数学'] == .7
 
 
+def test_domain_names_follow_each_reports_schema_and_never_assume_number_order():
+    data = report()
+    data['models'][0].update(catalog_id='history:a', strategy_config={
+        'type': 'quadmix', 'proxy_experiments': 50, 'proxy_steps': 15,
+        'sampling_bounds': {'omega': [0, .2], 'epsilon': [0, .001], 'lambda': [0, 1000], 'eta': [0, 1]}})
+    data['dataset_stats'] = {'history:a': {
+        'config': {'domain_names': ['物理', 'mathematics'], 'token_method': 'nanochat tokenizer'},
+        'quadmix': {'tokens': 165000000, 'train_docs': 1234, 'domain_ratios': {'0': .4, '1': .6}},
+        'random': {'tokens': 999, 'domain_ratios': {'0': 1}}}}
+    model = analyze_report(data)['models'][0]
+    assert model['experiment_config']['sampling_bounds']['omega'] == [0, .2]
+    assert model['sampling']['tokens'] == 165000000
+    assert model['sampling']['train_docs'] == 1234
+    assert model['sampling']['domain_token_ratios_named'] == {'物理': .4, '数学': .6}
+    assert model['sampling']['token_method'] == 'nanochat tokenizer'
+    del data['dataset_stats']['history:a']['config']['domain_names']
+    assert analyze_report(data)['models'][0]['sampling']['domain_token_ratios_named'] == {
+        '领域 0（名称未记录）': .4, '领域 1（名称未记录）': .6}
+
+
+def test_manual_stats_select_token_ratios_not_configured_or_document_ratios():
+    data = report()
+    data['models'][0]['strategy_config'] = {'type': 'manual', 'ratios': {'数学': .9}}
+    data['dataset_stats'] = {'manual_ratio': {'tokens': 100, 'domain_ratios': {'math': .4, 'chemistry': .6},
+                                             'domain_doc_ratios': {'math': .8, 'chemistry': .2}},
+                             'random': {'tokens': 200}}
+    stats = analyze_report(data)['models'][0]['sampling']
+    assert stats['domain_token_ratios_named'] == {'数学': .4, '化学': .6}
+    assert stats['tokens'] == 100
+
+
 def test_pending_evaluation_does_not_read_obs():
     data = record()
     data['jobs'][0]['status'] = 'FAILED'

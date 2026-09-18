@@ -95,12 +95,20 @@ def configuration(workflow_id: str):
 def analysis():
     report = analyze_report({'models': [
         {'id': str(i), 'name': name, 'step': 383, 'model_tag': 'd24',
-         'strategy_config': {'type': kind, 'proxy_experiments': 16, 'proxy_steps': 15, 'seed': 42},
+         'strategy_config': {'type': kind, 'proxy_experiments': 50, 'proxy_steps': 15, 'seed': 42,
+                             'sampling_bounds': {'omega': [0, .2], 'epsilon': [0, .001], 'lambda': [0, 1000], 'eta': [0, 1]}},
          'training_config': {'token_budget': 401395843},
          'metrics': [{'Task': task, 'Accuracy': score} for task, score in zip(['arc_easy', 'mmlu_stem', 'gsm8k_cot'], scores)]}
         for i, (name, kind, scores) in enumerate([('QuaDMix · 示例', 'quadmix', [.71, .46, .32]),
                                                 ('人工配比 · 示例', 'manual', [.67, .47, .30]),
-                                                ('随机配比 · 示例', 'random', [.61, .40, .25])])]})
+                                                ('随机配比 · 示例', 'random', [.61, .40, .25])])],
+        'dataset_stats': {'config': {'domain_names': ['数学', '化学', '生物学', '物理'], 'token_method': 'nanochat tokenizer'},
+                          '0': {'tokens': 165000000, 'train_docs': 45000,
+                                'domain_ratios': {'0': .6, '1': .125, '2': .125, '3': .15}},
+                          '1': {'tokens': 390000000, 'train_docs': 95000,
+                                'domain_ratios': {'0': .6, '1': .125, '2': .125, '3': .15}},
+                          '2': {'tokens': 390000000, 'train_docs': 99000,
+                                'domain_ratios': {'0': .3, '1': .2, '2': .25, '3': .25}}}})
     return {'name': '界面验收示例（非真实实验）', 'reports': [{**report, 'id': 'sample', 'name': '示例数据', 'source': '本机验收夹具，非真实评测结果'}],
             'errors': [], 'message': '以下数值仅用于验收图表布局，不代表算法性能。'}
 
