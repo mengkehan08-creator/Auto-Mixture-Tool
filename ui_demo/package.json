@@ -1,0 +1,20 @@
+{
+  "name": "auto-mixture-ui-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --open app.html",
+    "build": "vite build && node scripts/export-demo.mjs",
+    "preview": "vite preview --open app.html"
+  },
+  "dependencies": {
+    "@lucide/vue": "^1.40.0",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.5",
+    "vite-plugin-singlefile": "^2.1.0"
+  }
+}

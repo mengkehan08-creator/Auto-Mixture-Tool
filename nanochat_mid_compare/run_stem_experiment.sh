@@ -1,0 +1,1137 @@
+#!/usr/bin/env bash
+# ──────────────────────────────────────────────────────────────
+# QuadMix vs Random vs Manual Ratio: STEM Mid-Training Comparison
+# ──────────────────────────────────────────────────────────────
+#
+# This script runs nanochat mid-training on three datasets:
+#   1. QuadMix-selected subset from STEM data
+#   2. Random subset from STEM data (token-count aligned)
+#   3. Manual Ratio subset from STEM data (domain-proportional, token-count aligned)
+#
+# Usage (after running QuaDMix pipeline on STEM data):
+#   bash nanochat_mid_compare/run_stem_experiment.sh
+#
+# Override any config via environment variables:
+#   QUADMIX_SAMPLED_DATA=/path/to/stem_sampled_dataset \
+#   STEM_DATA_DIR=/path/to/100B_stem_parquet_filtered \
+#   MANUAL_RATIO="数学=60:物理=15:化学=12.5:生物学=12.5" \
+#   bash nanochat_mid_compare/run_stem_experiment.sh
+#
+# ──────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+# ══════════════════════════════════════════════════════════════
+#  CONFIGURATION
+# ══════════════════════════════════════════════════════════════
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+QUADMIX_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+TIMESTAMP="${AMT_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+AMT_PYTHON_EXECUTABLE="${AMT_PYTHON_EXECUTABLE:-$(command -v python3)}"
+if [ -z "$AMT_PYTHON_EXECUTABLE" ] || [ ! -x "$AMT_PYTHON_EXECUTABLE" ]; then
+    echo "ERROR: Python executable not found: ${AMT_PYTHON_EXECUTABLE:-<empty>}"
+    exit 1
+fi
+# Keep every Python and torchrun child on the interpreter selected by the
+# ModelArts submission command instead of falling back to an image default.
+python3() {
+    "$AMT_PYTHON_EXECUTABLE" "$@"
+}
+
+# Resolve before creating outputs; never silently treat a missing worker rank
+# as node 0. The helper also supplies a separate evaluation rendezvous port.
+NUM_NPU="${NUM_NPU:-8}"
+DISTRIBUTED_ENV=$(python3 "$SCRIPT_DIR/distributed_runtime.py" environment --devices "$NUM_NPU")
+eval "$DISTRIBUTED_ENV"
+
+# QuaDMix remains the selected platform algorithm. Random and manual are
+# controlled comparison strategies that use the same token budget.
+COMPARISON_METHODS="${COMPARISON_METHODS:-quadmix,random,manual}"
+has_method() {
+    case ",$COMPARISON_METHODS," in
+        *",$1,"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+install_shared_symlink() {
+    local TARGET="$1"
+    local LINK="$2"
+    local CURRENT=""
+    if [ -e "$LINK" ] && [ ! -L "$LINK" ]; then
+        echo "ERROR: $LINK exists but is not a symbolic link"
+        return 1
+    fi
+    # A concurrent ln can briefly lose a check-then-create race. Retry and
+    # accept success only after observing the requested final target.
+    for _ in $(seq 1 20); do
+        ln -sfnT "$TARGET" "$LINK" 2>/dev/null || true
+        CURRENT=$(readlink "$LINK" 2>/dev/null || true)
+        if [ "$CURRENT" = "$TARGET" ]; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "ERROR: unable to install symlink: $LINK -> $TARGET"
+    return 1
+}
+show_progress() {
+    local PERCENT="$1"
+    local LABEL="$2"
+    local WIDTH=20
+    local FILLED=$((PERCENT * WIDTH / 100))
+    local EMPTY=$((WIDTH - FILLED))
+    local DONE EMPTY_PART
+    printf -v DONE '%*s' "$FILLED" ''
+    printf -v EMPTY_PART '%*s' "$EMPTY" ''
+    DONE=${DONE// /#}
+    EMPTY_PART=${EMPTY_PART// /-}
+    printf '[NanoChat Progress][node %s] [%s%s] %3d%% %s\n' \
+        "${NODE_RANK:-0}" "$DONE" "$EMPTY_PART" "$PERCENT" "$LABEL"
+}
+for method in ${COMPARISON_METHODS//,/ }; do
+    case "$method" in
+        quadmix|random|manual) ;;
+        *) echo "ERROR: unsupported comparison method: $method"; exit 1 ;;
+    esac
+done
+
+# QuadMix output: sampled_dataset from STEM pipeline
+QUADMIX_SAMPLED_DATA="${QUADMIX_SAMPLED_DATA:-/home/ma-user/work/quadmix/result/reoptimize_20260724_095141/sampled_dataset}"
+
+# STEM data directory (raw parquets with category_name, char_count_col, etc.)
+STEM_DATA_DIR="${STEM_DATA_DIR:-/home/ma-user/work/100B_stem_parquet_filtered}"
+
+# STEM schema config (relative to QUADMIX_DIR)
+SCHEMA_CONFIG="${SCHEMA_CONFIG:-configs/schema_stem.yaml}"
+
+# File pattern for STEM parquets (not preprocessed_*.parquet)
+FILE_PATTERN="${FILE_PATTERN:-*.parquet}"
+
+# Manual Ratio: domain=ratio format
+MANUAL_RATIO="${MANUAL_RATIO:-数学=60:物理=15:化学=12.5:生物学=12.5}"
+
+# Nanochat model directory
+NANOCHAT_MODEL_DIR="${NANOCHAT_MODEL_DIR:-/home/ma-user/work/nanochat_model_dir}"
+
+# Pre-downloaded NanoChat CORE evaluation bundle. When set, this directory is
+# linked into the writable NanoChat runtime so evaluation remains offline.
+NANOCHAT_EVAL_BUNDLE_DIR="${NANOCHAT_EVAL_BUNDLE_DIR:-}"
+
+# Writable per-node runtime layout. ModelArts input mounts are treated as
+# immutable sources and are never modified by this script.
+NANOCHAT_RUNTIME_DIR="${NANOCHAT_RUNTIME_DIR:-/tmp/auto-mixture-${AMT_RUN_ID:-$TIMESTAMP}/node-$NODE_RANK/nanochat_model}"
+
+# Base model tag
+BASE_MODEL_TAG="${BASE_MODEL_TAG:-d28}"
+
+# Nanochat repo root
+NANOCHAT_REPO="${NANOCHAT_REPO:-/home/ma-user/work/nanochat-npu}"
+export NANOCHAT_REPO
+
+# Mid-training checkpoint output directory
+MID_CHECKPOINTS_OUTPUT_DIR="${MID_CHECKPOINTS_OUTPUT_DIR:-$SCRIPT_DIR/checkpoints}"
+
+# Experiment output directory
+RESULT_DIR="${RESULT_DIR:-$SCRIPT_DIR/results_stem/$TIMESTAMP}"
+if [ "$NODE_RANK" != "0" ]; then
+    RESULT_DIR="$RESULT_DIR/node-$NODE_RANK"
+fi
+mkdir -p "$RESULT_DIR"
+exec > >(tee "$RESULT_DIR/experiment.log") 2>&1
+
+# ── Mid-training hyperparameters ──
+TARGET_PARAM_DATA_RATIO="${TARGET_PARAM_DATA_RATIO:-0.5}"
+DATA_MULTIPLIER="${DATA_MULTIPLIER:-2.5}"
+LOADER="${LOADER:-flat}"
+DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-1}"
+TRAIN_NUM_ITERATIONS="${TRAIN_NUM_ITERATIONS:-0}"
+TRAIN_TOKEN_BUDGET="${TRAIN_TOKEN_BUDGET:-}"
+if [ -n "$TRAIN_TOKEN_BUDGET" ]; then
+    if ! [[ "$TRAIN_TOKEN_BUDGET" =~ ^[1-9][0-9]*$ ]] || [ "$TRAIN_NUM_ITERATIONS" != "0" ]; then
+        echo "ERROR: TRAIN_TOKEN_BUDGET must be positive and cannot be combined with fixed steps"
+        exit 2
+    fi
+fi
+if ! [[ "$TRAIN_NUM_ITERATIONS" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: TRAIN_NUM_ITERATIONS must be a non-negative integer"
+    exit 2
+fi
+CORE_METRIC_EVERY="${CORE_METRIC_EVERY:--1}"
+EVAL_EVERY="${EVAL_EVERY:--1}"
+EVAL_BENCHMARKS="${EVAL_BENCHMARKS:-stem}"
+EVALUATION_ENABLED="${EVALUATION_ENABLED:-1}"
+NANOCHAT_DISABLE_WANDB="${NANOCHAT_DISABLE_WANDB:-1}"
+NANOCHAT_LOAD_OPTIMIZER="${NANOCHAT_LOAD_OPTIMIZER:-0}"
+RANDOM_STRATEGY_PATH="${RANDOM_STRATEGY_PATH:-}"
+RANDOM_STRATEGY_CONFIG_JSON="${RANDOM_STRATEGY_CONFIG_JSON:-}"
+MANUAL_STRATEGY_PATH="${MANUAL_STRATEGY_PATH:-}"
+MANUAL_STRATEGY_CONFIG_JSON="${MANUAL_STRATEGY_CONFIG_JSON:-}"
+PREPARED_COMPARISON_DATA_DIR="${PREPARED_COMPARISON_DATA_DIR:-}"
+PREPARE_ONLY="${PREPARE_ONLY:-0}"
+[ -n "$RANDOM_STRATEGY_CONFIG_JSON" ] || RANDOM_STRATEGY_CONFIG_JSON='{}'
+[ -n "$MANUAL_STRATEGY_CONFIG_JSON" ] || MANUAL_STRATEGY_CONFIG_JSON='{}'
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+
+# QuaDMix itself may use every node. Once that stage has completed, only rank 0
+# materializes the comparison datasets so ModelArts uploads one consistent copy.
+if [ "$PREPARE_ONLY" = "1" ] && [ "$NODE_RANK" != "0" ]; then
+    echo "Sampling-only stage: node ${NODE_RANK} has no post-QuaDMix work"
+    exit 0
+fi
+
+# ── Anti-forgetting data mixing ──
+# Mix STEM data with ClimbMix general data to prevent catastrophic forgetting.
+# References: MAI-Thinking-1 (10% General), Apple Intelligence ("some fraction of bulk pre-train data")
+MIX_GENERAL_DATA="${MIX_GENERAL_DATA:-1}"
+STEM_RATIO="${STEM_RATIO:-0.7}"
+KEEP_MIXED_DATA="${KEEP_MIXED_DATA:-0}"
+
+# Data preparation
+SHARD_SIZE="${SHARD_SIZE:-10000}"
+VAL_RATIO="${VAL_RATIO:-0}"
+SEED="${SEED:-42}"
+MAX_SHARDS="${MAX_SHARDS:-0}"
+
+# Model tags
+QUADMIX_MODEL_TAG="${QUADMIX_MODEL_TAG:-}"
+RANDOM_MODEL_TAG="${RANDOM_MODEL_TAG:-}"
+MANUAL_RATIO_MODEL_TAG="${MANUAL_RATIO_MODEL_TAG:-}"
+
+# ══════════════════════════════════════════════════════════════
+#  VALIDATION
+# ══════════════════════════════════════════════════════════════
+
+if [ -z "$PREPARED_COMPARISON_DATA_DIR" ] && has_method quadmix && [ -z "$QUADMIX_SAMPLED_DATA" ]; then
+    echo "ERROR: QUADMIX_SAMPLED_DATA not set"
+    echo "  Set via: QUADMIX_SAMPLED_DATA=/path/to/stem_sampled_dataset"
+    exit 1
+fi
+
+if [ -z "$PREPARED_COMPARISON_DATA_DIR" ] && has_method quadmix && [ ! -f "$QUADMIX_SAMPLED_DATA" ] && [ ! -d "$QUADMIX_SAMPLED_DATA" ]; then
+    echo "ERROR: QuadMix dataset not found: $QUADMIX_SAMPLED_DATA"
+    exit 1
+fi
+
+if [ -z "$PREPARED_COMPARISON_DATA_DIR" ] && [ ! -d "$STEM_DATA_DIR" ]; then
+    echo "ERROR: STEM data directory not found: $STEM_DATA_DIR"
+    echo "  Set via: STEM_DATA_DIR=/path/to/100B_stem_parquet_filtered"
+    exit 1
+fi
+
+if [[ "$SCHEMA_CONFIG" = /* ]]; then
+    SCHEMA_PATH="$SCHEMA_CONFIG"
+else
+    SCHEMA_PATH="$QUADMIX_DIR/$SCHEMA_CONFIG"
+fi
+if [ -z "$PREPARED_COMPARISON_DATA_DIR" ] && [ ! -f "$SCHEMA_PATH" ]; then
+    echo "ERROR: Schema config not found: $SCHEMA_PATH"
+    exit 1
+fi
+
+if [ ! -d "$NANOCHAT_REPO" ]; then
+    echo "ERROR: Nanochat repo not found: $NANOCHAT_REPO"
+    exit 1
+fi
+
+BASE_CKPT_DIR="$NANOCHAT_MODEL_DIR/base_checkpoints/$BASE_MODEL_TAG"
+if [ ! -d "$BASE_CKPT_DIR" ]; then
+    echo "ERROR: Base model checkpoint not found: $BASE_CKPT_DIR"
+    exit 1
+fi
+
+TOKENIZER_DIR="$NANOCHAT_MODEL_DIR/tokenizer"
+if [ ! -f "$TOKENIZER_DIR/tokenizer.pkl" ]; then
+    echo "ERROR: Tokenizer not found: $TOKENIZER_DIR/tokenizer.pkl"
+    exit 1
+fi
+
+if [ -n "$NANOCHAT_EVAL_BUNDLE_DIR" ]; then
+    if [ ! -d "$NANOCHAT_EVAL_BUNDLE_DIR" ] || \
+       [ -z "$(find "$NANOCHAT_EVAL_BUNDLE_DIR" -mindepth 1 -print -quit)" ]; then
+        echo "ERROR: Incomplete NanoChat eval bundle: $NANOCHAT_EVAL_BUNDLE_DIR"
+        echo "  Expected a non-empty mounted directory containing selected benchmark assets"
+        exit 1
+    fi
+fi
+
+echo "  NanoChat Python: $(python3 -c 'import sys; print(sys.executable)')"
+echo "  NanoChat Python version: $(python3 -c 'import platform; print(platform.python_version())')"
+echo "  NanoChat PyTorch: $(python3 -c 'import torch; print(torch.__version__)')"
+if ! python3 -c "import torch.nn.functional as F; assert hasattr(F, 'rms_norm')" \
+        >/dev/null 2>&1; then
+    export PYTHONPATH="$SCRIPT_DIR/compat:${PYTHONPATH:-}"
+    echo "  PyTorch F.rms_norm unavailable; enabling compatibility implementation"
+fi
+python3 -c "import torch.nn.functional as F; assert hasattr(F, 'rms_norm')" || {
+    echo "ERROR: unable to enable F.rms_norm compatibility"
+    exit 1
+}
+
+# Auto-detect num_scaling_params from checkpoint meta JSON
+MODEL_INFO=$(python3 "$SCRIPT_DIR/get_model_info.py" \
+    --ckpt-dir "$BASE_CKPT_DIR" \
+    --nanochat-repo "$NANOCHAT_REPO")
+NUM_SCALING_PARAMS=$(echo "$MODEL_INFO" | grep NUM_SCALING_PARAMS | cut -d= -f2)
+CKPT_TOTAL_BATCH_SIZE=$(echo "$MODEL_INFO" | grep TOTAL_BATCH_SIZE | cut -d= -f2)
+
+if [ -z "$CKPT_TOTAL_BATCH_SIZE" ]; then
+    CKPT_TOTAL_BATCH_SIZE=524288
+    echo "  WARNING: CKPT_TOTAL_BATCH_SIZE not found, using default 524288"
+fi
+
+echo "  Auto-detected: NUM_SCALING_PARAMS=$NUM_SCALING_PARAMS, TOTAL_BATCH_SIZE=$CKPT_TOTAL_BATCH_SIZE"
+
+# Auto-generate model tags
+if [ -z "$QUADMIX_MODEL_TAG" ]; then
+    QUADMIX_MODEL_TAG="${BASE_MODEL_TAG}_stem_quadmix_${TIMESTAMP}"
+fi
+if [ -z "$RANDOM_MODEL_TAG" ]; then
+    RANDOM_MODEL_TAG="${BASE_MODEL_TAG}_stem_random_${TIMESTAMP}"
+fi
+if [ -z "$MANUAL_RATIO_MODEL_TAG" ]; then
+    MANUAL_RATIO_MODEL_TAG="${BASE_MODEL_TAG}_stem_manual_ratio_${TIMESTAMP}"
+fi
+
+# ══════════════════════════════════════════════════════════════
+#  NPU ENVIRONMENT SETUP
+# ══════════════════════════════════════════════════════════════
+
+export OMP_NUM_THREADS=1
+export PYTHONWARNINGS="ignore::UserWarning:torch_npu"
+if [ "$NANOCHAT_DISABLE_WANDB" = "1" ]; then
+    export WANDB_MODE=disabled
+    export PYTHONPATH="$SCRIPT_DIR/compat/wandb_disabled:${PYTHONPATH:-}"
+    echo "  WandB disabled; using local no-op compatibility module"
+else
+    export WANDB_MODE=offline
+fi
+export NANOCHAT_BASE_DIR="$NANOCHAT_RUNTIME_DIR"
+mkdir -p "$NANOCHAT_RUNTIME_DIR/base_checkpoints"
+
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+
+export ASCEND_HCCL_PATH=/usr/local/Ascend/ascend-toolkit/latest/hccl
+export LD_LIBRARY_PATH=${ASCEND_HCCL_PATH}/lib64:${LD_LIBRARY_PATH:-}
+export HCCL_CONNECT_TIMEOUT=1200
+export HCCL_WHITELIST_DISABLE=1
+export NCCL_IB_DISABLE=1
+export NCCL_SOCKET_IFNAME=eth0
+
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+export ASCEND_GLOBAL_LOG_LEVEL=3
+
+if [ -z "${ASCEND_DEVICE_ID:-}" ] && [ -n "${LOCAL_RANK:-}" ]; then
+    export ASCEND_DEVICE_ID=$LOCAL_RANK
+elif [ -z "${ASCEND_DEVICE_ID:-}" ]; then
+    export ASCEND_DEVICE_ID=0
+fi
+
+ASCEND_DEVICE_LIST=$(seq -s, 0 $((NUM_NPU - 1)))
+export ASCEND_VISIBLE_DEVICES="$ASCEND_DEVICE_LIST"
+export ASCEND_RT_VISIBLE_DEVICES="$ASCEND_DEVICE_LIST"
+export HCCL_EXEC_TIMEOUT=1200
+export ASCEND_DISABLE_MEM_SWAP=1
+export ASCEND_LAUNCH_BLOCKING=0
+export NPU_DISABLE_RECORD=1
+export PYTHONUNBUFFERED=1
+export ASCEND_COMPILE_OPT_LEVEL=O3
+export TORCH_NPU_LAZY_COMPILE=1
+export PYTHONPRELOAD=torch_npu
+export TORCH_NPU_ALLOC_CONF="expandable_segments:True,max_split_size_mb:256,memory_pool:True"
+export PYTORCH_NPU_ALLOC_MAX_SIZE=60G
+export ASCEND_ENABLE_CACHE=1
+export ASCEND_CACHE_POLICY=2
+export ASCEND_FUSION_ENABLE=1
+export ASCEND_GEMM_DTiling=1
+export TORCH_NPU_ENABLE_NUMA=1
+export ASCEND_MEMORY_COPY_MODE=1
+export ASCEND_HBM_ALLOC_TYPE=1
+export ASCEND_OPP_LEVEL=O3
+export ASCEND_FUSION_PASS_ENABLE=1
+export ASCEND_GEMM_BTiling=1
+export ASCEND_GEMM_ATiling=1
+export ASCEND_CONV_ALGO_SELECTION=1
+export ASCEND_ENABLE_TRANSFORMER_FUSION=1
+export ASCEND_MEMORY_REUSE_MODE=2
+export ASCEND_ENABLE_PREFETCH=1
+export ASCEND_NPU_ENABLE_UNIFIED_MEMORY=1
+export ASCEND_OPTIMIZER_AGGRESSIVE_MODE=1
+export ASCEND_SYNCHRONIZATION_MODE=0
+export PYTORCH_NPU_ENABLE_LARGE_CONCAT=1
+export PYTORCH_NPU_ENABLE_TORCHscript=1
+export NPU_PERF_MODE=high_performance
+export NANOCHAT_DTYPE=bfloat16
+export PYTHONWARNINGS="ignore::UserWarning:torch_npu.utils.collect_env,ignore::UserWarning:torch_npu.utils._path_manager"
+
+# ══════════════════════════════════════════════════════════════
+#  PRINT CONFIG
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "════════════════════════════════════════════════════════════"
+echo "  QuadMix vs Random vs Manual Ratio — STEM Mid-Training"
+echo "════════════════════════════════════════════════════════════"
+echo ""
+echo "  QuadMix dataset:     $QUADMIX_SAMPLED_DATA"
+echo "  STEM data dir:       $STEM_DATA_DIR"
+echo "  Schema config:       $SCHEMA_PATH"
+echo "  Nanochat model dir:  $NANOCHAT_MODEL_DIR"
+echo "  Runtime model dir:   $NANOCHAT_RUNTIME_DIR"
+echo "  Nanochat repo:       $NANOCHAT_REPO"
+echo "  Base model tag:      $BASE_MODEL_TAG"
+echo "  Experiment output:   $RESULT_DIR"
+if [ -n "$MID_CHECKPOINTS_OUTPUT_DIR" ]; then
+    echo "  Mid checkpoint dir:  $MID_CHECKPOINTS_OUTPUT_DIR"
+fi
+echo ""
+echo "  Manual Ratio:        $MANUAL_RATIO"
+echo "  Comparison methods:  $COMPARISON_METHODS"
+echo "  Training topology:   $NNODES node(s) × $NUM_NPU NPU(s)"
+echo ""
+echo "  Mid-training config:"
+echo "    target-param-data-ratio: $TARGET_PARAM_DATA_RATIO"
+echo "    data-multiplier:         $DATA_MULTIPLIER"
+echo "    num-scaling-params:      $NUM_SCALING_PARAMS (auto-detected)"
+echo "    device-batch-size:       $DEVICE_BATCH_SIZE"
+echo "    NPU cards:               $NUM_NPU"
+echo "    load optimizer state:    $NANOCHAT_LOAD_OPTIMIZER"
+echo "    eval-benchmarks:         $EVAL_BENCHMARKS"
+echo ""
+echo "  Model tags (save):"
+echo "    QuadMix:       $QUADMIX_MODEL_TAG"
+echo "    Random:        $RANDOM_MODEL_TAG"
+echo "    Manual Ratio:  $MANUAL_RATIO_MODEL_TAG"
+echo ""
+echo "════════════════════════════════════════════════════════════"
+echo ""
+show_progress 5 "configuration validated"
+
+mkdir -p "$RESULT_DIR"
+
+if [ -n "$PREPARED_COMPARISON_DATA_DIR" ]; then
+    DATA_DIR="$PREPARED_COMPARISON_DATA_DIR"
+else
+    DATA_DIR="$RESULT_DIR/data"
+fi
+
+# ══════════════════════════════════════════════════════════════
+#  STEP 1: DATA PREPARATION
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "╔══ Step 1: Prepare STEM datasets ══╗"
+echo ""
+if [ -n "$PREPARED_COMPARISON_DATA_DIR" ]; then
+    echo "  Reusing prepared comparison datasets: $DATA_DIR"
+    test -f "$DATA_DIR/dataset_stats.json" || {
+        echo "ERROR: prepared comparison data is missing dataset_stats.json: $DATA_DIR"
+        exit 1
+    }
+    show_progress 25 "prepared comparison datasets validated"
+else
+    show_progress 8 "starting comparison dataset preparation"
+
+PREP_ARGS=(
+    --preprocessed-data-dir "$STEM_DATA_DIR"
+    --output-dir "$DATA_DIR"
+    --tokenizer-pkl "$TOKENIZER_DIR/tokenizer.pkl"
+    --schema "$SCHEMA_PATH"
+    --file-pattern "$FILE_PATTERN"
+    --data-ratio "$TARGET_PARAM_DATA_RATIO"
+    --num-scaling-params "$NUM_SCALING_PARAMS"
+    --data-multiplier "$DATA_MULTIPLIER"
+    --shard-size "$SHARD_SIZE"
+    --val-ratio "$VAL_RATIO"
+    --seed "$SEED"
+    --max-shards "$MAX_SHARDS"
+    --num-npu "${AMT_DATA_WORLD_SIZE:-$RANK_SIZE}"
+)
+if has_method quadmix; then
+    PREP_ARGS+=(--quadmix-sampled-data "$QUADMIX_SAMPLED_DATA")
+fi
+if has_method manual; then
+    PREP_ARGS+=(--manual-ratio "$MANUAL_RATIO")
+    if [ -n "$MANUAL_STRATEGY_PATH" ]; then
+        PREP_ARGS+=(--manual-strategy "$MANUAL_STRATEGY_PATH" --manual-strategy-config "$MANUAL_STRATEGY_CONFIG_JSON")
+    fi
+fi
+if has_method random && [ -n "$RANDOM_STRATEGY_PATH" ]; then
+    PREP_ARGS+=(--random-strategy "$RANDOM_STRATEGY_PATH" --random-strategy-config "$RANDOM_STRATEGY_CONFIG_JSON")
+fi
+if ! has_method random; then
+    export SKIP_RANDOM=1
+fi
+python3 "$SCRIPT_DIR/prepare_data.py" "${PREP_ARGS[@]}"
+
+if has_method manual && [ -n "${MANUAL_PLANS_JSON:-}" ]; then
+    python3 "$SCRIPT_DIR/prepare_additional_manual_plans.py" \
+        --plans-json "$MANUAL_PLANS_JSON" \
+        --prepare-script "$SCRIPT_DIR/prepare_data.py" \
+        --source "$STEM_DATA_DIR" --output "$DATA_DIR" \
+        --tokenizer "$TOKENIZER_DIR/tokenizer.pkl" --schema "$SCHEMA_PATH" \
+        --file-pattern "$FILE_PATTERN" --data-ratio "$TARGET_PARAM_DATA_RATIO" \
+        --num-scaling-params "$NUM_SCALING_PARAMS" --data-multiplier "$DATA_MULTIPLIER" \
+        --shard-size "$SHARD_SIZE" --val-ratio "$VAL_RATIO" --seed "$SEED" \
+        --max-shards "$MAX_SHARDS" --num-npu "${AMT_DATA_WORLD_SIZE:-$RANK_SIZE}"
+fi
+
+# Update dataset_stats.json with experiment metadata
+cp "$DATA_DIR/dataset_stats.json" "$RESULT_DIR/dataset_stats.json"
+STATS_FILE="$RESULT_DIR/dataset_stats.json" DATA_DIR="$DATA_DIR" BASE_MODEL_TAG="$BASE_MODEL_TAG" \
+TARGET_PARAM_DATA_RATIO="$TARGET_PARAM_DATA_RATIO" \
+NUM_SCALING_PARAMS="$NUM_SCALING_PARAMS" \
+DEVICE_BATCH_SIZE="$DEVICE_BATCH_SIZE" \
+NUM_NPU="$NUM_NPU" \
+TOTAL_BATCH_SIZE="${CKPT_TOTAL_BATCH_SIZE:-524288}" \
+TOKENIZER_PKL="$TOKENIZER_DIR/tokenizer.pkl" \
+NANOCHAT_REPO="$NANOCHAT_REPO" \
+NANOCHAT_MODEL_DIR="$NANOCHAT_MODEL_DIR" \
+MID_CHECKPOINTS_OUTPUT_DIR="$MID_CHECKPOINTS_OUTPUT_DIR" \
+QUADMIX_GIT_HASH="$(git -C "$QUADMIX_DIR" rev-parse --short HEAD 2>/dev/null || echo 'unknown')" \
+NANOCHAT_GIT_HASH="$(git -C "$NANOCHAT_REPO" rev-parse --short HEAD 2>/dev/null || echo 'unknown')" \
+MANUAL_RATIO="$MANUAL_RATIO" \
+EVAL_BENCHMARKS="$EVAL_BENCHMARKS" \
+COMPARISON_METHODS="$COMPARISON_METHODS" \
+python3 -c "
+import os, json
+stats_path = os.environ['STATS_FILE']
+stats = json.load(open(stats_path))
+stats['config'].update({
+    'base_model_tag': os.environ['BASE_MODEL_TAG'],
+    'target_param_data_ratio': float(os.environ['TARGET_PARAM_DATA_RATIO']),
+    'num_scaling_params': int(os.environ['NUM_SCALING_PARAMS']),
+    'device_batch_size': int(os.environ['DEVICE_BATCH_SIZE']),
+    'total_batch_size': int(os.environ['TOTAL_BATCH_SIZE']),
+    'num_npu': int(os.environ['NUM_NPU']),
+    'tokenizer_pkl': os.environ.get('TOKENIZER_PKL', ''),
+    'nanochat_repo': os.environ.get('NANOCHAT_REPO', ''),
+    'nanochat_model_dir': os.environ.get('NANOCHAT_MODEL_DIR', ''),
+    'mid_checkpoints_output_dir': os.environ.get('MID_CHECKPOINTS_OUTPUT_DIR', ''),
+    'quadmix_git_hash': os.environ.get('QUADMIX_GIT_HASH', ''),
+    'nanochat_git_hash': os.environ.get('NANOCHAT_GIT_HASH', ''),
+    'manual_ratio': os.environ.get('MANUAL_RATIO', ''),
+    'eval_benchmarks': os.environ.get('EVAL_BENCHMARKS', ''),
+    'comparison_methods': os.environ.get('COMPARISON_METHODS', '').split(','),
+})
+with open(stats_path, 'w') as f:
+    json.dump(stats, f, indent=2)
+"
+
+echo ""
+echo "  Dataset stats:"
+DATA_DIR="$DATA_DIR" python3 -c "
+import os, json
+stats = json.load(open(os.path.join(os.environ['DATA_DIR'], 'dataset_stats.json')))
+method = stats['config'].get('token_method', 'unknown')
+print(f'    Token method: {method}')
+for key, label in [('quadmix', 'QuadMix'), ('random', 'Random'), ('manual_ratio', 'Manual Ratio')]:
+    if key in stats:
+        item = stats[key]
+        print(f'    {label}: {item[\"train_docs\"]:,} train docs, {item[\"tokens\"]:,} tokens, {item[\"shards\"]} shards')
+for key in stats:
+    if key.startswith('quality_'):
+        method = key[len('quality_'):]
+        ql = stats[key]
+        print(f'    Quality ({method}): {ql[\"train_docs\"]:,} train docs, {ql[\"tokens\"]:,} tokens, {ql[\"shards\"]} shards')
+budget = stats['config'].get('budget_cap', 'N/A')
+training = stats['config'].get('training_budget', 'N/A')
+target = stats['config'].get('target_tokens', 'N/A')
+mult = stats['config'].get('data_multiplier', 'N/A')
+print(f'    Budget cap:       {budget}')
+print(f'    Training budget:  {training}')
+print(f'    Target tokens:    {target}')
+print(f'    Data multiplier:  {mult}')
+"
+fi
+echo ""
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+show_progress 25 "three comparison datasets prepared"
+
+if [ "$PREPARE_ONLY" = "1" ]; then
+    echo "Sampling-only stage complete: $DATA_DIR"
+    show_progress 100 "all selected comparison datasets prepared"
+    exit 0
+fi
+
+# ══════════════════════════════════════════════════════════════
+#  PRE-FLIGHT: DISK SPACE CHECK (before mixing + checkpoint writing)
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "╔══ Pre-flight: Disk space check ══╗"
+echo ""
+
+CKPT_DIR="${MID_CHECKPOINTS_OUTPUT_DIR}"
+mkdir -p "$CKPT_DIR"
+
+MODEL_COUNT=0
+if has_method quadmix; then MODEL_COUNT=$((MODEL_COUNT + 1)); fi
+if has_method random; then MODEL_COUNT=$((MODEL_COUNT + 1)); fi
+if has_method manual; then
+    if [ -n "${MANUAL_PLANS_JSON:-}" ]; then
+        MANUAL_COUNT=$(MANUAL_PLANS_JSON="$MANUAL_PLANS_JSON" python3 -c "import json,os; print(len(json.loads(os.environ['MANUAL_PLANS_JSON'])))")
+    else
+        MANUAL_COUNT=1
+    fi
+    MODEL_COUNT=$((MODEL_COUNT + MANUAL_COUNT))
+fi
+CKPT_NEEDED_GB=$((MODEL_COUNT * 20))
+DATA_SIZE_KB=$(du -sk "$DATA_DIR" 2>/dev/null | awk '{print $1}')
+DATA_SIZE_GB=$((DATA_SIZE_KB / 1024 / 1024))
+
+if [ "$MIX_GENERAL_DATA" = "1" ]; then
+    MIXED_GB=$DATA_SIZE_GB
+    CLIMBMIX_GB=8
+else
+    MIXED_GB=0
+    CLIMBMIX_GB=0
+fi
+BUFFER_GB=10
+MIN_REQUIRED_GB=$((CKPT_NEEDED_GB + MIXED_GB + CLIMBMIX_GB + BUFFER_GB))
+
+AVAILABLE_KB=$(df -P "$CKPT_DIR" | awk 'NR==2{print $4}')
+AVAILABLE_GB=$((AVAILABLE_KB / 1024 / 1024))
+
+echo "  Available space:   ${AVAILABLE_GB}GB"
+echo "  Minimum needed:    ${MIN_REQUIRED_GB}GB"
+echo "    Checkpoints:     ${CKPT_NEEDED_GB}GB (${MODEL_COUNT} × ~20GB)"
+echo "    STEM data:       ${DATA_SIZE_GB}GB (already on disk)"
+if [ "$MIX_GENERAL_DATA" = "1" ]; then
+    echo "    Mixed data:      ${MIXED_GB}GB (= STEM data size)"
+    echo "    ClimbMix dl:     ${CLIMBMIX_GB}GB (adaptive download)"
+fi
+echo "    Buffer:          ${BUFFER_GB}GB"
+
+if [ "$AVAILABLE_GB" -lt "$MIN_REQUIRED_GB" ]; then
+    echo ""
+    echo "  ERROR: Insufficient disk space!"
+    echo "  Available: ${AVAILABLE_GB}GB < Required: ${MIN_REQUIRED_GB}GB"
+    echo ""
+    echo "  Options:"
+    echo "    1. Set MID_CHECKPOINTS_OUTPUT_DIR to a partition with more space"
+    echo "    2. Free up space on the current partition"
+    echo "    3. Set MIX_GENERAL_DATA=0 to skip data mixing"
+    echo ""
+    echo "╚══════════════════════════════════════════════════════════╝"
+    exit 1
+fi
+
+echo "  ✓ Disk space sufficient"
+echo ""
+echo "╚══════════════════════════════════════════════════════════╝"
+echo ""
+show_progress 30 "disk capacity checked"
+
+# ══════════════════════════════════════════════════════════════
+#  STEP 1.5: MIX STEM WITH CLIMBMIX (anti-forgetting)
+# ══════════════════════════════════════════════════════════════
+
+QUADMIX_DATA="$DATA_DIR/quadmix_data"
+RANDOM_DATA="$DATA_DIR/random_data"
+MANUAL_RATIO_DATA="$DATA_DIR/manual_ratio_data"
+CLIMBMIX_DIR="$DATA_DIR/climbmix_shards"
+
+if [ "$MIX_GENERAL_DATA" = "1" ]; then
+    echo ""
+    echo "╔══ Step 1.5: Mix STEM + ClimbMix (anti-forgetting) ══╗"
+    echo ""
+    echo "  STEM ratio: $STEM_RATIO (general data: $(python3 -c "print(1-$STEM_RATIO)"))"
+    echo "  ClimbMix: adaptive shard count (from end, no overlap with pretrain 0-999)"
+    echo ""
+
+    MIX_SCRIPT="$SCRIPT_DIR/mix_general_data.py"
+
+    mix_one() {
+        local STEM_DIR="$1"
+        local MIXED_DIR="$2"
+        local LABEL="$3"
+
+        if [ ! -d "$STEM_DIR" ]; then
+            echo "  Skipping $LABEL: $STEM_DIR not found"
+            return 0
+        fi
+
+        echo "  Mixing $LABEL..."
+        python3 "$MIX_SCRIPT" \
+            --stem-dir "$STEM_DIR" \
+            --output-dir "$MIXED_DIR" \
+            --climbmix-dir "$CLIMBMIX_DIR" \
+            --stem-ratio "$STEM_RATIO" \
+            --num-workers "$NUM_NPU" \
+            || { echo "  ERROR: mixing failed for $LABEL"; return 1; }
+    }
+
+    if has_method quadmix; then
+        mix_one "$QUADMIX_DATA" "$DATA_DIR/quadmix_mixed" "QuadMix"
+        QUADMIX_DATA="$DATA_DIR/quadmix_mixed"
+    fi
+    if has_method random; then
+        mix_one "$RANDOM_DATA" "$DATA_DIR/random_mixed" "Random"
+        RANDOM_DATA="$DATA_DIR/random_mixed"
+    fi
+    if has_method manual; then
+        if [ -f "$DATA_DIR/manual_plans_manifest.json" ]; then
+            MANUAL_MIX_MAP="$DATA_DIR/manual_mixed_paths.tsv"
+            : > "$MANUAL_MIX_MAP"
+            while IFS=$'\t' read -r PLAN_ID PLAN_LABEL PLAN_DATA; do
+                PLAN_MIXED="$DATA_DIR/manual_${PLAN_ID}_mixed"
+                mix_one "$PLAN_DATA" "$PLAN_MIXED" "Manual $PLAN_LABEL"
+                printf '%s\t%s\n' "$PLAN_ID" "$PLAN_MIXED" >> "$MANUAL_MIX_MAP"
+            done < <(python3 -m auto_mixture_tool.sampling.artifacts "$DATA_DIR" --short)
+            DATA_DIR="$DATA_DIR" MANUAL_MIX_MAP="$MANUAL_MIX_MAP" python3 -c "
+import json, os
+path = os.path.join(os.environ['DATA_DIR'], 'manual_plans_manifest.json')
+plans = json.load(open(path))
+mapping = dict(line.rstrip('\\n').split('\\t', 1) for line in open(os.environ['MANUAL_MIX_MAP']))
+for plan in plans: plan['data_dir'] = mapping[plan['id']]
+json.dump(plans, open(path, 'w'), ensure_ascii=False, indent=2)
+"
+        else
+            mix_one "$MANUAL_RATIO_DATA" "$DATA_DIR/manual_ratio_mixed" "Manual Ratio"
+            MANUAL_RATIO_DATA="$DATA_DIR/manual_ratio_mixed"
+        fi
+    fi
+
+    echo ""
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+fi
+
+# ══════════════════════════════════════════════════════════════
+#  STEP 2: SETUP MID_CHECKPOINTS DIRECTORY
+# ══════════════════════════════════════════════════════════════
+
+if [ -n "$MID_CHECKPOINTS_OUTPUT_DIR" ]; then
+    echo ""
+    echo "╔══ Step 2: Setup mid-training checkpoint output ══╗"
+    echo ""
+
+    mkdir -p "$MID_CHECKPOINTS_OUTPUT_DIR"
+    # Build the layout expected by NanoChat under a writable, node-local path.
+    # The source model and tokenizer remain in the ModelArts input mount.
+    install_shared_symlink \
+        "$BASE_CKPT_DIR" \
+        "$NANOCHAT_RUNTIME_DIR/base_checkpoints/$BASE_MODEL_TAG"
+    install_shared_symlink "$TOKENIZER_DIR" "$NANOCHAT_RUNTIME_DIR/tokenizer"
+    if [ -n "$NANOCHAT_EVAL_BUNDLE_DIR" ]; then
+        install_shared_symlink \
+            "$NANOCHAT_EVAL_BUNDLE_DIR" \
+            "$NANOCHAT_RUNTIME_DIR/eval_bundle"
+        python3 "$SCRIPT_DIR/prepare_offline_eval_bundle.py" \
+            "$NANOCHAT_EVAL_BUNDLE_DIR" "$NANOCHAT_RUNTIME_DIR"
+        echo "  Eval bundle linked: $NANOCHAT_RUNTIME_DIR/eval_bundle"
+    fi
+    LINK_PATH="$NANOCHAT_RUNTIME_DIR/mid_checkpoints"
+
+    # Multiple ModelArts nodes enter this block concurrently. Installation is
+    # retried and verified instead of relying on a racy existence check.
+    install_shared_symlink "$MID_CHECKPOINTS_OUTPUT_DIR" "$LINK_PATH"
+    CURRENT_TARGET=$(readlink "$LINK_PATH")
+    echo "  Checkpoint symlink ready: $LINK_PATH -> $CURRENT_TARGET"
+
+    echo ""
+    echo "╚══════════════════════════════════════════════════════════╝"
+    echo ""
+fi
+show_progress 35 "NanoChat runtime layout ready"
+
+# ══════════════════════════════════════════════════════════════
+#  PRE-FLIGHT: DOWNLOAD EVAL DATA
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "╔══ Pre-flight: Validate offline eval data ══╗"
+echo ""
+pushd "$NANOCHAT_REPO" > /dev/null
+# NanoChat imports rustbpe even when it only loads an existing tiktoken-based
+# tokenizer.pkl. Use the real package when installed; otherwise expose the
+# inference-only compatibility module shipped with this tool.
+if ! python3 -c "import rustbpe" >/dev/null 2>&1; then
+    export PYTHONPATH="${PYTHONPATH:-}:$SCRIPT_DIR/compat"
+    echo "  rustbpe not installed; using existing-tokenizer compatibility mode"
+fi
+python3 -c "from nanochat.tokenizer import get_tokenizer; get_tokenizer(); print('  NanoChat tokenizer import OK')" || {
+    echo "  ERROR: NanoChat tokenizer runtime check failed"
+    exit 1
+}
+test "${NANOCHAT_SKIP_EVAL_DOWNLOAD:-0}" = "1" || {
+    echo "  ERROR: production training forbids evaluation downloads; set skip_eval_download: true"
+    exit 1
+}
+test -n "$NANOCHAT_EVAL_BUNDLE_DIR" || {
+    echo "  ERROR: skip_eval_download requires NANOCHAT_EVAL_BUNDLE_DIR"
+    exit 1
+}
+echo "  Network downloads disabled; using mounted evaluation bundle"
+if [ "$EVALUATION_ENABLED" = "1" ] || [ "$CORE_METRIC_EVERY" != "-1" ]; then
+    python3 "$SCRIPT_DIR/eval_assets.py" --base "$NANOCHAT_RUNTIME_DIR" \
+        --repo "$NANOCHAT_REPO" --benchmarks "$EVAL_BENCHMARKS"
+fi
+popd > /dev/null
+echo "╚══════════════════════════════════════════════════════════╝"
+echo ""
+show_progress 40 "evaluation data ready"
+
+# ══════════════════════════════════════════════════════════════
+#  STEP 3: MID-TRAINING
+# ══════════════════════════════════════════════════════════════
+
+run_mid_training() {
+    local DATA_PATH="$1"
+    local MODEL_TAG="$2"
+    local RUN_NAME="$3"
+    local LOG_FILE="$4"
+    local DATASET_TOKENS="$5"
+    local TRAIN_TOKENS="$6"
+
+    if [ ! -d "$DATA_PATH" ]; then
+        echo "    ERROR: Data directory does not exist: $DATA_PATH"
+        return 1
+    fi
+
+    local PLAN_FILE="$RESULT_DIR/training_plan_$MODEL_TAG.json"
+    local TOTAL_BATCH_SIZE MAX_SEQ_LEN NUM_ITERATIONS PLAN_ENV
+    PLAN_ENV=$(python3 "$SCRIPT_DIR/distributed_runtime.py" plan \
+        --directory "$BASE_CKPT_DIR" --repo "$NANOCHAT_REPO" --devices "$NUM_NPU" \
+        --tokens "$TRAIN_TOKENS" --steps "$TRAIN_NUM_ITERATIONS" \
+        --device-batch-size "$DEVICE_BATCH_SIZE" \
+        --total-batch-size "${TRAIN_TOTAL_BATCH_SIZE:-$CKPT_TOTAL_BATCH_SIZE}" \
+        --output "$PLAN_FILE")
+    eval "$PLAN_ENV"
+    local TRACKING_RUN_NAME="$RUN_NAME"
+    if [ "$NANOCHAT_DISABLE_WANDB" = "1" ]; then
+        TRACKING_RUN_NAME="dummy"
+    fi
+
+    echo "  Starting mid-training: $RUN_NAME"
+    echo "    Data:       $DATA_PATH"
+    echo "    Source:     $BASE_MODEL_TAG (base)"
+    echo "    Save as:    $MODEL_TAG (mid)"
+    echo "    Dataset:    $DATASET_TOKENS tokens"
+    echo "    Train:      $TRAIN_TOKENS tokens (training_budget, ratio=$TARGET_PARAM_DATA_RATIO)"
+    echo "    Steps:      $NUM_ITERATIONS"
+    echo "    Log:        $LOG_FILE"
+
+    local DATA_CHECK_ARGS=(check-data --directory "$DATA_PATH" --devices "$NUM_NPU")
+    if [ "$EVAL_EVERY" != "-1" ]; then
+        DATA_CHECK_ARGS+=(--validation)
+    fi
+    python3 "$SCRIPT_DIR/distributed_runtime.py" "${DATA_CHECK_ARGS[@]}"
+
+    local LINK_DIR="$NANOCHAT_RUNTIME_DIR/base_checkpoints/$MODEL_TAG"
+
+    install_shared_symlink "$BASE_CKPT_DIR" "$LINK_DIR"
+
+    trap 'if [ -L "$LINK_DIR" ]; then echo "    Cleaning up symlink on exit: $LINK_DIR"; rm "$LINK_DIR"; fi' RETURN
+
+    pushd "$NANOCHAT_REPO" > /dev/null
+    export PYTHONPATH="$QUADMIX_DIR:${PYTHONPATH:-}"
+    python3 -m torch.distributed.run "${TORCHRUN_ARGS[@]}" \
+        -m nanochat_mid_compare.run_nanochat_mid_train -- \
+        --num-iterations="$NUM_ITERATIONS" \
+        --target-param-data-ratio="$TARGET_PARAM_DATA_RATIO" \
+        --device-batch-size="$DEVICE_BATCH_SIZE" \
+        --total-batch-size="$TOTAL_BATCH_SIZE" \
+        --max-seq-len="$MAX_SEQ_LEN" \
+        --load-optimizer="$NANOCHAT_LOAD_OPTIMIZER" \
+        --run="$TRACKING_RUN_NAME" \
+        --model-tag="$MODEL_TAG" \
+        --core-metric-every="$CORE_METRIC_EVERY" \
+        --eval-every="$EVAL_EVERY" \
+        --eval-benchmarks="$EVAL_BENCHMARKS" \
+        --sample-every=-1 \
+        --data-dir="$DATA_PATH" \
+        --loader="$LOADER" \
+        2>&1 | tee "$LOG_FILE"
+    popd > /dev/null
+    python3 "$SCRIPT_DIR/distributed_runtime.py" record \
+        --directory "$MID_CHECKPOINTS_OUTPUT_DIR/$MODEL_TAG" --devices "$NUM_NPU" \
+        --phase "mid:$MODEL_TAG" --plan-file "$PLAN_FILE" --repo "$NANOCHAT_REPO" --data-directory "$DATA_PATH"
+}
+
+STATS_FILE="$DATA_DIR/dataset_stats.json"
+TRAIN_BUDGET=$(STATS_FILE="$STATS_FILE" python3 -c "
+import os, json
+s = json.load(open(os.environ['STATS_FILE']))
+print(s['config'].get('training_budget', s['config'].get('budget_cap', '0')))
+")
+if [ -n "$TRAIN_TOKEN_BUDGET" ]; then
+    TRAIN_BUDGET="$TRAIN_TOKEN_BUDGET"
+fi
+if [ "$TRAIN_BUDGET" -le 0 ] 2>/dev/null || [ -z "$TRAIN_BUDGET" ]; then
+    echo "ERROR: training_budget is missing or zero in dataset_stats.json" >&2
+    echo "       Delete $DATA_DIR and re-run prepare_data to regenerate." >&2
+    exit 1
+fi
+read -r QUADMIX_TOKENS RANDOM_TOKENS MANUAL_RATIO_TOKENS < <(
+    STATS_FILE="$STATS_FILE" python3 -c "
+import os, json
+s = json.load(open(os.environ['STATS_FILE']))
+print(*(s.get(key, {}).get('tokens', 0) for key in ('quadmix', 'random', 'manual_ratio')))
+"
+)
+echo "  Common training budget: $TRAIN_BUDGET tokens (data_multiplier=$DATA_MULTIPLIER)"
+
+echo ""
+echo "╔══ Step 3a: Mid-training on QuadMix data ══╗"
+echo ""
+show_progress 42 "starting QuaDMix dataset training"
+
+QUADMIX_LOG=""
+if has_method quadmix; then
+    QUADMIX_LOG="$RESULT_DIR/mid_train_quadmix.log"
+    run_mid_training "$QUADMIX_DATA" "$QUADMIX_MODEL_TAG" "stem_quadmix_mid" "$QUADMIX_LOG" "$QUADMIX_TOKENS" "$TRAIN_BUDGET"
+else
+    echo "  Skipped (not selected)"
+fi
+show_progress 55 "QuaDMix dataset training finished"
+
+echo ""
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+
+echo ""
+echo "╔══ Step 3b: Mid-training on Random data ══╗"
+echo ""
+show_progress 57 "starting random dataset training"
+
+RANDOM_LOG=""
+if has_method random; then
+    RANDOM_LOG="$RESULT_DIR/mid_train_random.log"
+    run_mid_training "$RANDOM_DATA" "$RANDOM_MODEL_TAG" "stem_random_mid" "$RANDOM_LOG" "$RANDOM_TOKENS" "$TRAIN_BUDGET"
+else
+    echo "  Skipped (not selected)"
+fi
+show_progress 65 "random dataset training finished"
+
+echo ""
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+
+echo ""
+echo "╔══ Step 3c: Mid-training on Manual Ratio data ══╗"
+echo ""
+show_progress 67 "starting manual-ratio dataset training"
+
+MANUAL_RATIO_LOG=""
+MANUAL_RUNS_FILE="$RESULT_DIR/manual_plan_runs.tsv"
+: > "$MANUAL_RUNS_FILE"
+if has_method manual; then
+    if [ -f "$DATA_DIR/manual_plans_manifest.json" ]; then
+        while IFS=$'\t' read -r PLAN_ID PLAN_LABEL PLAN_DATA PLAN_TOKENS; do
+            PLAN_MODEL_TAG="${BASE_MODEL_TAG}_stem_manual_${PLAN_ID}_${TIMESTAMP}"
+            PLAN_LOG="$RESULT_DIR/mid_train_manual_${PLAN_ID}.log"
+            run_mid_training "$PLAN_DATA" "$PLAN_MODEL_TAG" "stem_manual_${PLAN_ID}_mid" "$PLAN_LOG" "$PLAN_TOKENS" "$TRAIN_BUDGET"
+            printf '%s\t%s\t%s\t%s\t%s\n' "$PLAN_ID" "$PLAN_LABEL" "$PLAN_DATA" "$PLAN_MODEL_TAG" "$PLAN_LOG" >> "$MANUAL_RUNS_FILE"
+            if [ -z "$MANUAL_RATIO_LOG" ]; then
+                MANUAL_RATIO_LOG="$PLAN_LOG"
+                MANUAL_RATIO_MODEL_TAG="$PLAN_MODEL_TAG"
+            fi
+        done < <(python3 -m auto_mixture_tool.sampling.artifacts "$DATA_DIR")
+    else
+        MANUAL_RATIO_LOG="$RESULT_DIR/mid_train_manual_ratio.log"
+        run_mid_training "$MANUAL_RATIO_DATA" "$MANUAL_RATIO_MODEL_TAG" "stem_manual_ratio_mid" "$MANUAL_RATIO_LOG" "$MANUAL_RATIO_TOKENS" "$TRAIN_BUDGET"
+        printf 'manual_default\tManual Ratio\t%s\t%s\t%s\n' "$MANUAL_RATIO_DATA" "$MANUAL_RATIO_MODEL_TAG" "$MANUAL_RATIO_LOG" >> "$MANUAL_RUNS_FILE"
+    fi
+else
+    echo "  Skipped (not selected)"
+fi
+show_progress 75 "manual-ratio dataset training finished"
+
+echo ""
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+#  STEP 4: EVALUATION
+# ══════════════════════════════════════════════════════════════
+
+if [ "${AMT_TRAIN_ONLY:-0}" = "1" ]; then
+    echo "Training complete; evaluation will run in a separate ModelArts job."
+    exit 0
+fi
+
+# Received model copies belong to a private evaluation cache. Writing them
+# into each worker's ModelArts output mount would upload duplicate checkpoints
+# and partial transfer files to OBS.
+if [ "$NODE_RANK" != "0" ] && [ "$EVALUATION_ENABLED" = "1" ]; then
+    mkdir -p "$NANOCHAT_RUNTIME_DIR/eval_checkpoints"
+    install_shared_symlink "$NANOCHAT_RUNTIME_DIR/eval_checkpoints" "$NANOCHAT_RUNTIME_DIR/mid_checkpoints"
+fi
+
+run_eval() {
+    if [ "$EVALUATION_ENABLED" != "1" ]; then
+        echo "Evaluation disabled by workflow configuration"
+        return 0
+    fi
+    local MODEL_TAG="$1"
+    local MODEL_TYPE="$2"
+    local LOG_FILE="$3"
+    local CHECKPOINT_STEP
+
+    echo "  Evaluating: $MODEL_TAG ($MODEL_TYPE)"
+
+    CHECKPOINT_STEP=$(python3 "$SCRIPT_DIR/distributed_runtime.py" checkpoint \
+        --directory "$NANOCHAT_RUNTIME_DIR/${MODEL_TYPE}_checkpoints/$MODEL_TAG" \
+        --phase "$MODEL_TYPE:$MODEL_TAG" --devices "$NUM_NPU")
+
+    python3 "$SCRIPT_DIR/distributed_runtime.py" settle --devices "$NUM_NPU"
+    pushd "$NANOCHAT_REPO" > /dev/null
+    HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-100}" python3 -m torch.distributed.run "${EVAL_TORCHRUN_ARGS[@]}" -m nanochat_mid_compare.offline_base_eval \
+        --eval=core \
+        --eval-benchmarks="$EVAL_BENCHMARKS" \
+        --device-batch-size=16 \
+        --model-tag="$MODEL_TAG" \
+        --step="$CHECKPOINT_STEP" \
+        --model-type="$MODEL_TYPE" \
+        2>&1 | tee "$LOG_FILE"
+    popd > /dev/null
+}
+
+echo ""
+echo "╔══ Step 4: Evaluation (benchmarks=$EVAL_BENCHMARKS) ══╗"
+echo ""
+show_progress 77 "starting model evaluations"
+
+QUADMIX_EVAL_LOG=""
+if [ "$EVALUATION_ENABLED" = "1" ] && has_method quadmix; then
+    show_progress 78 "evaluating QuaDMix model"
+    QUADMIX_EVAL_LOG="$RESULT_DIR/eval_quadmix.log"
+    run_eval "$QUADMIX_MODEL_TAG" "mid" "$QUADMIX_EVAL_LOG"
+fi
+show_progress 80 "QuaDMix model evaluation finished"
+
+RANDOM_EVAL_LOG=""
+if [ "$EVALUATION_ENABLED" = "1" ] && has_method random; then
+    show_progress 83 "evaluating random model"
+    RANDOM_EVAL_LOG="$RESULT_DIR/eval_random.log"
+    run_eval "$RANDOM_MODEL_TAG" "mid" "$RANDOM_EVAL_LOG"
+fi
+show_progress 85 "random model evaluation finished"
+
+MANUAL_RATIO_EVAL_LOG=""
+if [ "$EVALUATION_ENABLED" = "1" ] && has_method manual; then
+    show_progress 88 "evaluating manual-ratio models"
+    MANUAL_EVAL_RUNS_FILE="$RESULT_DIR/manual_plan_evaluations.tsv"
+    : > "$MANUAL_EVAL_RUNS_FILE"
+    while IFS=$'\t' read -r PLAN_ID PLAN_LABEL PLAN_DATA PLAN_MODEL_TAG PLAN_LOG; do
+        PLAN_EVAL_LOG="$RESULT_DIR/eval_manual_${PLAN_ID}.log"
+        run_eval "$PLAN_MODEL_TAG" "mid" "$PLAN_EVAL_LOG"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$PLAN_ID" "$PLAN_LABEL" "$PLAN_DATA" "$PLAN_MODEL_TAG" "$PLAN_LOG" "$PLAN_EVAL_LOG" >> "$MANUAL_EVAL_RUNS_FILE"
+        if [ -z "$MANUAL_RATIO_EVAL_LOG" ]; then
+            MANUAL_RATIO_EVAL_LOG="$PLAN_EVAL_LOG"
+        fi
+    done < "$MANUAL_RUNS_FILE"
+fi
+show_progress 90 "manual-ratio model evaluation finished"
+
+if [ "$NODE_RANK" != "0" ]; then
+    echo "Node $NODE_RANK finished distributed training/evaluation; node 0 generates the report."
+    exit 0
+fi
+
+echo ""
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+#  STEP 5: GENERATE REPORT
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "╔══ Step 5: Generate experiment report ══╗"
+echo ""
+show_progress 95 "generating comparison report"
+
+REPORT_ARGS=(
+    --result-dir "$RESULT_DIR"
+    --dataset-stats "$RESULT_DIR/dataset_stats.json"
+)
+if has_method quadmix; then
+    REPORT_ARGS+=(--quadmix-train-log "$QUADMIX_LOG" --quadmix-eval-log "$QUADMIX_EVAL_LOG")
+fi
+if has_method random; then
+    REPORT_ARGS+=(--random-train-log "$RANDOM_LOG" --random-eval-log "$RANDOM_EVAL_LOG")
+fi
+if has_method manual; then
+    REPORT_ARGS+=(--manual-ratio-train-log "$MANUAL_RATIO_LOG" --manual-ratio-eval-log "$MANUAL_RATIO_EVAL_LOG")
+fi
+python3 "$SCRIPT_DIR/generate_report.py" "${REPORT_ARGS[@]}"
+if [ -f "$DATA_DIR/manual_plans_manifest.json" ] && [ -s "$RESULT_DIR/manual_plan_evaluations.tsv" ]; then
+    python3 "$SCRIPT_DIR/generate_manual_plans_report.py" \
+        --manifest "$DATA_DIR/manual_plans_manifest.json" \
+        --runs "$RESULT_DIR/manual_plan_evaluations.tsv" \
+        --output-dir "$RESULT_DIR"
+fi
+show_progress 98 "comparison report generated"
+
+echo ""
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+
+# ══════════════════════════════════════════════════════════════
+#  CLEANUP: Remove temporary mixed data directories
+# ══════════════════════════════════════════════════════════════
+
+if [ "$MIX_GENERAL_DATA" = "1" ] && [ "$KEEP_MIXED_DATA" != "1" ]; then
+    echo ""
+    echo "╔══ Cleanup: Remove mixed data ══╗"
+    echo ""
+    MIXED_FREED=0
+    for d in "$DATA_DIR"/*_mixed; do
+        if [ -d "$d" ]; then
+            SIZE_KB=$(du -sk "$d" 2>/dev/null | awk '{print $1}')
+            MIXED_FREED=$((MIXED_FREED + SIZE_KB))
+            rm -rf "$d"
+            echo "  Removed: $(basename "$d")"
+        fi
+    done
+    MIXED_FREED_GB=$((MIXED_FREED / 1024 / 1024))
+    echo "  Freed: ${MIXED_FREED_GB}GB"
+    echo "  Kept: climbmix_shards/ (reusable for future runs)"
+    echo ""
+    echo "╚══════════════════════════════════════════════════════════╝"
+    echo ""
+fi
+
+# ══════════════════════════════════════════════════════════════
+#  SUMMARY
+# ══════════════════════════════════════════════════════════════
+
+echo ""
+echo "════════════════════════════════════════════════════════════"
+echo "  STEM Experiment Complete!"
+show_progress 100 "NanoChat comparison experiment complete"
+echo "════════════════════════════════════════════════════════════"
+echo ""
+echo "  Output directory: $RESULT_DIR"
+echo ""
+echo "  Files:"
+echo "    ├── data/                        # Training datasets"
+echo "    │   ├── quadmix_data/            # QuadMix shards (original STEM)"
+echo "    │   ├── random_data/             # Random baseline shards"
+echo "    │   ├── manual_ratio_data/       # Manual Ratio shards"
+if [ "$MIX_GENERAL_DATA" = "1" ] && [ "$KEEP_MIXED_DATA" = "1" ]; then
+echo "    │   ├── *_mixed/                 # Mixed data (kept: KEEP_MIXED_DATA=1)"
+fi
+if [ "$MIX_GENERAL_DATA" = "1" ]; then
+echo "    │   ├── climbmix_shards/         # ClimbMix (reusable)"
+fi
+echo "    │   └── dataset_stats.json       # Statistics"
+echo "    ├── experiment.log                # Full experiment log (all output)"
+echo "    ├── mid_train_quadmix.log"
+echo "    ├── mid_train_random.log"
+echo "    ├── mid_train_manual_ratio.log"
+echo "    ├── eval_quadmix.log"
+echo "    ├── eval_random.log"
+echo "    ├── eval_manual_ratio.log"
+echo "    └── experiment_report.md"
+echo ""
+echo "  Mid-training checkpoints:"
+echo "    $MID_CHECKPOINTS_OUTPUT_DIR/$QUADMIX_MODEL_TAG/"
+echo "    $MID_CHECKPOINTS_OUTPUT_DIR/$RANDOM_MODEL_TAG/"
+echo "    $MID_CHECKPOINTS_OUTPUT_DIR/$MANUAL_RATIO_MODEL_TAG/"
+echo ""
+echo "════════════════════════════════════════════════════════════"

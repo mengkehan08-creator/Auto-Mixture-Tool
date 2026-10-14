@@ -1,0 +1,47 @@
+# Example Auto-Mixture-Tool pipeline configuration.
+# This file selects plugins and supplies their parameters.
+
+dataset_uri: /home/ma-user/work/STEM_sample_100B_only_数理化生_json
+schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml
+dataset_id: stem-json-parquet
+output_uri: /home/ma-user/work/Auto-Mixture-Tool/result/demo_run
+# true 会在提交前全量扫描；100B 数据建议先单独调用审查 API，再保持 false 避免重复扫描。
+full_scan: false
+
+dataset_config:
+  output_schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_quadmix_parquet.yaml
+  shard_start: 0
+  shard_end: 199                 # 当前读取 part-00000..part-00199；后续改为 1000
+  rows_per_group: 10000
+  compression: zstd
+
+algorithm_id: quadmix
+trainer_id: nanochat
+evaluator_id: stem
+executor_id: local               # dev：本地子进程执行；生产改 hpc-cluster（需配 endpoint）
+
+algorithm_config:
+  num_experiments: 8
+  num_search: 1000
+  device_type: npu            # dev 8 NPU；无 NPU 时改 cpu
+  npu_devices: 8              # 8 张 NPU
+  proxy_validation_set: stem_v2
+
+trainer_config:
+  npu_devices: 8              # → NUM_NPU env，run_experiment.sh 据此设 ASCEND_VISIBLE_DEVICES/RANK_SIZE
+  target_param_data_ratio: 0.5
+  nanochat_repo: /home/ma-user/work/nanochat-npu
+  model_dir: /home/ma-user/work/nanochat_model_dir
+  base_model_tag: d24
+
+evaluator_config:
+  benchmarks: stem
+  tasks:
+    - gsm8k
+    - mmlu_stem
+    - arc_easy
+
+executor_config:
+  device_type: npu          # local 统一设置八卡可见设备环境
+  device_count: 8           # 必须与 algorithm/trainer 的 npu_devices 一致
+  # timeout_seconds: 86400  # 可选：每个阶段的最长运行时间

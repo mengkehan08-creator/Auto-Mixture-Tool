@@ -1,0 +1,97 @@
+# Runs inside one ModelArts training container. ModelArts is the outer
+# scheduler, so the in-container executor must be local (never hpc-cluster).
+
+dataset_uri: /home/ma-user/modelarts/inputs/data_dir_0
+schema_uri: /home/ma-user/modelarts/user-job-dir/Auto-Mixture-Tool/configs/schema_stem_quadmix_parquet.yaml
+dataset_id: quadmix
+output_uri: /home/ma-user/modelarts/outputs/output_dir_0/auto_mixture
+full_scan: false
+
+dataset_config: {}
+
+algorithm_id: quadmix
+trainer_id: nanochat
+training_data_adapter_id: none
+evaluator_id: stem
+executor_id: local
+
+algorithm_config:
+  # Two-node smoke test: 16 proxy experiments keep 2 x 8 NPUs busy once
+  # distributed experiment scheduling is enabled.
+  num_experiments: 16
+  # Temporary integration setting: each proxy experiment trains for 15 steps.
+  tiny_steps: 15
+  num_search: 1000
+  # Additional one-click QuaDMix controls.
+  top_k: 10
+  search_mode: r2_weighted
+  block_size: 2048
+  micro_batch_size: 2
+  global_batch_size: 8
+  rank_ref_size: 10000
+  checkpoint_interval: 1000
+  seed: 42
+  device_type: npu
+  npu_devices: 8
+  algorithm_nodes: auto
+  proxy_validation_set: stem_v2
+  proxy_validation_path: /home/ma-user/modelarts/inputs/proxy_validation_dir_5/stem_v2_tokenized.pt
+  tokenizer_path: /home/ma-user/modelarts/inputs/quadmix_tokenizer_dir_4
+
+# QuaDMix remains the selected platform algorithm. Random and manual are
+# comparison strategies that reuse the same token budget, then train/evaluate
+# sequentially so the three runs do not compete for NPU memory.
+comparison_config:
+  methods:
+    - quadmix
+    - random
+    - manual
+  random_strategy:
+    # Empty means the built-in seeded random strategy. Set this to an OBS-mounted
+    # .py path to use a trusted custom strategy.
+    script_path: ""
+    config: {}
+  manual_plans:
+    - id: default_stem
+      label: Default STEM ratio
+      ratios:
+        数学: 0.60
+        物理: 0.15
+        化学: 0.125
+        生物学: 0.125
+      strategy:
+        script_path: ""
+        config: {}
+    # Add more items here; each plan produces its own dataset, model and report.
+    # - id: quality_first
+    #   label: Quality-first manual ratio
+    #   ratios: {数学: 0.4, 物理: 0.2, 化学: 0.2, 生物学: 0.2}
+    #   strategy:
+    #     script_path: /home/ma-user/modelarts/inputs/strategy_dir_8/manual_quality_first.py
+    #     config: {descending: true}
+
+trainer_config:
+  npu_devices: 8
+  target_param_data_ratio: 0.5
+  nanochat_repo: /home/ma-user/modelarts/inputs/nanochat_npu_dir_3
+  model_dir: /home/ma-user/modelarts/inputs/nanochat_model_dir_1
+  eval_bundle_dir: /home/ma-user/modelarts/inputs/eval_bundle_dir_6
+  skip_eval_download: true
+  disable_wandb: true
+  # Optimizer checkpoints are world-size sharded. Keep false when node count
+  # can change; model weights are still loaded from base_model_tag.
+  load_optimizer: false
+  result_dir: /home/ma-user/modelarts/outputs/output_dir_0/nanochat_results
+  checkpoint_dir: /home/ma-user/modelarts/outputs/output_dir_0/nanochat_checkpoints
+  base_model_tag: d24
+
+evaluator_config:
+  benchmarks: stem
+  tasks:
+    - gsm8k
+    - mmlu_stem
+    - arc_easy
+
+executor_config:
+  device_type: npu
+  device_count: 8

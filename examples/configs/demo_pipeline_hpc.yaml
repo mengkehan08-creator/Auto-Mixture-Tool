@@ -1,0 +1,66 @@
+# 生产示例：通过 HTTP API 提交到高性能计算集群。
+# 与 demo_pipeline.yaml 的区别：executor_id=hpc-cluster + endpoint。
+
+dataset_uri: /home/ma-user/work/STEM_sample_100B_only_数理化生_json
+schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_sample_json.yaml
+dataset_id: stem-json-parquet
+output_uri: /home/ma-user/work/Auto-Mixture-Tool/result/demo_run
+full_scan: false
+
+dataset_config:
+  output_schema_uri: /home/ma-user/work/Auto-Mixture-Tool/configs/schema_stem_quadmix_parquet.yaml
+  shard_start: 0
+  shard_end: 199
+  rows_per_group: 10000
+  compression: zstd
+
+algorithm_id: quadmix
+trainer_id: nanochat
+evaluator_id: stem
+executor_id: hpc-cluster       # 生产：提交到 HPC 集群 API
+
+algorithm_config:
+  num_experiments: 8
+  num_search: 1000
+  device_type: npu
+  npu_devices: 8
+  proxy_validation_set: stem_v2
+
+trainer_config:
+  npu_devices: 8
+  target_param_data_ratio: 0.5
+  nanochat_repo: /home/ma-user/work/nanochat-npu
+  model_dir: /home/ma-user/work/nanochat_model_dir
+  base_model_tag: d24
+
+evaluator_config:
+  benchmarks: stem
+  tasks:
+    - gsm8k
+    - mmlu_stem
+    - arc_easy
+
+executor_config:
+  endpoint: https://hpc-cluster.example.com/api/v1/jobs   # 必填：集群任务提交 API
+  status_endpoint: https://hpc-cluster.example.com/api/v1/jobs/{job_id}
+  token_env: AMT_CLUSTER_TOKEN                            # 可选：承载令牌的环境变量名
+  timeout_seconds: 30
+  queue: npu-production
+  image: registry.example.com/auto-mixture-tool:latest
+  working_dir: /home/ma-user/work/Auto-Mixture-Tool
+  resources:
+    nodes: 1
+    npu: 8
+    cpu: 64
+    memory_gb: 512
+  mounts:
+    - source: /home/ma-user/work
+      target: /home/ma-user/work
+  # 若平台不用 id/status 字段，可在这里改字段名或做状态映射：
+  job_id_field: id
+  status_field: status
+  status_map:
+    queued: SUBMITTED
+    running: RUNNING
+    completed: SUCCEEDED
+    failed: FAILED

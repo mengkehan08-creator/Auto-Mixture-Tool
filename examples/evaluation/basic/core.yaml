@@ -1,0 +1,6 @@
+icl_tasks:
+  - label: science_example
+    dataset_uri: science.jsonl
+    icl_task_type: multiple_choice
+    num_fewshot: [0]
+    continuation_delimiter: "\nAnswer: "
