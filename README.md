@@ -4,7 +4,7 @@
 
 本仓库包含当前已完成的多节点适配：**一次 NanoChat 训练作业可跨多个节点组成同一个分布式训练组**；QuaDMix 代理实验则在同一配比作业内按节点分配实验。当前 Web 流程中，各策略分别创建配比和训练作业，全部必需训练成功后创建汇总评测作业。
 
-**仓库地址：** [mengkehan08-creator/Auto-Mixture-Tool](https://github.com/mengkehan08-creator/Auto-Mixture-Tool)。本仓库为私有仓库，克隆前需拥有访问权限。
+**仓库地址：** [mengkehan08-creator/Auto-Mixture-Tool](https://github.com/mengkehan08-creator/Auto-Mixture-Tool)。本仓库为公开仓库，可直接克隆。
 
 ## 1. 版本与运行边界
 
@@ -59,7 +59,7 @@ export PYTHONPATH="$PWD:$PWD/src:${PYTHONPATH:-}"
 python -c "import fastapi, uvicorn, requests, yaml, numpy, pandas, pyarrow; print('UI dependencies OK')"
 ```
 
-私有仓库使用 GitHub 已配置的凭据管理或 SSH 认证；不要将 Token 写入克隆 URL。云环境无法访问 GitHub 时，在可联网机器制作代码包，再上传到 JupyterLab 解压。
+公开仓库可通过 HTTPS 无需登录克隆。云环境无法访问 GitHub 时，在可联网机器制作代码包，再上传到 JupyterLab 解压。
 
 安装成功应输出 `UI dependencies OK`。仓库已包含构建后的前端，普通部署无需安装 Node.js。控制面完整离线安装步骤见 [部署 Wiki](docs/WIKI_DEPLOYMENT.md#deploy-install)。
 
@@ -407,7 +407,7 @@ npm run build
 
 | 问题 | 优先检查 |
 | --- | --- |
-| 私有仓库无法克隆 | GitHub 登录账号和仓库访问权限 |
+| 仓库无法克隆 | GitHub 网络连通性、代理和仓库地址 |
 | 网页打不开或 502 | 后端进程、端口、Jupyter 代理路径 |
 | 输入/评测校验失败 | OBS 与本地映射一致性、挂载权限、字段和任务文件 |
 | 401/403 | 网关鉴权方式、Token 有效期、委托和资源权限 |
