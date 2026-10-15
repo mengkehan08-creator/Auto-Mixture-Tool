@@ -264,8 +264,12 @@ ModelArts 网络环境仍需接入真实设备后验收。QuaDMix 的可配置�
 训练开始前，各节点发布运行清单并等待节点 0 对齐：数据 Schema、分片相对路径
 与大小、采样元数据摘要、Tokenizer、验证 Token/Mask/任务标签、模型结构、seed、
 训练预算和参数集合必须一致。平台作业标识 `AMT_RUN_ID`（缺省使用 `MA_VJ_NAME`）
-也纳入核对；CLI 会校验 `AMT_EXPECTED_NODES` 与实际节点数。多节点必须显式提供
-节点编号，或由平台注入 `VC_TASK_INDEX`，避免全部节点默认为 0。
+也纳入核对；CLI 会校验 `AMT_EXPECTED_NODES` 与实际节点数。配比和训练共用节点
+身份解析：支持 `NNODES` / `MA_NUM_HOSTS`，缺省回退到 `AMT_EXPECTED_NODES`；
+节点编号支持 `NODE_RANK` / `MA_NODE_RANK` / `VC_NODE_RANK` / `VC_TASK_INDEX`，
+缺省从 `<作业名>-worker-N` 主机名取得。命令行参数与环境变量冲突时直接报错，
+不会把缺少编号的多节点作业默认为节点 0。配比通过 OBS 协调，不要求训练用的
+`MASTER_ADDR`、`MASTER_PORT` 或主节点 DNS 解析。
 
 数据摘要复用已加载的采样元数据，不重新扫描全部训练文本；数据目录有
 `manifest.json` 时也比较其内容摘要。因此需使用不可变的 OBS 数据版本：在不改变
@@ -286,6 +290,7 @@ ModelArts 网络环境仍需接入真实设备后验收。QuaDMix 的可配置�
 
 每个实验的 `meta.json` 记录节点编号、运行摘要和 `artifact_uri`。最终采样集完成后
 仍由其他节点下载 `final/sampled_dataset`，下游训练入口保持原有路径。
+`obsutil` 后端的目录上传、下载均使用 `-flat`，复制目录内容，避免多套源目录名。
 
 运行入口在数据加载前建立失败通知：数据、Tokenizer、验证文件、训练、汇总或
 最终输出发生异常时，尽力写入协调目录的 `failures/node-<rank>.json`；等待中的

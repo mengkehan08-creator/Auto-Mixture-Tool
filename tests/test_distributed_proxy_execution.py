@@ -250,9 +250,9 @@ def test_cli_notifies_other_nodes_when_resource_loading_fails(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("environment,nodes,rank,error", [
-    ({"AMT_EXPECTED_NODES": "2"}, None, None, "AMT_EXPECTED_NODES"),
+    ({"AMT_EXPECTED_NODES": "2"}, None, None, "requires NODE_RANK"),
     ({"MA_NUM_HOSTS": "2"}, 1, 0, "MA_NUM_HOSTS"),
-    ({"MA_NUM_HOSTS": "2"}, None, None, "node-rank"),
+    ({"MA_NUM_HOSTS": "2"}, None, None, "requires NODE_RANK"),
     ({"MA_NUM_HOSTS": "2", "VC_TASK_INDEX": "1"}, 2, 0, "VC_TASK_INDEX"),
 ])
 def test_cli_rejects_incomplete_or_inconsistent_node_identity(monkeypatch, environment, nodes, rank, error):

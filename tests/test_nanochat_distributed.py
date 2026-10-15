@@ -36,7 +36,7 @@ def test_modelarts_and_explicit_launch_settings():
     ({"VC_TASK_INDEX": ""}, "requires NODE_RANK"),
     ({"VC_TASK_INDEX": "2"}, "outside"),
     ({"NODE_RANK": "0"}, "Conflicting"),
-    ({"MA_NUM_HOSTS": "0"}, "Invalid node/device count"),
+    ({"MA_NUM_HOSTS": "0"}, "Invalid node count"),
     ({"AMT_EXPECTED_NODES": "3"}, "expected=3"),
     ({"MASTER_PORT": "65534"}, "Invalid master"),
     ({"AMT_RUN_ID": ""}, "AMT_RUN_ID"),

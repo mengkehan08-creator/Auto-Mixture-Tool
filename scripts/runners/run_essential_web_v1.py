@@ -37,6 +37,8 @@ try:
     import quadmix
 except ImportError:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'src'))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from nanochat_mid_compare.distributed_runtime import resolve_node_identity
 from quadmix import QuaDMixConfig
 from quadmix.pipeline.real_pipeline import QuaDMixPipeline
 from quadmix.data.metadata_manager import ShardMetadataManager
@@ -573,23 +575,7 @@ def run_pipeline(args, distributed_coordinator=None):
 
 def main():
     args = build_parser().parse_args()
-    num_nodes = (args.distributed_nodes if args.distributed_nodes is not None
-                 else int(os.environ.get("MA_NUM_HOSTS", "1")))
-    node_rank = (args.node_rank if args.node_rank is not None
-                 else int(os.environ.get("VC_TASK_INDEX", "0")))
-    if num_nodes < 1 or not 0 <= node_rank < num_nodes:
-        raise ValueError("节点数必须为正，node_rank必须在 [0, 节点数) 内")
-    expected_nodes = os.environ.get("AMT_EXPECTED_NODES")
-    if expected_nodes is not None and num_nodes != int(expected_nodes):
-        raise ValueError("运行节点数与提交作业的 AMT_EXPECTED_NODES 不一致")
-    if args.distributed_nodes is not None and os.environ.get("MA_NUM_HOSTS") is not None:
-        if num_nodes != int(os.environ["MA_NUM_HOSTS"]):
-            raise ValueError("--distributed-nodes 与平台 MA_NUM_HOSTS 不一致")
-    if args.node_rank is not None and os.environ.get("VC_TASK_INDEX") is not None:
-        if node_rank != int(os.environ["VC_TASK_INDEX"]):
-            raise ValueError("--node-rank 与平台 VC_TASK_INDEX 不一致")
-    if num_nodes > 1 and args.node_rank is None and "VC_TASK_INDEX" not in os.environ:
-        raise ValueError("跨节点执行必须提供 --node-rank 或平台 VC_TASK_INDEX")
+    num_nodes, node_rank = resolve_node_identity(nodes=args.distributed_nodes, rank=args.node_rank)
     if num_nodes == 1:
         return run_pipeline(args)
 

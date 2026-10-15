@@ -52,14 +52,38 @@ class Topology:
                 f"--rdzv_conf=timeout={math.ceil(timeout)}"]
 
 
+def resolve_node_identity(env=None, *, nodes=None, rank=None, hostname=None):
+    """Resolve shared mixing/training identity without requiring a rendezvous."""
+    env = dict(os.environ if env is None else env)
+    if nodes is not None:
+        env["--distributed-nodes"] = str(nodes)
+    if rank is not None:
+        env["--node-rank"] = str(rank)
+    configured = _integer(env, ("AMT_EXPECTED_NODES",))
+    nodes = _integer(env, ("--distributed-nodes", "NNODES", "MA_NUM_HOSTS"),
+                     1 if configured is None else configured)
+    expected = _integer(env, ("AMT_EXPECTED_NODES",), nodes)
+    if nodes < 1 or nodes != expected:
+        raise ValueError(f"Invalid node count: reported={nodes}, AMT_EXPECTED_NODES expected={expected}")
+    rank = _integer(env, ("--node-rank", "NODE_RANK", "MA_NODE_RANK", "VC_NODE_RANK", "VC_TASK_INDEX"))
+    if nodes > 1 and rank is None:
+        host = (hostname or socket.gethostname()).split(".")[0]
+        match = re.fullmatch(r"(.+)-worker-(\d+)", host)
+        if not match:
+            raise ValueError("Multi-node job requires NODE_RANK/VC_TASK_INDEX or a ModelArts worker hostname")
+        rank = int(match[2])
+    if nodes == 1 and rank is None:
+        rank = 0
+    if rank is None or not 0 <= rank < nodes:
+        raise ValueError(f"Node rank {rank} is outside [0, {nodes})")
+    return nodes, rank
+
+
 def resolve_topology(devices, env=None, *, hostname=None, hosts_file="/etc/hosts"):
     env = os.environ if env is None else env
-    configured = _integer(env, ("AMT_EXPECTED_NODES",))
-    nodes = _integer(env, ("NNODES", "MA_NUM_HOSTS"), 1 if configured is None else configured)
-    expected = _integer(env, ("AMT_EXPECTED_NODES",), nodes)
-    if nodes < 1 or type(devices) is not int or devices < 1 or nodes != expected:
-        raise ValueError(f"Invalid node/device count: reported={nodes}, expected={expected}, devices={devices}")
-    rank = _integer(env, ("NODE_RANK", "MA_NODE_RANK", "VC_NODE_RANK", "VC_TASK_INDEX"))
+    if type(devices) is not int or devices < 1:
+        raise ValueError(f"Invalid node/device count: devices={devices}")
+    nodes, rank = resolve_node_identity(env, hostname=hostname)
     addresses = {env[key].strip() for key in ("MASTER_ADDR", "MA_MASTER_ADDR", "VC_MASTER_ADDR") if env.get(key)}
     if len(addresses) > 1:
         raise ValueError("Conflicting distributed master addresses")
@@ -69,7 +93,7 @@ def resolve_topology(devices, env=None, *, hostname=None, hosts_file="/etc/hosts
     port = _integer(env, ("MASTER_PORT", "MA_MASTER_PORT", "VC_MASTER_PORT"), 29500)
     # Climb's verified fallback: ModelArts StatefulSet <service>-worker-N and
     # the pod's FQDN in /etc/hosts identify both rank and the worker-0 address.
-    if nodes > 1 and (rank is None or not addr):
+    if nodes > 1 and not addr:
         host = (hostname or socket.gethostname()).split(".")[0]
         match = re.fullmatch(r"(.+)-worker-(\d+)", host)
         if not match:
@@ -87,10 +111,7 @@ def resolve_topology(devices, env=None, *, hostname=None, hosts_file="/etc/hosts
             master = f"{match[1]}-worker-0.{fqdn.split('.', 1)[1]}"
             addr = next((record[0] for record in records if master in record[1:]), "") or socket.gethostbyname(master)
     if nodes == 1:
-        rank = 0 if rank is None else rank
         addr = addr or "127.0.0.1"
-    if rank is None or not 0 <= rank < nodes:
-        raise ValueError(f"Node rank {rank} is outside [0, {nodes})")
     if not addr or any(char.isspace() for char in addr) or ":" in addr or not 1 <= port <= 65533:
         raise ValueError("Invalid master address/port (reserve port+1 for eval and port+2 for checkpoint relay)")
     if nodes > 1 and not env.get("AMT_RUN_ID"):

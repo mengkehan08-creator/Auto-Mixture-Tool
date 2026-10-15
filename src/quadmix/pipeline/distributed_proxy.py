@@ -109,7 +109,7 @@ class ArtifactStore:
             import moxing as mox
             mox.file.copy_parallel(local, uri)
             return
-        subprocess.run(["obsutil", "cp", local, uri, "-r", "-f"], check=True)
+        subprocess.run(["obsutil", "cp", local, uri, "-r", "-f", "-flat"], check=True)
 
     def download_directory(self, uri: str, local_path: str | Path) -> None:
         local = Path(local_path)
@@ -121,7 +121,7 @@ class ArtifactStore:
             import moxing as mox
             mox.file.copy_parallel(uri, str(local))
             return
-        subprocess.run(["obsutil", "cp", uri, str(local), "-r", "-f"], check=True)
+        subprocess.run(["obsutil", "cp", uri, str(local), "-r", "-f", "-flat"], check=True)
 
     def write_text(self, uri: str, value: str) -> None:
         with tempfile.TemporaryDirectory() as temporary:
