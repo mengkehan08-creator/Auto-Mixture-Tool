@@ -68,6 +68,32 @@ python -m auto_mixture_tool.cli --workspace "$PWD" serve --host 0.0.0.0 --port 8
 
 同一个 Notebook 中，不同虚拟环境或不同启动终端的配置仍可能不同。原始脚本中的 `verify=False` 和代理修改不会自动导入；仅复制 `auth` 字典不代表已经复用了这些连接设置。优先复用旧服务实际使用的可信 CA 配置，不根据通用错误直接关闭证书验证。修改后重启新版后端。
 
+### 从运行中的旧版复用认证启动环境
+
+旧版仍能正常获取 Token 时，可用 `scripts/reuse_modelarts_auth_env.py` 复制该进程的认证启动环境。先更新新版代码，保留旧版运行；PID 应使用当前检查得到的值，以下 `1406516` 仅为示例。
+
+```bash
+cd /home/ma-user/work/Auto-Mixture-Tool-MultiNode
+git pull --ff-only origin main
+python3 scripts/reuse_modelarts_auth_env.py --pid 1406516 --workspace /home/ma-user/work/Auto-Mixture-Tool
+```
+
+脚本验证进程属于当前用户、是 AMT 后端且工作目录匹配，只复制 `AMT_IAM_PROVIDER`、大小写代理/NO_PROXY 和 CA 环境变量。配置写入旧版私有认证文件旁的 `amt_multinode_runtime.env`，权限为 `600`；拒绝写入 Git 仓库，不打印配置值。这个文件可能包含代理密码，应与私有认证文件一起保管，不上传 Git、OBS 或聊天。
+
+看到“已保存认证启动环境”后，停止新版服务，在同一个终端加载该文件再启动。以私有认证文件位于 `/home/ma-user/work/private_auth/iam_token_provider.py` 为例：
+
+```bash
+cd /home/ma-user/work/Auto-Mixture-Tool-MultiNode
+source .venv/bin/activate
+source /home/ma-user/work/private_auth/amt_multinode_runtime.env
+export PYTHONPATH="$PWD:$PWD/src:${PYTHONPATH:-}"
+python -m auto_mixture_tool.cli --workspace "$PWD" serve --host 0.0.0.0 --port 8081
+```
+
+以后每次启动新版前加载同一份 `.env` 文件即可。旧版未设置的相关变量会在新版终端中取消，避免保留新版独有的 `ALL_PROXY`、旧的 `NO_PROXY` 等设置。旧版连接配置变化后，应重新复制。
+
+此脚本依赖 Linux `/proc`，读取的是进程启动环境；Python 代码运行后在内存里修改的代理设置不在快照范围内。新版继续使用自己的 Python 依赖。若复用后仍失败，应对比云端旧版的认证实现和运行时设置，不能据此继续假定旧版采用直连。脚本本身不执行私有认证文件、不请求 Token。
+
 ## 行为与验证边界
 
 - 配置预检查只核对私有配置和目标地址，不请求 IAM、不创建作业。
