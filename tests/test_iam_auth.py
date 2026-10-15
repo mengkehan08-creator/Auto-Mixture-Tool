@@ -96,6 +96,39 @@ def test_iam_errors_do_not_leak_secrets(result):
     assert 'test-only-secret' not in str(error.value)
 
 
+@pytest.mark.parametrize('failure,category', [
+    (requests.exceptions.SSLError, 'SSLError'),
+    (requests.exceptions.ProxyError, 'ProxyError'),
+    (requests.exceptions.ConnectTimeout, 'Timeout'),
+    (requests.exceptions.ReadTimeout, 'Timeout'),
+    (requests.Timeout, 'Timeout'),
+    (requests.ConnectionError, 'ConnectionError'),
+    (requests.RequestException, 'RequestException'),
+])
+def test_iam_connection_errors_identify_category_without_leaking_details(failure, category):
+    provider = IamTokenProvider(config())
+    detail = 'test-only-secret https://proxy-user:proxy-password@proxy.example'
+    with patch('requests.post', side_effect=failure(detail)):
+        with pytest.raises(ValueError, match=rf'\({category}\)') as error:
+            provider.authorization(config()['modelarts_endpoint'])
+    assert 'test-only-secret' not in str(error.value)
+    assert 'proxy-user' not in str(error.value)
+    assert 'proxy-password' not in str(error.value)
+    assert error.value.__suppress_context__ is True
+
+
+def test_iam_connection_failure_prevents_job_submission():
+    provider = IamTokenProvider(config())
+    template = SimpleNamespace(url=config()['modelarts_endpoint'], headers={'Authorization': ''})
+    with patch('auto_mixture_tool.modelarts.workflow.get_provider', return_value=provider):
+        client = ModelArtsClient(template)
+    with patch('requests.post', side_effect=requests.exceptions.SSLError('test-only-secret')) as post:
+        with pytest.raises(ValueError, match=r'\(SSLError\)'):
+            client.submit({})
+    assert post.call_count == 1
+    assert post.call_args.args[0] == 'https://iam.his-op.huawei.com/iam/auth/token'
+
+
 def test_unknown_expiry_not_cached():
     provider = IamTokenProvider(config())
     with patch('requests.post', return_value=response(expires_at='')) as post:

@@ -66,8 +66,16 @@ class IamTokenProvider:
                     if self.config.get('iam_verify_ssl', True) else False,
                     allow_redirects=False,
                 )
+            except requests.exceptions.SSLError:
+                raise ValueError('IAM Token 获取失败：TLS/SSL 连接失败，请检查 CA 证书及 HTTPS 配置 (SSLError)') from None
+            except requests.exceptions.ProxyError:
+                raise ValueError('IAM Token 获取失败：代理连接失败，请核对新旧服务的代理配置 (ProxyError)') from None
+            except requests.Timeout:
+                raise ValueError('IAM Token 获取失败：请求超时，请检查网络、代理及 IAM 服务连通性 (Timeout)') from None
+            except requests.ConnectionError:
+                raise ValueError('IAM Token 获取失败：无法连接 IAM，请检查 DNS、网络及代理配置 (ConnectionError)') from None
             except requests.RequestException:
-                raise ValueError('IAM Token 获取失败：请检查网络、代理及 CA 证书') from None
+                raise ValueError('IAM Token 获取失败：请求异常，请检查网络及请求配置 (RequestException)') from None
             if not 200 <= response.status_code < 300:
                 raise ValueError(f'IAM Token 获取失败（HTTP {response.status_code}），请检查私有认证配置')
             try:
