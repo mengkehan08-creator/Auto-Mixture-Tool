@@ -170,7 +170,7 @@ select:disabled { color: #7d8798; background: #f3f5f8; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.creation-form { padding-bottom: 104px; }
+.creation-form { max-width: 1220px; margin: 0 auto; padding-bottom: 104px; }
 .page-actions { position: fixed; right: clamp(12px, 3vw, 40px); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 30; max-width: calc(100vw - 24px); display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin: 0; padding: 12px 14px; border: 1px solid #dce5f4; border-radius: 14px; background: #fffffff5; box-shadow: 0 8px 30px #233d6724; backdrop-filter: blur(12px); }
 .path-preview { margin: 16px 0; padding: 12px 15px; border: 1px solid #e2eaf9; border-radius: 9px; background: #f5f8ff; color: #667895; font-size: 11px; overflow-wrap: anywhere; }
 .path-preview code { color: #315fd1; }
