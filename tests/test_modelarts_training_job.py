@@ -28,6 +28,9 @@ class ModelArtsJobTests(unittest.TestCase):
         )
         self.assertTrue(job["metadata"]["name"].startswith("auto-mixture-2node-"))
         inputs = {item["name"]: item for item in job["algorithm"]["inputs"]}
+        self.assertEqual(job["algorithm"]["code_dir"], modelarts.DEFAULT_CODE_OBS_URI)
+        self.assertEqual(inputs["code_dir"]["remote"]["obs"]["obs_url"], job["algorithm"]["code_dir"])
+        self.assertEqual(inputs["nanochat_npu_dir"]["remote"]["obs"]["obs_url"], modelarts.DEFAULT_NANOCHAT_OBS_URI)
         self.assertEqual(len(inputs), 8)
         self.assertEqual(
             inputs["quadmix_tokenizer_dir"]["local_dir"],

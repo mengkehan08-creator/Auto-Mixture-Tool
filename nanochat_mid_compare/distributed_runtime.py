@@ -25,6 +25,10 @@ import threading
 import time
 
 
+# Verified backup_0810 loader; the training wrapper supplies global sharding.
+LEGACY_ROW_GROUP_LOADER_SHA256 = "2add94bfac910f44d24781347c4e7f7a4433768aef8f28c75b0b38798eecc298"
+
+
 def _integer(env, names, default=None):
     values = {name: int(env[name]) for name in names if env.get(name)}
     if len(set(values.values())) > 1:
@@ -359,9 +363,10 @@ def validate_framework(repo):
         raise ValueError(f"NanoChat training/evaluation interface mismatch: {sorted(missing)}; use dev-data-mix")
     loader = next((node for node in ast.walk(trees["nanochat/dataloader.py"])
                    if isinstance(node, ast.FunctionDef) and node.name == "_document_batches"), None)
-    if loader is None or not any(isinstance(node, ast.Name) and node.id == "total_row_groups"
-                                 for node in ast.walk(loader)):
-        raise ValueError("NanoChat requires dev-data-mix's global row-group loader")
+    if loader is None or (not any(isinstance(node, ast.Name) and node.id == "total_row_groups"
+                                  for node in ast.walk(loader))
+                          and _digest(repo / "nanochat/dataloader.py") != LEGACY_ROW_GROUP_LOADER_SHA256):
+        raise ValueError("NanoChat requires dev-data-mix's global row-group loader or the verified legacy loader")
     optimizer = next((node for node in ast.walk(trees["nanochat/optim.py"])
                       if isinstance(node, ast.ClassDef) and node.name == "DistMuonAdamW"), None)
     methods = {node.name for node in optimizer.body if isinstance(node, ast.FunctionDef)} if optimizer else set()
@@ -462,7 +467,7 @@ def record_training(directory, topology, run_id, phase, plan, repo, data_dir=Non
               "checkpoint": manifest, "training": plan, "framework_revision": revision,
               "framework_sources": sources,
               "tool_sources": {name: _digest(Path(__file__).with_name(name))
-                               for name in ("distributed_runtime.py", "run_nanochat_mid_train.py")}}
+                               for name in ("distributed_runtime.py", "run_nanochat_mid_train.py", "global_row_groups.py")}}
     if data_dir is not None:
         import pyarrow.parquet as pq
         data = Path(data_dir)

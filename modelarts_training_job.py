@@ -16,6 +16,14 @@ NODE_COUNT = 2
 if not 2 <= NODE_COUNT <= 16:
     raise ValueError("NODE_COUNT must be between 2 and 16")
 JOB_NAME = f"auto-mixture-{NODE_COUNT}node-{datetime.now():%Y%m%d-%H%M%S}"
+DEFAULT_CODE_OBS_URI = (
+    "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/"
+    "chengchao/releases/amt-3node-20261020/Auto-Mixture-Tool/"
+)
+DEFAULT_NANOCHAT_OBS_URI = (
+    "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/"
+    "chengchao/frameworks/nanochat-npu-global-rg-20261016-v2/"
+)
 
 
 def update_parameter(parameters, name, new_value):
@@ -109,10 +117,7 @@ job_data = {
             "PIP_NO_INDEX": "1",
             "WANDB_MODE": "disabled",
         },
-        "code_dir": (
-            "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/"
-            "Auto-Mixture-Tool/"
-        ),
+        "code_dir": DEFAULT_CODE_OBS_URI,
         "local_code_dir": "/home/ma-user/modelarts/user-job-dir",
         "working_dir": "/home/ma-user/modelarts/user-job-dir",
         "inputs": [
@@ -148,10 +153,7 @@ job_data = {
                 "access_method": "env",
                 "remote": {
                     "obs": {
-                        "obs_url": (
-                            "obs://bucket-pangu-green-guangzhou/s00944147/"
-                            "l00916525/Auto-Mixture-Tool/"
-                        )
+                        "obs_url": DEFAULT_CODE_OBS_URI
                     }
                 },
             },
@@ -161,10 +163,7 @@ job_data = {
                 "access_method": "env",
                 "remote": {
                     "obs": {
-                        "obs_url": (
-                            "obs://bucket-pangu-green-guangzhou/s00944147/"
-                            "l00916525/backup_0810/work/nanochat-npu/"
-                        )
+                        "obs_url": DEFAULT_NANOCHAT_OBS_URI
                     }
                 },
             },
@@ -282,17 +281,12 @@ def main():
     )
 
     item = next(i for i in job_data["algorithm"]["inputs"] if i["name"] == "code_dir")
-    item["remote"]["obs"]["obs_url"] = (
-        "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/Auto-Mixture-Tool/"
-    )
+    item["remote"]["obs"]["obs_url"] = DEFAULT_CODE_OBS_URI
 
     item = next(
         i for i in job_data["algorithm"]["inputs"] if i["name"] == "nanochat_npu_dir"
     )
-    item["remote"]["obs"]["obs_url"] = (
-        "obs://bucket-pangu-green-guangzhou/s00944147/l00916525/"
-        "backup_0810/work/nanochat-npu/"
-    )
+    item["remote"]["obs"]["obs_url"] = DEFAULT_NANOCHAT_OBS_URI
 
     item = next(
         i

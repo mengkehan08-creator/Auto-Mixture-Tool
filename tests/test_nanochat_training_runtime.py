@@ -54,6 +54,7 @@ def test_record_is_published_before_eval_and_rejects_unexpected_batch(tmp_path):
     assert record['training']['actual_tokens'] == 64
     assert record['training']['load_optimizer'] == 0
     assert record['checkpoint']['files'][0]['sha256']
+    assert record['tool_sources']['global_row_groups.py']
     assert json.loads((trained / 'training_record.json').read_text()) == record
     meta.write_text('{"step":2,"total_batch_size":64}')
     with pytest.raises(ValueError, match='step/batch'):

@@ -14,7 +14,16 @@
 | NanoChat NPU | [liujin99/nanochat-npu](https://github.com/liujin99/nanochat-npu)，`dev-data-mix`，`6e5baa26317defa669c08e329ee819fff5908c40` | 作为独立框架代码上传 OBS，训练和评测使用同一版本 |
 | Climb / Climb-MA | [liujin99/climbmix](https://github.com/liujin99/climbmix) 与已跑通的 Climb-MA 启动方式 | 用于参考拓扑解析、全局数据分片、训练与评测衔接；运行本工具不要求额外启动 Climb |
 
-配置支持 **1～16 节点，每节点固定 8 张 NPU**。配置范围不等于所有节点规模均已完成 Ascend/HCCL 验收。此版本已有 CPU/Gloo 数值测试、脚本执行测试和前端构建验证；真实云端多节点运行须按第 10 节完成验收。
+配置支持 **1～16 节点，每节点固定 8 张 NPU**。截至 2026-10-21，用户已确认修复后的云端版本跑通 **2、3、4 节点训练**，其中 3 节点完成了 5 步短训及正式预算训练；这不代表其他规模或独立评测均已验收。本地另有 CPU/Gloo 数值测试、脚本执行测试和前端构建验证。
+
+当前网页和提交脚本默认使用以下已验证的 OBS 副本，运行依赖中的 `code_dir` 与工具代码地址保持一致：
+
+| 资源 | 默认 OBS 地址 |
+| --- | --- |
+| 工具代码 | `obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/releases/amt-3node-20261020/Auto-Mixture-Tool/` |
+| NanoChat 框架 | `obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/frameworks/nanochat-npu-global-rg-20261016-v2/` |
+
+此前的 batch 参数传递、全局行组分片、OBS 目录层级和节点身份修复已整合到项目运行代码。已核对的旧加载器可由训练入口在内存中适配，挂载源码保持只读；新实验无需再运行历史修复脚本。整合范围与校验方式见 [多节点说明](docs/SCALING_MODELARTS_NODES.md#2026-10-21-修复整合)。
 
 本工具的网页和 API 是控制面，可以部署在 ModelArts Notebook 或可访问云端资源的 Linux 主机。NPU 训练由 ModelArts 作业容器执行，运行网页不需要在控制面安装 `torch_npu`。
 
@@ -94,6 +103,8 @@ git rev-parse HEAD
 
 将这个 checkout 的代码上传至 `frameworks/nanochat-npu/`。以后升级分支时重新执行兼容检查和短训练验收；不要让训练与评测使用不同版本。
 
+使用上述已验证的 NanoChat OBS 目录时可直接复用。旧备份加载器仅在 SHA-256 为 `2add94bfac910f44d24781347c4e7f7a4433768aef8f28c75b0b38798eecc298` 时启用项目内的全局分片兼容层；其他未知旧实现仍会在训练前拒绝。
+
 ### 4.2 输入数据格式
 
 当前 Web 配比流程读取文本 Parquet。每个分片须至少包含以下字段，具体定义见 [数据 Schema](configs/schema_stem_quadmix_parquet.yaml)：
@@ -162,6 +173,8 @@ rustbpe-0.1.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
 ## 5. 上传同一版本的工具代码
 
 控制面代码与云作业读取的 OBS 代码必须是同一版本。在已克隆本仓库的控制面执行：
+
+页面中的默认地址代表此前已验证的云端副本，不会因本地代码修改自动更新。发布本次整合代码时，应使用新的版本目录，并在网页的工具地址和运行依赖 `code_dir` 中同时选择它；复制或重试旧实验时核对保存的地址。
 
 ```bash
 cd /home/ma-user/work/Auto-Mixture-Tool
@@ -351,7 +364,7 @@ actual_tokens = 优化步数 × total_batch_size
 | 节点配置 | 可用全局 batch 示例 | 用法 |
 | --- | ---: | --- |
 | 1 / 2 / 4 节点 | 524288 | 各拓扑均可整除 |
-| 单个 3 节点作业 | 540672 | 适合 24-rank，不能直接套用到 2 节点 |
+| 单个 3 节点作业 | 1081344 | 已验证的 24-rank 配置；不能直接套用到 4 节点 |
 | 对比 1 / 2 / 3 / 4 节点 | 1572864 | 所有比较作业共同使用这个兼容值 |
 
 比较节点扩缩容时，还要固定基础权重、优化器初始化、数据打包方式和评测协议。检查 `training_record.json` 的实际步数与 `actual_tokens`，不要只比较页面请求的预算。
@@ -400,7 +413,7 @@ node --test --test-concurrency=1 src/*.test.mjs
 npm run build
 ```
 
-本次多节点适配的此前验收：后端 519 项测试及 20 项子测试通过，包含真实固定版本优化器测试；前端构建和相关测试通过。完整前端套件曾为 90/91 项通过，未通过项是既有 `configuration-safety.test.mjs` 的策略说明文案断言。此记录不表示真实 Ascend/ModelArts 作业已在本机运行。
+2026-10-21 整合回归：后端 566 项测试及 20 项子测试、前端 91 项测试全部通过，包含固定版本优化器的 2/3 进程 CPU/Gloo 数值测试和三个训练启动脚本。前端已构建并同步到 API 静态目录；旧策略说明测试的文案断言也已与当前界面统一。此记录不表示真实 Ascend/ModelArts 作业已在本机运行。
 
 ## 11. 查看结果与排查问题
 

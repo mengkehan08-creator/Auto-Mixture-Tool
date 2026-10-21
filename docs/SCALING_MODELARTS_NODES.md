@@ -5,6 +5,34 @@
 配置支持不等于已完成所有规模的 Ascend/HCCL 实测。训练还必须满足本文的
 全局 batch 整除条件；3、5、7 等节点数可能需要显式设置全局 batch。
 
+## 2026-10-21 修复整合
+
+此前单独运行的修复结果已进入项目的正式入口：
+
+| 修复内容 | 当前项目实现 |
+| --- | --- |
+| 页面填写的全局 batch 没有传入云端训练 | `stage_runner.py` 传递 `TRAIN_TOTAL_BATCH_SIZE`；三个生产启动脚本统一使用训练计划，先校验整除、再按显式 batch 计算步数 |
+| 旧逐文件行组分配使高编号 rank 无数据、其他 rank 等待 HCCL 超时 | `global_row_groups.py` 保留已验证修复函数；训练包装器只对已核对哈希的旧加载器启用内存适配，不修改框架挂载文件 |
+| 不规则 world size 的优化器分片 | `run_nanochat_mid_train.py` 补齐 AdamW 分片，聚合后裁回模型原形状，拒绝不兼容的旧优化器状态 |
+| OBS 目录额外套一层 | `ArtifactStore` 的目录上传和下载均使用 `obsutil -flat` |
+| 多节点身份解析不一致 | QuaDMix 与 NanoChat 共用 `resolve_node_identity`，检查参数冲突、编号越界及主机名回退 |
+| 工具和框架默认地址继续指向旧目录 | 网页、运行依赖 `code_dir` 和提交脚本统一指向 2026-10-20 的已验证副本 |
+| 一次性输入检查脚本 | 收入 `scripts/check_nanochat_inputs.py`，通过 `--repo`、`--data`、`--world-size` 检查实际挂载的源码及全局数据覆盖 |
+
+旧加载器兼容仅匹配 SHA-256 `2add94bfac910f44d24781347c4e7f7a4433768aef8f28c75b0b38798eecc298`。
+已经使用全局分片的框架继续使用其原加载器；未知旧实现仍会在启动前报错。
+`training_record.json` 同时记录框架源码和项目内 `global_row_groups.py` 的摘要，用于还原实际运行语义。
+
+用户已反馈同一修复方案在 **2、3、4 节点训练**中跑通；3 节点分别完成 5 步短训和正式预算训练。
+以序列长度 2048、单卡 batch 1、全局 batch 1081344 为例，预算 5406720 对应 5 步；预算 401395843 对应 372 步和实际 402259968 tokens。
+这些为用户云端验收反馈，本次本地代码整合没有重新提交收费作业，也不将训练通过等同于独立评测通过。
+
+本地修改不会自动上传 OBS；历史修复脚本和证据仍保留在工作区 `output/diagnostics/` 等目录，新的运行代码不依赖这些历史目录。
+
+```bash
+python3 scripts/check_nanochat_inputs.py --help
+```
+
 ## 1. 节点数与卡数
 
 设节点数为 `N`，每节点 NPU 数为 `8`：
@@ -147,6 +175,8 @@ executor_config:
 - 只有全局主节点生成最终报告和主checkpoint。
 - NanoChat 中的大型 AdamW 参数在首维不能整除 `world_size` 时自动补零分片，
   all-gather 后裁掉补齐部分，因此3、5、6等非2次幂节点数也可运行。
+- 已核对的旧 Parquet 加载器在训练入口启用全局行组分配，避免高编号 rank
+  无数据空转；启动前仍检查所有 rank 的非空行组覆盖。
 - 切换节点数时默认 `load_optimizer: false`：加载基础模型权重，但重新初始化与
   当前 `world_size` 匹配的优化器状态，避免2048/4096分片形状冲突。
 
@@ -375,7 +405,7 @@ actual_tokens = num_iterations × total_batch_size
 ```
 
 `training.total_batch_size` 可选，留空继承基础检查点；CLI 对应
-`TRAIN_TOTAL_BATCH_SIZE`。它必须整除 `micro_tokens`，否则在启动训练前报错并给出
+`TRAIN_TOTAL_BATCH_SIZE`。它必须是 `micro_tokens` 的整数倍，否则在启动训练前报错并给出
 一个可用值，阻止 NanoChat 自动上调 batch 后悄悄增加训练量。
 同一比较实验应保持共同的全局 batch、基础权重、冷优化器、数据打包方式和评测协议。
 固定 Token 预算按完整优化步向上取整，额外 Token 少于一个全局 batch。
@@ -387,11 +417,12 @@ training_nodes: 3
 training:
   devices_per_node: 8
   device_batch_size: 1
-  total_batch_size: 540672
+  total_batch_size: 1081344
   token_budget: 401395843
 ```
 
-540672 适用于这个 3 节点作业。若比较 1/2/3/4 节点，1572864 是这些拓扑共同
+1081344 是已验证的 3 节点配置，对应梯度累积 22 次、372 步及实际 402259968 tokens。
+它不适用于 4 节点。若比较 1/2/3/4 节点，1572864 是这些拓扑共同
 兼容的 batch 示例，应在所有比较作业中一起设置。增加节点数不能消除模型单卡显存需求。
 
 ### 训练产物先于评测保存
@@ -427,7 +458,7 @@ AMT_EVAL_MIN_FREE_MIB=24576
 NANOCHAT_TEST_REPO=/path/to/nanochat-npu-dev-data-mix \
 .venv/bin/python -m pytest -q \
   tests/test_nanochat_training_runtime.py tests/test_nanochat_shell_execution.py \
-  tests/test_nanochat_distributed.py tests/test_adaptive_eval.py \
+  tests/test_nanochat_distributed.py tests/test_global_row_groups.py tests/test_adaptive_eval.py \
   tests/test_training_token_budget.py
 ```
 
@@ -437,14 +468,16 @@ NANOCHAT_TEST_REPO=/path/to/nanochat-npu-dev-data-mix \
 完整脚本测试只替换 Ascend 环境和加速器训练子进程，真实执行三个生产脚本的预算、
 数据检查、布局和产物发布，验证输入资源不被修改。
 
-CPU 验证通过后仍应进行 2 节点、4 节点的 10～20 步真实 NanoChat 短训练，再核对
-同一 checkpoint 的 8/16/32-rank 评估样本覆盖和指标容差。Ascend/HCCL、平台网络、
-HBM 释放及大文件同步的硬件验收不能由本地测试替代。
+用户已反馈修复方案的 2、3、4 节点云端训练通过。更换镜像、框架或数据后应重新做
+短训练；独立评测还需核对同一 checkpoint 的 8/16/32-rank 样本覆盖和指标容差。
+Ascend/HCCL、平台网络、HBM 释放及大文件同步的硬件验收不能由本地测试替代。
 
 
-本次本机验收：规范 `tests/` 目录 519 项测试及 20 项子测试通过，包含真实
-`dev-data-mix@6e5baa2` 优化器数值测试和完整脚本模拟。前端本次相关 9 项测试及
-构建通过；完整前端套件 90/91 项通过，余下为已有 ResourceGuide 策略说明文案断言。
-训练配置已检查桌面与 390px 窄屏布局。真实 Ascend/ModelArts 作业尚未在本机执行。
+2026-10-21 本机整合验收：规范 `tests/` 目录 **566 项测试及 20 项子测试通过**，包含
+与此前审计摘要一致的真实 `dev-data-mix@6e5baa2` 优化器源码数值测试、三个生产脚本
+模拟，以及 16/24/32-rank 的全局行组覆盖、恢复和输入只读检查。前端 **91 项测试全部通过**，
+构建结果已同步到 API 静态目录，并核对两个默认地址。既有 ResourceGuide 文案测试已匹配
+当前“自定义配比”名称。此前的桌面与 390px 布局检查记录保留，本次没有改动界面布局。
+真实 Ascend/ModelArts 作业尚未在本机执行。
 仓库根目录历史文件 `test_v4.2_implementation.py` 不符合 pytest 模块命名规则，
 完整自动化回归使用 `pytest tests`。

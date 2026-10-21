@@ -101,9 +101,9 @@ obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/prepared_parque
 
 | 资源 | 当前目录（均位于 `obs://bucket-pangu-green-guangzhou/s00944147/l00916525/` 下） | 用途 |
 | --- | --- | --- |
-| 工具代码 | `Auto-Mixture-Tool/` | 容器运行本工具 |
+| 工具代码 | `chengchao/releases/amt-3node-20261020/Auto-Mixture-Tool/` | 已验证的工具代码副本；与运行依赖 `code_dir` 保持一致 |
 | 输入数据 | `chengchao/prepared_parquet_57ffce0ca0a2/` | 配比候选数据 |
-| NanoChat 代码 | `backup_0810/work/nanochat-npu/` | 训练及评测；不是工具代码目录 |
+| NanoChat 代码 | `chengchao/frameworks/nanochat-npu-global-rg-20261016-v2/` | 已验证的全局行组分片框架，供训练及评测使用 |
 | NanoChat 基础模型 | `backup_0810/work/nanochat_model_dir/` | 初始权重及其 Tokenizer |
 | QuaDMix Tokenizer | `gpt-neox-tokenizer/` | 代理实验分词 |
 | 代理验证集 | `AMT_old/data/` | 包含 `stem_v2_tokenized.pt` |
@@ -113,7 +113,9 @@ obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/prepared_parque
 | 模型输出根 | `chengchao/models/` | 各策略训练后的模型 |
 | 评测报告根 | `chengchao/reports/` | CSV、JSON/Markdown 对比报告 |
 
-`backup_0810/work/…` 只是当前默认值。若你的真实资源在其他目录，应填写实际目录，不能仅凭表中示例新建空文件夹。
+基础模型仍来自 `backup_0810/work/nanochat_model_dir/`，工具代码和框架已切换到上表的修复版本。若真实资源在其他目录，应填写实际目录，不能仅凭表中示例新建空文件夹。旧实验的复制、重试会恢复其历史配置，需要核对两个代码地址。
+
+新建实验的默认值位于 `ui_demo/src/data/defaults.js`，提交脚本的默认地址位于 `modelarts_training_job.py`。改动前端默认值后，需在 `ui_demo` 执行 `npm run build`，使 API 发布的静态页面也包含新值。`configs/modelarts_ui_defaults.json` 只提供 ModelArts 网关、镜像和资源池设置，不保存这两个 OBS 地址。
 
 ### 1.3.3 标准 Parquet 数据
 

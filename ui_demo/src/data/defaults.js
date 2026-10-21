@@ -1,6 +1,7 @@
 let nextId = 1
 import { defaultSamplingBounds } from '../budget-estimates.js'
 const obsRoot = 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/'
+const toolCodeObsUri = `${obsRoot}chengchao/releases/amt-3node-20261020/Auto-Mixture-Tool/`
 
 export const strategyOptions = [
   { value: 'quadmix', label: 'QuaDMix 算法', description: '内置算法 · 可独立运行' },
@@ -62,7 +63,7 @@ export const createTrainingConfig = () => ({
   outputObsUri: `${obsRoot}chengchao/models/`,
   frameworkSource: 'builtin',
   framework: 'NanoChat',
-  frameworkObsUri: `${obsRoot}backup_0810/work/nanochat-npu/`,
+  frameworkObsUri: `${obsRoot}chengchao/frameworks/nanochat-npu-global-rg-20261016-v2/`,
   modelSource: 'builtin',
   model: 'NanoChat-Base',
   modelObsUri: `${obsRoot}backup_0810/work/nanochat_model_dir/`,
@@ -111,7 +112,7 @@ export const createRuntimeConfig = () => ({
   maxActiveJobs: 8,
   priority: 1,
   offlineResources: [
-    { role: 'code_obs_uri', name: 'code_dir', uri: `${obsRoot}Auto-Mixture-Tool/` },
+    { role: 'code_obs_uri', name: 'code_dir', uri: toolCodeObsUri },
     { role: 'quadmix_tokenizer_obs_uri', name: 'quadmix_tokenizer_dir', uri: `${obsRoot}gpt-neox-tokenizer/` },
     { role: 'proxy_validation_obs_uri', name: 'proxy_validation_dir', uri: `${obsRoot}AMT_old/data/` },
     { role: 'eval_bundle_obs_uri', name: 'eval_bundle_dir', uri: `${obsRoot}eval_bundle/` },
@@ -123,7 +124,7 @@ export const createRuntimeConfig = () => ({
   inputDataObsUri: `${obsRoot}chengchao/prepared_parquet_57ffce0ca0a2/`,
   outputRootObsUri: `${obsRoot}chengchao/`,
   mixingNodes: 2,
-  codeObsUri: `${obsRoot}Auto-Mixture-Tool/`,
+  codeObsUri: toolCodeObsUri,
   quadmixTokenizerObsUri: `${obsRoot}gpt-neox-tokenizer/`,
   proxyValidationObsUri: `${obsRoot}AMT_old/data/`,
   evalBundleObsUri: `${obsRoot}eval_bundle/`,
