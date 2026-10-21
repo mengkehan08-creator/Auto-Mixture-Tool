@@ -1,4 +1,5 @@
 import { normalizeEvaluationTasks } from './evaluation-selection.js'
+import { batchSizeMode } from './training-plan.js'
 
 export function retryDraft(config, defaults, workflow, stage) {
   const draft = structuredClone(config)
@@ -8,6 +9,7 @@ export function retryDraft(config, defaults, workflow, stage) {
   draft.modelarts = { ...defaults.modelarts, ...draft.modelarts, authorization: '' }
   draft.evaluation.obs_packages ||= []
   draft.evaluation.datasets = normalizeEvaluationTasks(draft.evaluation.datasets)
+  draft.training.batch_size_mode = batchSizeMode(draft.training)
   return draft
 }
 

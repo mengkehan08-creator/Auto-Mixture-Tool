@@ -376,15 +376,21 @@ def validate_framework(repo):
 
 def training_plan(checkpoint_dir, topology, device_batch_size, tokens, *, steps=0, total_batch_size=0):
     """Fix batch identity before NanoChat can silently round it up."""
+    metadata = sorted(Path(checkpoint_dir).glob("meta_*.json"))
+    if not metadata:
+        raise ValueError(f"Missing base checkpoint metadata: {checkpoint_dir}")
+    meta = json.loads(metadata[-1].read_text(encoding="utf-8"))
+    return training_plan_from_metadata(meta, topology, device_batch_size, tokens,
+                                       steps=steps, total_batch_size=total_batch_size)
+
+
+def training_plan_from_metadata(meta, topology, device_batch_size, tokens, *, steps=0, total_batch_size=0):
+    """Use the same arithmetic on the control plane and in the training container."""
     values = {"device_batch_size": device_batch_size, "tokens": tokens,
               "steps": steps, "total_batch_size": total_batch_size}
     if any(type(v) is not int or v < (1 if k in {"device_batch_size", "tokens"} else 0)
            for k, v in values.items()):
         raise ValueError("Training budget, batch and steps must be valid integers")
-    metadata = sorted(Path(checkpoint_dir).glob("meta_*.json"))
-    if not metadata:
-        raise ValueError(f"Missing base checkpoint metadata: {checkpoint_dir}")
-    meta = json.loads(metadata[-1].read_text(encoding="utf-8"))
     sequence_len = meta.get("max_seq_len", meta.get("model_config", {}).get("sequence_len", 2048))
     batch = total_batch_size or meta.get("total_batch_size", 524288)
     if any(type(v) is not int or v < 1 for v in (sequence_len, batch)):

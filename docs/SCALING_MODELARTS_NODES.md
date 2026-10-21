@@ -3,7 +3,7 @@
 本文说明如何通过一个参数，把同一条流水线运行在2到16个ModelArts节点上。
 配置支持的扩缩容边界是：**`NODE_COUNT=1..16`，每个节点固定8张NPU**。
 配置支持不等于已完成所有规模的 Ascend/HCCL 实测。训练还必须满足本文的
-全局 batch 整除条件；3、5、7 等节点数可能需要显式设置全局 batch。
+全局 batch 整除条件；页面默认按模型元数据及本次全部节点配置自动推荐兼容 batch，也可手动固定。
 
 ## 2026-10-21 修复整合
 
@@ -404,9 +404,14 @@ num_iterations = ceil(token_budget / total_batch_size)
 actual_tokens = num_iterations × total_batch_size
 ```
 
-`training.total_batch_size` 可选，留空继承基础检查点；CLI 对应
-`TRAIN_TOTAL_BATCH_SIZE`。它必须是 `micro_tokens` 的整数倍，否则在启动训练前报错并给出
-一个可用值，阻止 NanoChat 自动上调 batch 后悄悄增加训练量。
+页面默认 `training.batch_size_mode: auto`，以基础检查点 batch 为下限，向上取全部策略
+`micro_tokens` 最小公倍数的最近倍数，明确展示并传递最终 batch。手动模式为
+`training.batch_size_mode: fixed` 加 `training.total_batch_size`，不会自动调整固定值。
+提交、新建阶段重试及单策略重试均会在创建云端作业前读取模型元数据并校验；
+页面同时展示各节点配置的梯度累积、预计步数和实际 Token 数，读取失败会阻止提交。
+API 未提供模式时，有显式 batch 按 fixed 处理，否则按 auto 处理。
+直接运行训练脚本时可设置 `TRAIN_TOTAL_BATCH_SIZE`；未设置仍继承检查点。
+无论来源，它必须是 `micro_tokens` 的整数倍，否则启动前报错并给出一个可用值。
 同一比较实验应保持共同的全局 batch、基础权重、冷优化器、数据打包方式和评测协议。
 固定 Token 预算按完整优化步向上取整，额外 Token 少于一个全局 batch。
 
@@ -417,13 +422,16 @@ training_nodes: 3
 training:
   devices_per_node: 8
   device_batch_size: 1
+  batch_size_mode: fixed
   total_batch_size: 1081344
   token_budget: 401395843
 ```
 
 1081344 是已验证的 3 节点配置，对应梯度累积 22 次、372 步及实际 402259968 tokens。
-它不适用于 4 节点。若比较 1/2/3/4 节点，1572864 是这些拓扑共同
-兼容的 batch 示例，应在所有比较作业中一起设置。增加节点数不能消除模型单卡显存需求。
+它不适用于 4 节点。基础 batch 为 1048576 时，比较 1/2/3/4 节点的自动共同推荐值为
+1179648，梯度累积分别为 72/36/24/18；也可手动固定共同兼容的 1572864。
+训练 Token 预算无需是 `micro_tokens` 的倍数；按最终 batch 向上取整。
+增加节点数不能消除模型单卡显存需求。
 
 ### 训练产物先于评测保存
 

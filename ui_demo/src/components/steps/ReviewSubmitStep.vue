@@ -7,6 +7,8 @@ import { fieldLabels, submissionFailed } from '../../workflow-state'
 import { normalizeEvaluationTasks } from '../../evaluation-selection.js'
 import { initializeJobCommands, refreshJobCommands, validateJobCommands } from '../../job-commands.js'
 import { trainingParameters } from '../../data/defaults'
+import TrainingBatchSettings from '../TrainingBatchSettings.vue'
+import { trainingNodeCounts } from '../../training-plan.js'
 import { strategyId, strategyLabel, strategyNameHint, trainingNameHint } from '../../strategy-names'
 
 const props = defineProps({ strategies: Array, training: Object, evaluation: Object, runtime: Object })
@@ -15,6 +17,7 @@ const error = ref('')
 const workflows = ref([])
 const connectionError = ref('')
 const validation = ref(null)
+const batchPlanReady = ref(false)
 const authMode = ref('manual')
 const pendingId = ref('')
 const defaultCommands = ref(null)
@@ -210,6 +213,7 @@ onBeforeUnmount(() => { window.clearInterval(timer); clearTimeout(commandTimer);
 <template>
   <section class="step-panel">
     <div class="section-title-row"><div><h2>任务配置</h2><p>本次计划 {{ jobPlan.length }} 个独立作业。每个策略配比成功即启动训练，全部训练成功后汇总评测。</p></div></div>
+    <TrainingBatchSettings v-model:mode="training.batchSizeMode" v-model:batch-size="training.totalBatchSize" :model-obs-uri="training.modelObsUri" :base-model-tag="training.baseModelTag" :nodes="trainingNodeCounts(strategies, training)" :token-budget="training.tokenBudget" :device-batch-size="training.deviceBatchSize" @ready="batchPlanReady = $event" />
     <div class="config-block">
       <h3>作业提交清单</h3>
       <div class="job-plan-scroll"><table class="job-plan"><thead><tr><th>module</th><th>name</th><th>node_count</th><th>priority</th><th>depends_on</th></tr></thead>
@@ -254,7 +258,7 @@ onBeforeUnmount(() => { window.clearInterval(timer); clearTimeout(commandTimer);
     <p v-if="validation?.ready" class="success-message" role="status">配置检查通过。{{ validation.message }}</p>
     <div class="submission-actions" :aria-busy="status === 'loading'">
       <button class="button secondary" type="button" :disabled="status === 'loading'" @click="checkConfiguration">检查配置（不创建作业）</button>
-      <button class="button submit-button" type="button" :disabled="!runtime.datasetEstimate?.ready || status === 'loading' || (status === 'success' && submittedBody === JSON.stringify(requestBody()))" @click="submit">
+      <button class="button submit-button" type="button" :disabled="!runtime.datasetEstimate?.ready || !batchPlanReady || status === 'loading' || (status === 'success' && submittedBody === JSON.stringify(requestBody()))" @click="submit">
       <LoaderCircle v-if="status === 'loading'" class="spin" :size="18" /><Rocket v-else :size="18" />
       {{ status === 'loading' ? '正在检查并提交实验…' : !runtime.datasetEstimate?.ready ? '等待输入数据校验通过' : '提交到 ModelArts' }}
       </button>

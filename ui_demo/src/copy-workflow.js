@@ -29,6 +29,7 @@ export function copyWorkflow(config) {
     devicesPerNode: 8,
     tokenBudget: config.training.token_budget ?? training.tokenBudget,
     totalBatchSize: config.training.total_batch_size ?? null,
+    batchSizeMode: config.training.batch_size_mode ?? (config.training.total_batch_size != null ? 'fixed' : 'auto'),
     deviceBatchSize: config.training.device_batch_size ?? 1,
     evalEvery: config.training.eval_every ?? -1,
     coreMetricEvery: config.training.core_metric_every ?? -1,

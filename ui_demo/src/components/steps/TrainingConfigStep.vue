@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import { strategyLabel } from '../../strategy-names'
 import SamplingRiskSummary from '../SamplingRiskSummary.vue'
+import TrainingBatchSettings from '../TrainingBatchSettings.vue'
+import { trainingNodeCounts } from '../../training-plan.js'
 const props = defineProps({ config: { type: Object, required: true }, runtime: { type: Object, required: true }, strategies: { type: Array, default: () => [] } })
 const nodeOverrides = computed(() => props.strategies.filter(s => s.trainingNodesOverride != null))
 
@@ -21,11 +23,11 @@ const nodeOverrides = computed(() => props.strategies.filter(s => s.trainingNode
       </div>
       <div class="form-grid two-cols">
         <label class="field"><span>训练 Token 预算</span><input v-model.number="config.tokenBudget" type="number" min="1" /><small>各策略使用同一预算，训练步数自动计算。</small></label>
-        <label class="field"><span>全局 batch Token 数（可选）</span><input v-model.number="config.totalBatchSize" type="number" min="1" step="1" placeholder="留空继承基础模型" /><small>全部节点每个优化步合计的 Token 数；各策略共用。节点数改变后不能整除时，训练前会提示兼容值。</small></label>
         <label class="field"><span>每节点 NPU 数</span><input value="8" readonly aria-label="每节点固定 8 张 NPU" /></label>
         <label class="field"><span>默认训练节点数</span><input v-model.number="config.nodes" type="number" min="1" max="16" step="1" /><small>应用到未单独设置节点数的策略。</small></label>
         <label class="field"><span>训练任务优先级</span><select v-model.number="config.priority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select><small>本次全部训练作业统一使用。</small></label>
       </div>
+      <TrainingBatchSettings v-model:mode="config.batchSizeMode" v-model:batch-size="config.totalBatchSize" :model-obs-uri="config.modelObsUri" :base-model-tag="config.baseModelTag" :nodes="trainingNodeCounts(strategies, config)" :token-budget="config.tokenBudget" :device-batch-size="config.deviceBatchSize" />
       <p class="training-name-note">训练作业与模型按策略参数和提交时间自动命名，具体名称规则可在任务配置中查看。</p>
       <details v-if="nodeOverrides.length" class="node-overrides"><summary>{{ nodeOverrides.length }} 项策略使用单独节点数，不随默认值变化</summary><ul><li v-for="strategy in nodeOverrides" :key="strategy.id"><span>{{ strategyLabel(strategy) }} · {{ strategy.trainingNodesOverride }} 节点</span><button type="button" class="button secondary" @click="strategy.trainingNodesOverride = null">恢复统一值</button></li></ul></details>
       <SamplingRiskSummary :strategies="strategies" :budget="config.tokenBudget" :dataset-tokens="runtime.datasetEstimate?.estimated_tokens" />

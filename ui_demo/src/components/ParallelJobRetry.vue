@@ -4,6 +4,8 @@ import { apiRequest } from '../api'
 import { validateJobCommands } from '../job-commands.js'
 import { normalizeEvaluationTasks, stemTasks } from '../evaluation-selection.js'
 import ConfirmationDialog from './ConfirmationDialog.vue'
+import TrainingBatchSettings from './TrainingBatchSettings.vue'
+import { batchSizeMode } from '../training-plan.js'
 const confirming = ref(false)
 const props = defineProps({ workflow: Object, job: Object })
 const emit = defineEmits(['close', 'created', 'busy'])
@@ -19,6 +21,7 @@ const ready = ref(false)
 const pending = ref(false)
 const error = ref('')
 const automatic = ref(false)
+const batchPlanReady = ref(false), modelObsUri = ref(''), baseModelTag = ref('')
 let requestId = '', fingerprint = ''
 async function load() {
   error.value = ''
@@ -30,6 +33,9 @@ async function load() {
     draft.output_root_obs_uri = config.output_root_obs_uri
     const t = { ...config.training, ...strategy?.training }
     for (const key of ['token_budget', 'total_batch_size', 'device_batch_size', 'devices_per_node', 'eval_every', 'core_metric_every']) if (t[key] !== undefined) training[key] = t[key]
+    training.batch_size_mode = batchSizeMode(t)
+    modelObsUri.value = config.resources.nanochat_model_obs_uri
+    baseModelTag.value = t.base_model_tag || 'd24'
     if (!t.token_budget) training.num_iterations = t.num_iterations || 0
     training.output_obs_uri = t.output_obs_uri || ''
     training.devices_per_node = 8
@@ -82,7 +88,7 @@ async function submit(confirmed = false) {
       <label class="field"><span>节点数</span><input v-model.number="draft.nodes" type="number" min="1" max="16" required /></label>
       <label class="field"><span>任务优先级</span><select v-model.number="draft.priority"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option></select></label>
       <template v-if="job.module === 'training'">
-        <label v-for="[key, label, min] in [['token_budget', '训练 Token 预算', 1], ['total_batch_size', '全局 batch Token 数（可选）', 1]]" :key="key" class="field"><span>{{ label }}</span><input v-model.number="training[key]" type="number" :min="min" step="1" @input="key === 'token_budget' && (training.num_iterations = 0)" /></label>
+        <label class="field"><span>训练 Token 预算</span><input v-model.number="training.token_budget" type="number" min="1" step="1" @input="training.num_iterations = 0" /></label>
         <label class="field"><span>模型输出 OBS 目录</span><input v-model="training.output_obs_uri" placeholder="留空沿用输出根目录" /></label>
       </template>
       <template v-if="job.module === 'evaluation'">
@@ -91,6 +97,7 @@ async function submit(confirmed = false) {
         <label class="field"><span>报告输出 OBS 目录</span><input v-model="evaluation.output_obs_uri" placeholder="留空沿用输出根目录" /></label>
       </template>
     </div>
+    <TrainingBatchSettings v-if="job.module === 'training' && ready" v-model:mode="training.batch_size_mode" v-model:batch-size="training.total_batch_size" :model-obs-uri="modelObsUri" :base-model-tag="baseModelTag" :nodes="[draft.nodes]" :token-budget="training.token_budget" :device-batch-size="training.device_batch_size" :num-iterations="training.num_iterations || 0" @ready="batchPlanReady = $event" />
     <section v-if="job.module === 'evaluation'" class="config-block">
       <h3>评测集</h3>
       <div class="retry-tasks"><label v-for="task in [...new Set([...stemTasks, ...evaluation.datasets])]" :key="task"><input v-model="evaluation.datasets" type="checkbox" :value="task" />{{ task }}</label></div>
@@ -116,7 +123,7 @@ async function submit(confirmed = false) {
     <label v-if="!automatic" class="field"><span>Authorization</span><input v-model="draft.authorization" type="password" autocomplete="off" /></label>
     <p v-else>提交时自动获取 Authorization。</p>
     </fieldset>
-    <button class="button primary" type="submit" :disabled="!ready || pending">{{ pending ? '提交中…' : '提交作业重试' }}</button>
+    <button class="button primary" type="submit" :disabled="!ready || pending || (job.module === 'training' && !batchPlanReady)">{{ pending ? '提交中…' : '提交作业重试' }}</button>
   </form>
 </template>
 <style scoped>

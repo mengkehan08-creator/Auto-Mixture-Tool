@@ -61,7 +61,7 @@ def validate(manager, config):
             raise ValueError('模型名称最多 128 字符，不能包含控制字符')
         strategy['model_name'] = name.strip()
         overrides = strategy.get('training', {})
-        if not isinstance(overrides, dict) or set(overrides) - (set(config['training']) | {'token_budget', 'output_obs_uri'}):
+        if not isinstance(overrides, dict) or set(overrides) - (set(config['training']) | {'token_budget', 'output_obs_uri', 'batch_size_mode', 'total_batch_size'}):
             raise ValueError('策略训练参数须使用公共训练配置中的字段')
         # Use the same validator for shared and per-job training settings.
         single = dict(config)
@@ -230,9 +230,11 @@ def retry(manager, workflow_id, key, edits):
                 strategy['training_framework_obs_uri'] = resources['nanochat_repo_obs_uri']
             updates = edits.get('training', {})
             # Changing the base model invalidates the tokenizer-dependent sampling output.
-            if set(updates) - {'token_budget', 'total_batch_size', 'num_iterations', 'device_batch_size', 'devices_per_node', 'eval_every', 'core_metric_every', 'output_obs_uri'}:
+            if set(updates) - {'token_budget', 'total_batch_size', 'batch_size_mode', 'num_iterations', 'device_batch_size', 'devices_per_node', 'eval_every', 'core_metric_every', 'output_obs_uri'}:
                 raise ValueError('训练阶段重试只能修改训练预算、批量、设备数、间隔和输出目录；更换基础模型须重跑配比')
             strategy['training'].update(updates)
+            if 'total_batch_size' in updates and 'batch_size_mode' not in updates:
+                strategy['training']['batch_size_mode'] = 'fixed'
         if edits.get('command'):
             strategy[stage + '_command'] = edits['command']
     if edits.get('authorization'):
@@ -303,7 +305,11 @@ def initialize(manager, record, stamp):
 
 
 def model_record(record, strategy, output, job):
-    training = strategy.get('training') or record['config']['training']
+    from .training_plan import apply_training_plan
+    config = copy.deepcopy(record['config'])
+    config['strategies'] = [copy.deepcopy(strategy)]
+    apply_training_plan(config, record.get('training_plan'))
+    training = config['strategies'][0].get('training') or config['training']
     name = record.get('strategy_names', {}).get(strategy['id']) or strategy.get('name') or strategy['id']
     return {'id': f'{record["id"]}:{strategy["id"]}',
             'name': strategy.get('model_name') or f'{name} · {record["name"]}',

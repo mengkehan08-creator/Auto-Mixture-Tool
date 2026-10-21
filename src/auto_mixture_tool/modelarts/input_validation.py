@@ -146,3 +146,6 @@ def validate_workflow_resources(config):
             raise ValueError('评测集不支持所选任务：' + ', '.join(sorted(requested - found)))
     for package in config.get('evaluation', {}).get('obs_packages', []):
         validate_resource('evaluation', package['obs_uri'])
+    if config.get('training') and config.get('resources'):
+        from .training_plan import workflow_training_plan
+        return workflow_training_plan(config)

@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from auto_mixture_tool.pipeline import PipelineManager
 from auto_mixture_tool.modelarts import ModelArtsWorkflowManager
@@ -83,6 +83,23 @@ class ModelComparisonRequest(BaseModel):
     base_model_tag: str = Field(default='d24', max_length=128)
     input_data_obs_uri: str = Field(default='', max_length=2048)
     training_configs: list[dict[str, Any]] = Field(default_factory=list, max_length=32)
+
+
+class TrainingPlanRequest(BaseModel):
+    model_obs_uri: str = Field(max_length=2048)
+    training: dict[str, Any]
+    nodes: list[StrictInt] = Field(min_length=1, max_length=16)
+
+
+@app.post('/api/v1/training-plan')
+def training_plan_preview(payload: TrainingPlanRequest):
+    from auto_mixture_tool.modelarts.training_plan import plan_training_jobs
+    try:
+        return plan_training_jobs(payload.model_obs_uri, [
+            {'nodes': nodes, 'training': payload.training} for nodes in payload.nodes
+        ])
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 class ResourceValidationRequest(BaseModel):

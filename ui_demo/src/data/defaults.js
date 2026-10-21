@@ -70,6 +70,7 @@ export const createTrainingConfig = () => ({
   baseModelTag: 'd24',
   targetParamDataRatio: 0.5,
   tokenBudget: 401395843,
+  batchSizeMode: 'auto',
   totalBatchSize: null,
   deviceBatchSize: 1,
   evalEvery: -1,
@@ -82,7 +83,8 @@ export const createTrainingConfig = () => ({
 export function trainingParameters(config = createTrainingConfig()) {
   const parameters = { token_budget: config.tokenBudget, device_batch_size: config.deviceBatchSize,
     devices_per_node: 8, eval_every: config.evalEvery, core_metric_every: config.coreMetricEvery }
-  if (config.totalBatchSize !== '' && config.totalBatchSize != null) parameters.total_batch_size = config.totalBatchSize
+  parameters.batch_size_mode = config.batchSizeMode ?? (config.totalBatchSize != null ? 'fixed' : 'auto')
+  if (parameters.batch_size_mode === 'fixed') parameters.total_batch_size = config.totalBatchSize
   return parameters
 }
 

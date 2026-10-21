@@ -50,15 +50,18 @@ test('copying restores the common priority and preserves differing historical no
   assert.deepEqual(draft.strategies.map(s => s.trainingNodes), [4, 3])
 })
 
-test('global batch is optional, shared by strategies and restored when copying', () => {
+test('batch mode is shared and copied, explicit legacy batches remain fixed', () => {
   const config = createTrainingConfig()
   assert.equal(trainingParameters(config).total_batch_size, undefined)
   config.totalBatchSize = 540672
+  config.batchSizeMode = 'fixed'
   const strategies = [createStrategy(), createStrategy('random')]
   syncSharedTraining(strategies, config)
   assert.ok(strategies.every(s => s.trainingOverrides.total_batch_size === 540672))
   const copy = copyWorkflow({ training: { total_batch_size: 540672 }, resources: {}, strategies: [], evaluation: { datasets: [] } })
   assert.equal(copy.training.totalBatchSize, 540672)
-  config.totalBatchSize = ''
+  assert.equal(copy.training.batchSizeMode, 'fixed')
+  config.batchSizeMode = 'auto'
   assert.equal(trainingParameters(config).total_batch_size, undefined)
+  assert.equal(trainingParameters(config).batch_size_mode, 'auto')
 })
