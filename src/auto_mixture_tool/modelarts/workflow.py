@@ -333,7 +333,7 @@ class ModelArtsWorkflowManager:
     def preview(self, config: dict[str, Any]) -> dict[str, Any]:
         value = self._validate(config)
         from .input_validation import validate_workflow_resources
-        validate_workflow_resources(value)
+        training_plan = validate_workflow_resources(value)
         from . import parallel_workflow
         if value.get('execution_mode') == 'parallel':
             parallel_workflow.check_names(self, parallel_workflow.planned_jobs(value))
@@ -362,6 +362,7 @@ class ModelArtsWorkflowManager:
         missing = [key for key, item in fields.items() if not item or 'REPLACE_ME' in str(item)]
         return {
             "ready": not missing,
+            "training_plan": training_plan,
             "missing_settings": missing,
             "jobs": parallel_workflow.planned_jobs(value) if value.get('execution_mode') == 'parallel' else [
                 {"module": "mixing", "nodes": value["mixing_nodes"]},
@@ -392,11 +393,12 @@ class ModelArtsWorkflowManager:
                     return self.public(existing)
         if self.client is not None:
             from .input_validation import validate_workflow_resources
-            validate_workflow_resources(normalized)
+            training_plan = validate_workflow_resources(normalized)
         if self.client is None:
             readiness = self.preview(config)
             if not readiness["ready"]:
                 raise ValueError("管理员尚未配置：" + "、".join(readiness["missing_settings"]))
+            training_plan = readiness.get('training_plan')
         # Fail the HTTP request immediately when the server-side ModelArts
         # endpoint or Authorization template has not been configured.
         if normalized.get("modelarts"):
@@ -431,6 +433,7 @@ class ModelArtsWorkflowManager:
                 *([self._job_record("evaluation", normalized["evaluation_nodes"], stamp)] if normalized['evaluation']['datasets'] or normalized['evaluation'].get('obs_packages') else []),
             ],
             "config": normalized,
+            "training_plan": training_plan,
             "message": "",
         }
         for section, output, suffix in (("training", "models", "checkpoints"), ("evaluation", "reports", "results")):
@@ -722,6 +725,12 @@ class ModelArtsWorkflowManager:
                 raise ValueError("训练 Token 预算必须为大于 0 的安全整数")
             if training.get("num_iterations", 0) != 0:
                 raise ValueError("训练 Token 预算与固定训练步数不能同时设置")
+        if "total_batch_size" in training:
+            batch = training["total_batch_size"]
+            if type(batch) is not int or not 1 <= batch <= 9007199254740991:
+                raise ValueError("训练全局 batch Token 数必须为大于 0 的安全整数")
+        if 'batch_size_mode' in training and training['batch_size_mode'] not in ('auto', 'fixed'):
+            raise ValueError('全局 batch 模式必须为 auto 或 fixed')
         for key, default, minimum in (("num_iterations", 0, 0), ("device_batch_size", 1, 1),
                                       ("eval_every", -1, -1), ("core_metric_every", -1, -1)):
             number = training.get(key, default)
@@ -783,6 +792,8 @@ class ModelArtsWorkflowManager:
     def _payload(self, record: dict[str, Any], stage: str) -> dict[str, Any]:
         payload = self._configured_template(record["config"].get("modelarts")).job_data
         config = copy.deepcopy(record["config"])
+        from .training_plan import apply_training_plan
+        apply_training_plan(config, record.get('training_plan'))
         config.pop("modelarts", None)
         job = record["jobs"][{'mixing': 0, 'training': 1, 'evaluation': 2}[stage]]
         payload["metadata"]["name"] = job["name"]

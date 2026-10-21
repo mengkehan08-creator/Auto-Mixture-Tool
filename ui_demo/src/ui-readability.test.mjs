@@ -26,6 +26,6 @@ test('submission feedback remains explicit and pending submissions remain disabl
   assert.match(review, /class="submission-actions" :aria-busy="status === 'loading'"/)
   assert.match(review, /class="success-message" role="status"/)
   assert.match(review, /v-if="error" class="error-message" role="alert"/)
-  assert.match(review, /:disabled="!runtime.datasetEstimate\?\.ready \|\| status === 'loading' \|\|/)
+  assert.match(review, /:disabled="!runtime.datasetEstimate\?\.ready \|\| !batchPlanReady \|\| status === 'loading' \|\|/)
   assert.match(source('./components/steps/EvaluationConfigStep.vue'), /尚未接入 · 当前不创建作业/)
 })

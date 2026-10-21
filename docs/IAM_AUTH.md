@@ -51,6 +51,49 @@ python -m auto_mixture_tool.cli --workspace "$PWD" serve --host 0.0.0.0 --port 8
 
 私有文件及 AMT_IAM_PROVIDER 不上传 OBS、不放进 command，也不放进作业环境变量；只有开发环境提交后端需要它们。修改凭据后重启后端。需要恢复手动模式时，停止后端，执行 `unset AMT_IAM_PROVIDER` 后重新启动。
 
+## 旧版可以获取、新版获取失败时
+
+先检查新版后端 `/api/v1/workflow-defaults` 返回的 `auth_mode`。`manual` 表示该后端进程启动时没有设置 `AMT_IAM_PROVIDER`；在启动新版的同一个终端设置旧版实际使用的私有文件绝对路径，再重启新版。`iam` 仅表示已选择自动认证，不表示 Token 已获取成功。
+
+旧的“请检查网络、代理及 CA 证书”提示把多类连接异常合并了，不能据此确定是证书问题。更新并重启后，错误会带有下列固定分类；不显示底层异常文本，以免泄露认证信息或代理密码。
+
+| 错误分类 | 排查方向 |
+| --- | --- |
+| `SSLError` | TLS/SSL 连接失败。比较新旧 Python 环境的 CA 配置，以及私有文件中的 `ca_bundle`、`iam_verify_ssl`；也可能是其他 TLS 握手问题。 |
+| `ProxyError` | 代理连接失败。比较新旧后端启动终端中的代理设置，不要输出含密码的代理地址。 |
+| `Timeout` | 建立连接或读取响应超时。核对网络、代理和 IAM 服务连通性。 |
+| `ConnectionError` | 其他连接失败。核对 DNS、网络和代理；此分类不能单独确定具体原因。 |
+| `RequestException` | 其他请求异常，需要继续核对请求环境。 |
+| `HTTP 401/403` 等状态码 | 已收到 HTTP 响应，核对私有认证配置、权限及代理/网关返回状态。 |
+
+同一个 Notebook 中，不同虚拟环境或不同启动终端的配置仍可能不同。原始脚本中的 `verify=False` 和代理修改不会自动导入；仅复制 `auth` 字典不代表已经复用了这些连接设置。优先复用旧服务实际使用的可信 CA 配置，不根据通用错误直接关闭证书验证。修改后重启新版后端。
+
+### 从运行中的旧版复用认证启动环境
+
+旧版仍能正常获取 Token 时，可用 `scripts/reuse_modelarts_auth_env.py` 复制该进程的认证启动环境。先更新新版代码，保留旧版运行；PID 应使用当前检查得到的值，以下 `1406516` 仅为示例。
+
+```bash
+cd /home/ma-user/work/Auto-Mixture-Tool-MultiNode
+git pull --ff-only origin main
+python3 scripts/reuse_modelarts_auth_env.py --pid 1406516 --workspace /home/ma-user/work/Auto-Mixture-Tool
+```
+
+脚本验证进程属于当前用户、是 AMT 后端且工作目录匹配，只复制 `AMT_IAM_PROVIDER`、大小写代理/NO_PROXY 和 CA 环境变量。配置写入旧版私有认证文件旁的 `amt_multinode_runtime.env`，权限为 `600`；拒绝写入 Git 仓库，不打印配置值。这个文件可能包含代理密码，应与私有认证文件一起保管，不上传 Git、OBS 或聊天。
+
+看到“已保存认证启动环境”后，停止新版服务，在同一个终端加载该文件再启动。以私有认证文件位于 `/home/ma-user/work/private_auth/iam_token_provider.py` 为例：
+
+```bash
+cd /home/ma-user/work/Auto-Mixture-Tool-MultiNode
+source .venv/bin/activate
+source /home/ma-user/work/private_auth/amt_multinode_runtime.env
+export PYTHONPATH="$PWD:$PWD/src:${PYTHONPATH:-}"
+python -m auto_mixture_tool.cli --workspace "$PWD" serve --host 0.0.0.0 --port 8081
+```
+
+以后每次启动新版前加载同一份 `.env` 文件即可。旧版未设置的相关变量会在新版终端中取消，避免保留新版独有的 `ALL_PROXY`、旧的 `NO_PROXY` 等设置。旧版连接配置变化后，应重新复制。
+
+此脚本依赖 Linux `/proc`，读取的是进程启动环境；Python 代码运行后在内存里修改的代理设置不在快照范围内。新版继续使用自己的 Python 依赖。若复用后仍失败，应对比云端旧版的认证实现和运行时设置，不能据此继续假定旧版采用直连。脚本本身不执行私有认证文件、不请求 Token。
+
 ## 行为与验证边界
 
 - 配置预检查只核对私有配置和目标地址，不请求 IAM、不创建作业。

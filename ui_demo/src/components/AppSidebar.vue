@@ -1,5 +1,5 @@
 <script setup>
-import { Boxes, FileSliders, FlaskConical, Plus, Settings2 } from '@lucide/vue'
+import { Boxes, FileSliders, Network, Plus, Settings2 } from '@lucide/vue'
 defineProps({ page: String })
 defineEmits(['navigate'])
 </script>
@@ -7,7 +7,7 @@ defineEmits(['navigate'])
 <template>
   <aside class="sidebar">
     <div class="brand">
-      <span class="brand-mark"><FlaskConical :size="22" /></span>
+      <span class="brand-mark" role="img" aria-label="多节点版本" title="多节点版本"><Network :size="22" aria-hidden="true" /></span>
       <span><strong>Auto Mixture</strong><small>数据配比实验工具</small></span>
     </div>
 

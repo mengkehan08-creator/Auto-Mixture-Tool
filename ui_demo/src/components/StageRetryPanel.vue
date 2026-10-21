@@ -4,6 +4,8 @@ import { apiRequest } from '../api'
 import { retryDraft, retryBody } from '../stage-retry'
 import { stemTasks } from '../evaluation-selection'
 import ConfirmationDialog from './ConfirmationDialog.vue'
+import TrainingBatchSettings from './TrainingBatchSettings.vue'
+const batchPlanReady = ref(false)
 const confirming = ref(false)
 
 const props = defineProps({ workflow: Object, stage: String })
@@ -84,6 +86,7 @@ onMounted(load)
             <label class="field"><span>初始模型标签</span><input v-model="draft.training.base_model_tag" required /></label>
             <label class="field"><span>模型输出 OBS 目录</span><input v-model="draft.training.output_obs_uri" placeholder="留空沿用输出根目录" /></label>
           </div>
+          <TrainingBatchSettings v-model:mode="draft.training.batch_size_mode" v-model:batch-size="draft.training.total_batch_size" :model-obs-uri="draft.resources.nanochat_model_obs_uri" :base-model-tag="draft.training.base_model_tag" :nodes="[draft.training_nodes]" :token-budget="draft.training.token_budget" :device-batch-size="draft.training.device_batch_size" :num-iterations="draft.training.num_iterations || 0" @ready="batchPlanReady = $event" />
         </div>
         <div class="config-block">
           <h3>{{ stage === 'training' ? '后续评测参数' : '评测参数' }}</h3>
@@ -116,7 +119,7 @@ onMounted(load)
         <label v-if="defaults.auth_mode !== 'iam'" class="field"><span>Authorization</span><input v-model="draft.modelarts.authorization" type="password" autocomplete="off" placeholder="填写本次提交使用的凭据" /></label>
         <p v-else>Authorization：提交时自动获取。</p>
         <p>本次提交 {{ stages.length }} 个 ModelArts 作业：{{ stages.map(item => labels[item]).join(' → ') }}。新输出自动隔离到重试实验目录，原结果保留。</p>
-        <button class="button primary" type="submit">{{ submitting ? '正在提交…' : '提交阶段重试' }}</button>
+        <button class="button primary" type="submit" :disabled="submitting || (stage === 'training' && !batchPlanReady)">{{ submitting ? '正在提交…' : '提交阶段重试' }}</button>
       </fieldset>
     </form>
   </section>

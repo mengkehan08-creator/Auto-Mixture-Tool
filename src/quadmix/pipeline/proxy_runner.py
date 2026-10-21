@@ -10,6 +10,14 @@ from typing import List, Optional, Dict, Any, Callable
 from quadmix.core.types import ParameterSet, ProxyResult
 
 
+def resolve_experiment_ids(count: int, experiment_ids: Optional[List[int]] = None) -> List[int]:
+    ids = list(range(count)) if experiment_ids is None else list(experiment_ids)
+    if (len(ids) != count or any(type(index) is not int or index < 0 for index in ids)
+            or len(set(ids)) != count):
+        raise ValueError("experiment_ids must contain one unique non-negative integer per experiment")
+    return ids
+
+
 class BaseProxyRunner(ABC):
     """Abstract base class for proxy experiment runners."""
 
@@ -34,6 +42,7 @@ class BaseProxyRunner(ABC):
         self,
         params_list: List[ParameterSet],
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        experiment_ids: Optional[List[int]] = None,
     ) -> List[ProxyResult]:
         """Run multiple proxy experiments.
 
@@ -45,8 +54,9 @@ class BaseProxyRunner(ABC):
             List of ProxyResult instances.
         """
         results = []
-        for i, params in enumerate(params_list):
-            result = self.run_experiment(params, experiment_id=i)
+        ids = resolve_experiment_ids(len(params_list), experiment_ids)
+        for i, (experiment_id, params) in enumerate(zip(ids, params_list)):
+            result = self.run_experiment(params, experiment_id=experiment_id)
             results.append(result)
             if progress_callback:
                 progress_callback(i + 1, len(params_list))

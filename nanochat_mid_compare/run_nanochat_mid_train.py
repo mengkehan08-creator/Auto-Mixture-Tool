@@ -3,8 +3,9 @@
 The mounted NanoChat NPU fork shards large AdamW tensors only when their first
 dimension is exactly divisible by ``WORLD_SIZE``. ModelArts node counts such as
 3, 5, or 7 violate that assumption for a 32768-token vocabulary. This wrapper
-patches only the distributed AdamW communication to pad before reduce-scatter
-and trim after all-gather, then executes NanoChat's original training module.
+patches distributed AdamW communication to pad before reduce-scatter and trim
+after all-gather. It also adapts the verified legacy Parquet loader to global
+row-group sharding before executing NanoChat's original training module.
 """
 
 from __future__ import annotations
@@ -201,6 +202,9 @@ def main() -> None:
     if os.environ.get('NANOCHAT_SKIP_EVAL_DOWNLOAD') == '1':
         from nanochat_mid_compare.offline_base_eval import install_offline_eval
         install_offline_eval()
+    from nanochat_mid_compare.global_row_groups import patch_legacy_row_group_loader
+    if patch_legacy_row_group_loader():
+        print(f"[NanoChat] rank {os.environ.get('RANK', '?')}: global row-group compatibility enabled", flush=True)
     patch_distributed_adamw()
     runpy.run_module("scripts.mid_train", run_name="__main__")
 

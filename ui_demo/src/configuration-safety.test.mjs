@@ -18,7 +18,7 @@ test('strategy guides explain decisions before optional technical details', () =
   for (const heading of ['怎么选数据', '适合什么情况', '最后得到什么', '使用前知道这件事']) assert.ok(guide.includes(heading))
   assert.match(guide, /<details v-else class="guide-details"/)
   assert.match(guide, /不代表每个领域各占相同份额/)
-  assert.match(guide, /不保证优于人工或随机策略/)
+  assert.match(guide, /不保证优于自定义或随机策略/)
 })
 test('unknown sampling size never becomes a made-up repetition estimate', () => {
   assert.equal(repeatEstimate(401395843, undefined), null)

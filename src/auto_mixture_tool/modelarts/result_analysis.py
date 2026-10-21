@@ -144,7 +144,9 @@ def analyze_report(report):
                        'configured_ratios': model.get('configured_ratios', {}),
                        'training': {k: training[k] for k in ('token_budget', 'num_iterations', 'device_batch_size',
                                    'sequence_len', 'learning_rate', 'global_batch_size', 'framework', 'model',
-                                   'base_model_tag', 'target_param_data_ratio', 'devices_per_node') if k in training}})
+                                   'base_model_tag', 'target_param_data_ratio', 'devices_per_node', 'nodes', 'world_size',
+                                   'total_batch_size', 'grad_accum_steps', 'actual_tokens', 'rounding_tokens',
+                                   'budget_mode', 'loader', 'load_optimizer') if k in training}})
     tasks = sorted(set().union(*(m['metrics'].keys() for m in models)))
     common = [t for t in tasks if all(m['metrics'].get(t, {}).get('accuracy') is not None for m in models)]
     for model in models:

@@ -8,6 +8,7 @@ at build time, so adding another evaluator does not create another trainer id.
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -115,11 +116,27 @@ class NanoChatTrainer(TrainerAdapter):
             "TARGET_PARAM_DATA_RATIO": str(target_ratio),
             "COMPARISON_METHODS": ",".join(methods),
             "SEED": str(request.get('algorithm_config', {}).get('seed', 42)),
-            "AMT_RUN_ID": str(request["job_id"]),
+            "AMT_RUN_ID": os.environ.get("AMT_RUN_ID") or str(request["job_id"]),
             "MIX_GENERAL_DATA": "1" if config.get("mix_general_data", False) else "0",
             "NANOCHAT_DISABLE_WANDB": "1" if config.get("disable_wandb", True) else "0",
             "NANOCHAT_LOAD_OPTIMIZER": "1" if config.get("load_optimizer", False) else "0",
         }
+        if config.get("data_world_size") is not None:
+            world_size = int(config["data_world_size"])
+            if world_size < 1:
+                raise ValueError("nanochat data_world_size must be positive")
+            env["AMT_DATA_WORLD_SIZE"] = str(world_size)
+        for key, name, minimum in (("total_batch_size", "TRAIN_TOTAL_BATCH_SIZE", 1),
+                                   ("token_budget", "TRAIN_TOKEN_BUDGET", 1),
+                                   ("num_iterations", "TRAIN_NUM_ITERATIONS", 0),
+                                   ("device_batch_size", "DEVICE_BATCH_SIZE", 1)):
+            if key in config:
+                value = config[key]
+                if type(value) is not int or not minimum <= value <= 9007199254740991:
+                    raise ValueError(f"nanochat {key} must be a valid integer")
+                env[name] = str(value)
+        if config.get("token_budget") and config.get("num_iterations"):
+            raise ValueError("nanochat token budget and fixed steps cannot be combined")
         if normalized_plans:
             # The shell keeps backward compatibility with the first manual plan;
             # MANUAL_PLANS_JSON is the stable contract for multiple plans.

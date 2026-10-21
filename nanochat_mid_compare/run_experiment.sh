@@ -29,7 +29,43 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 QUADMIX_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+TIMESTAMP="${AMT_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+AMT_PYTHON_EXECUTABLE="${AMT_PYTHON_EXECUTABLE:-$(command -v python3)}"
+if [ -z "$AMT_PYTHON_EXECUTABLE" ] || [ ! -x "$AMT_PYTHON_EXECUTABLE" ]; then
+    echo "ERROR: Python executable not found: ${AMT_PYTHON_EXECUTABLE:-<empty>}"
+    exit 1
+fi
+# Keep every Python and torchrun child on the interpreter selected by the
+# ModelArts submission command instead of falling back to an image default.
+python3() {
+    "$AMT_PYTHON_EXECUTABLE" "$@"
+}
+
+NUM_NPU="${NUM_NPU:-8}"
+DISTRIBUTED_ENV=$(python3 "$SCRIPT_DIR/distributed_runtime.py" environment --devices "$NUM_NPU")
+eval "$DISTRIBUTED_ENV"
+install_shared_symlink() {
+    local TARGET="$1"
+    local LINK="$2"
+    local CURRENT=""
+    if [ -e "$LINK" ] && [ ! -L "$LINK" ]; then
+        echo "ERROR: $LINK exists but is not a symbolic link"
+        return 1
+    fi
+    # A concurrent ln can briefly lose a check-then-create race. Retry and
+    # accept success only after observing the requested final target.
+    for _ in $(seq 1 20); do
+        ln -sfnT "$TARGET" "$LINK" 2>/dev/null || true
+        CURRENT=$(readlink "$LINK" 2>/dev/null || true)
+        if [ "$CURRENT" = "$TARGET" ]; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "ERROR: unable to install symlink: $LINK -> $TARGET"
+    return 1
+}
+
 
 # QuadMix output: sampled_dataset from QuadMix pipeline
 if [ -z "${QUADMIX_SAMPLED_DATA:-}" ]; then
@@ -42,7 +78,19 @@ PREPROCESSED_DATA_DIR="${PREPROCESSED_DATA_DIR:-$HOME/.cache/QuaDMix/temp/prepro
 
 # Quality score methods for top-k selection (comma-separated)
 # Options: dclm, fineweb_edu, english, math_general, math_openweb
-QUALITY_METHODS="${QUALITY_METHODS:-dclm,fineweb_edu}"
+if [ -n "${COMPARISON_METHODS:-}" ]; then
+    QUALITY_METHODS="${QUALITY_METHODS:-}"
+else
+    QUALITY_METHODS="${QUALITY_METHODS-dclm,fineweb_edu}"
+fi
+COMPARISON_METHODS="${COMPARISON_METHODS:-quadmix,random}"
+has_method() { case ",$COMPARISON_METHODS," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
+for method in ${COMPARISON_METHODS//,/ }; do
+    case "$method" in quadmix|random) ;; *) echo "ERROR: use run_stem_experiment.sh for $method" >&2; exit 2 ;; esac
+done
+PREPARED_COMPARISON_DATA_DIR="${PREPARED_COMPARISON_DATA_DIR:-}"
+PREPARE_ONLY="${PREPARE_ONLY:-0}"
+if [ "$PREPARE_ONLY" = "1" ] && [ "$NODE_RANK" != "0" ]; then exit 0; fi
 
 # Nanochat model directory (contains tokenizer/, base_checkpoints/)
 NANOCHAT_MODEL_DIR="${NANOCHAT_MODEL_DIR:-/home/ma-user/work/nanochat_model_dir}"
@@ -52,6 +100,23 @@ BASE_MODEL_TAG="${BASE_MODEL_TAG:-d28}"
 
 # Nanochat repo root
 NANOCHAT_REPO="${NANOCHAT_REPO:-/home/ma-user/work/nanochat_midtrain_326}"
+export NANOCHAT_REPO
+NANOCHAT_RUNTIME_DIR="${NANOCHAT_RUNTIME_DIR:-/tmp/auto-mixture-$TIMESTAMP/node-$NODE_RANK/nanochat_model}"
+NANOCHAT_EVAL_BUNDLE_DIR="${NANOCHAT_EVAL_BUNDLE_DIR:-}"
+if [ -z "$NANOCHAT_EVAL_BUNDLE_DIR" ] && [ -d "$NANOCHAT_MODEL_DIR/eval_bundle" ]; then
+    NANOCHAT_EVAL_BUNDLE_DIR="$NANOCHAT_MODEL_DIR/eval_bundle"
+fi
+NANOCHAT_LOAD_OPTIMIZER="${NANOCHAT_LOAD_OPTIMIZER:-0}"
+NANOCHAT_DISABLE_WANDB="${NANOCHAT_DISABLE_WANDB:-1}"
+LOADER="${LOADER:-flat}"
+TRAIN_NUM_ITERATIONS="${TRAIN_NUM_ITERATIONS:-0}"
+TRAIN_TOKEN_BUDGET="${TRAIN_TOKEN_BUDGET:-}"
+EVALUATION_ENABLED="${EVALUATION_ENABLED:-1}"
+if [ -n "$TRAIN_TOKEN_BUDGET" ] && [ "$TRAIN_NUM_ITERATIONS" != "0" ]; then
+    echo "ERROR: Token budget and fixed steps cannot be combined" >&2
+    exit 2
+fi
+
 
 # Mid-training checkpoint output directory (where trained models are saved)
 # If set, $NANOCHAT_MODEL_DIR/mid_checkpoints will be symlinked here
@@ -60,6 +125,7 @@ MID_CHECKPOINTS_OUTPUT_DIR="${MID_CHECKPOINTS_OUTPUT_DIR:-$HOME/.cache/nanochat_
 
 # Experiment output directory (logs, data, reports)
 RESULT_DIR="${RESULT_DIR:-$SCRIPT_DIR/results/$TIMESTAMP}"
+if [ "$NODE_RANK" != "0" ]; then RESULT_DIR="$RESULT_DIR/node-$NODE_RANK"; fi
 mkdir -p "$RESULT_DIR"
 exec > >(tee "$RESULT_DIR/experiment.log") 2>&1
 
@@ -70,7 +136,7 @@ exec > >(tee "$RESULT_DIR/experiment.log") 2>&1
 # d28 model: num_scaling_params auto-detected from checkpoint meta JSON
 TARGET_PARAM_DATA_RATIO="${TARGET_PARAM_DATA_RATIO:-0.5}"
 NUM_SCALING_PARAMS="${NUM_SCALING_PARAMS:-}"
-DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-8}"
+DEVICE_BATCH_SIZE="${DEVICE_BATCH_SIZE:-1}"
 NUM_NPU="${NUM_NPU:-8}"
 CORE_METRIC_EVERY="${CORE_METRIC_EVERY:--1}"
 # Val BPB disabled by default (-1) because QuadMix and Random use different data,
@@ -101,12 +167,12 @@ if [ -z "$QUADMIX_SAMPLED_DATA" ]; then
     exit 1
 fi
 
-if [ ! -f "$QUADMIX_SAMPLED_DATA" ] && [ ! -d "$QUADMIX_SAMPLED_DATA" ]; then
+if [ -z "$PREPARED_COMPARISON_DATA_DIR" ] && [ ! -f "$QUADMIX_SAMPLED_DATA" ] && [ ! -d "$QUADMIX_SAMPLED_DATA" ]; then
     echo "ERROR: QuadMix dataset not found: $QUADMIX_SAMPLED_DATA"
     exit 1
 fi
 
-if [ ! -d "$PREPROCESSED_DATA_DIR" ]; then
+if [ -z "$PREPARED_COMPARISON_DATA_DIR" ] && [ ! -d "$PREPROCESSED_DATA_DIR" ]; then
     echo "ERROR: Preprocessed directory not found: $PREPROCESSED_DATA_DIR"
     echo "  Set via: PREPROCESSED_DATA_DIR=/path/to/preprocessed"
     exit 1
@@ -175,8 +241,12 @@ fi
 export OMP_NUM_THREADS=1
 export PYTHONWARNINGS="ignore::UserWarning:torch_npu"
 export WANDB_MODE=offline
-export NANOCHAT_BASE_DIR="$NANOCHAT_MODEL_DIR"
-mkdir -p "$NANOCHAT_MODEL_DIR"
+export NANOCHAT_BASE_DIR="$NANOCHAT_RUNTIME_DIR"
+mkdir -p "$NANOCHAT_RUNTIME_DIR"
+if [ "$NANOCHAT_DISABLE_WANDB" = "1" ]; then
+    export PYTHONPATH="$SCRIPT_DIR/compat/wandb_disabled:${PYTHONPATH:-}"
+    export WANDB_MODE=disabled
+fi
 
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 
@@ -198,9 +268,6 @@ fi
 
 ASCEND_DEVICE_LIST=$(seq -s, 0 $((NUM_NPU - 1)))
 export ASCEND_VISIBLE_DEVICES="$ASCEND_DEVICE_LIST"
-export RANK_SIZE=$NUM_NPU
-export MASTER_ADDR=127.0.0.1
-export MASTER_PORT=29500
 export HCCL_EXEC_TIMEOUT=1200
 export ASCEND_DISABLE_MEM_SWAP=1
 export ASCEND_LAUNCH_BLOCKING=0
@@ -280,7 +347,7 @@ echo ""
 
 mkdir -p "$RESULT_DIR"
 
-DATA_DIR="$RESULT_DIR/data"
+DATA_DIR="${PREPARED_COMPARISON_DATA_DIR:-$RESULT_DIR/data}"
 
 # ══════════════════════════════════════════════════════════════
 #  STEP 1: DATA PREPARATION
@@ -290,6 +357,9 @@ echo ""
 echo "╔══ Step 1: Prepare datasets ══╗"
 echo ""
 
+if [ -n "$PREPARED_COMPARISON_DATA_DIR" ]; then
+    test -f "$DATA_DIR/dataset_stats.json" || { echo "ERROR: missing dataset_stats.json" >&2; exit 1; }
+else
 PREP_ARGS=(
     --quadmix-sampled-data "$QUADMIX_SAMPLED_DATA"
     --preprocessed-data-dir "$PREPROCESSED_DATA_DIR"
@@ -301,14 +371,18 @@ PREP_ARGS=(
     --val-ratio "$VAL_RATIO"
     --seed "$SEED"
     --max-shards "$MAX_SHARDS"
-    --num-npu "$NUM_NPU"
+    --num-npu "${AMT_DATA_WORLD_SIZE:-$RANK_SIZE}"
 )
 if [ "$DO_QUALITY" -eq 1 ]; then
     PREP_ARGS+=(--quality-method "$QUALITY_METHODS")
 fi
 python3 "$SCRIPT_DIR/prepare_data.py" "${PREP_ARGS[@]}"
 
-DATA_DIR="$DATA_DIR" BASE_MODEL_TAG="$BASE_MODEL_TAG" \
+fi
+if [ "$PREPARE_ONLY" = "1" ]; then exit 0; fi
+
+cp "$DATA_DIR/dataset_stats.json" "$RESULT_DIR/dataset_stats.json"
+STATS_FILE="$RESULT_DIR/dataset_stats.json" DATA_DIR="$DATA_DIR" BASE_MODEL_TAG="$BASE_MODEL_TAG" \
 TARGET_PARAM_DATA_RATIO="$TARGET_PARAM_DATA_RATIO" \
 NUM_SCALING_PARAMS="$NUM_SCALING_PARAMS" \
 DEVICE_BATCH_SIZE="$DEVICE_BATCH_SIZE" \
@@ -323,7 +397,7 @@ NANOCHAT_GIT_HASH="$(git -C "$NANOCHAT_REPO" rev-parse --short HEAD 2>/dev/null 
 EVAL_BENCHMARKS="$EVAL_BENCHMARKS" \
 python3 -c "
 import os, json
-stats_path = os.path.join(os.environ['DATA_DIR'], 'dataset_stats.json')
+stats_path = os.environ['STATS_FILE']
 stats = json.load(open(stats_path))
 stats['config'].update({
     'base_model_tag': os.environ['BASE_MODEL_TAG'],
@@ -349,17 +423,17 @@ echo "  Dataset stats:"
 DATA_DIR="$DATA_DIR" python3 -c "
 import os, json
 stats = json.load(open(os.path.join(os.environ['DATA_DIR'], 'dataset_stats.json')))
-q, r = stats['quadmix'], stats['random']
+q, r = stats.get('quadmix', {}), stats.get('random', {})
 method = stats['config'].get('token_method', 'unknown')
 print(f'    Token method: {method}')
-print(f'    QuadMix: {q[\"train_docs\"]:,} train docs, {q[\"tokens\"]:,} tokens, {q[\"shards\"]} shards')
-print(f'    Random:  {r[\"train_docs\"]:,} train docs, {r[\"tokens\"]:,} tokens, {r[\"shards\"]} shards')
+print(f'    QuadMix: {q.get(\"train_docs\", 0):,} train docs, {q.get(\"tokens\", 0):,} tokens, {q.get(\"shards\", 0)} shards')
+print(f'    Random:  {r.get(\"train_docs\", 0):,} train docs, {r.get(\"tokens\", 0):,} tokens, {r.get(\"shards\", 0)} shards')
 for key in stats:
     if key.startswith('quality_'):
         method = key[len('quality_'):]
         ql = stats[key]
         print(f'    Quality ({method}): {ql[\"train_docs\"]:,} train docs, {ql[\"tokens\"]:,} tokens, {ql[\"shards\"]} shards')
-print(f'    Shared val: {q[\"val_docs\"]:,} docs')
+print(f'    Shared val: {q.get(\"val_docs\", 0):,} docs')
 "
 echo ""
 echo "╚════════════════════════════════╗"
@@ -369,41 +443,12 @@ echo ""
 #  STEP 2: SETUP MID_CHECKPOINTS DIRECTORY
 # ══════════════════════════════════════════════════════════════
 
-if [ -n "$MID_CHECKPOINTS_OUTPUT_DIR" ]; then
-    echo ""
-    echo "╔══ Step 2: Setup mid-training checkpoint output directory ══╗"
-    echo ""
-
-    mkdir -p "$MID_CHECKPOINTS_OUTPUT_DIR"
-    LINK_PATH="$NANOCHAT_MODEL_DIR/mid_checkpoints"
-
-    if [ -L "$LINK_PATH" ]; then
-        CURRENT_TARGET=$(readlink "$LINK_PATH")
-        if [ "$CURRENT_TARGET" != "$MID_CHECKPOINTS_OUTPUT_DIR" ]; then
-            echo "  Updating stale symlink: $LINK_PATH"
-            echo "    was: $CURRENT_TARGET"
-            echo "    now: $MID_CHECKPOINTS_OUTPUT_DIR"
-            rm "$LINK_PATH"
-            ln -s "$MID_CHECKPOINTS_OUTPUT_DIR" "$LINK_PATH"
-        elif [ ! -d "$CURRENT_TARGET" ]; then
-            echo "  Symlink target missing, recreating: $LINK_PATH -> $MID_CHECKPOINTS_OUTPUT_DIR"
-            rm "$LINK_PATH"
-            ln -s "$MID_CHECKPOINTS_OUTPUT_DIR" "$LINK_PATH"
-        else
-            echo "  Symlink already exists: $LINK_PATH -> $CURRENT_TARGET"
-        fi
-    elif [ -d "$LINK_PATH" ]; then
-        echo "  WARNING: $LINK_PATH exists as a directory (not a symlink)."
-        echo "  Skipping symlink creation. Mid checkpoints will be saved here."
-    else
-        echo "  Mid-training checkpoints will be saved to: $MID_CHECKPOINTS_OUTPUT_DIR"
-        echo "  Creating symlink: $LINK_PATH -> $MID_CHECKPOINTS_OUTPUT_DIR"
-        ln -s "$MID_CHECKPOINTS_OUTPUT_DIR" "$LINK_PATH"
-    fi
-
-    echo ""
-    echo "╚════════════════════════════════════════════════════════════╝"
-    echo ""
+python3 "$SCRIPT_DIR/distributed_runtime.py" layout \
+    --directory "$NANOCHAT_MODEL_DIR" --output "$NANOCHAT_RUNTIME_DIR" \
+    --checkpoint-dir "$MID_CHECKPOINTS_OUTPUT_DIR" \
+    --eval-bundle "${NANOCHAT_EVAL_BUNDLE_DIR:-}"
+if [ -n "${NANOCHAT_EVAL_BUNDLE_DIR:-}" ]; then
+    python3 "$SCRIPT_DIR/prepare_offline_eval_bundle.py" "$NANOCHAT_EVAL_BUNDLE_DIR" "$NANOCHAT_RUNTIME_DIR"
 fi
 
 # ══════════════════════════════════════════════════════════════
@@ -453,10 +498,18 @@ echo "╔══ Pre-flight: Download eval data ══╗"
 echo ""
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 pushd "$NANOCHAT_REPO" > /dev/null
-python3 -c "from scripts.base_eval import prepare_eval_data; prepare_eval_data('${EVAL_BENCHMARKS:-all}')" || {
-    echo "  ERROR: eval data download failed"
-    exit 1
-}
+if ! python3 -c "import rustbpe" >/dev/null 2>&1; then
+    export PYTHONPATH="$SCRIPT_DIR/compat:${PYTHONPATH:-}"
+fi
+if [ "${NANOCHAT_SKIP_EVAL_DOWNLOAD:-0}" = "1" ]; then
+    export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+    if [ "$EVALUATION_ENABLED" = "1" ] || [ "$CORE_METRIC_EVERY" != "-1" ]; then
+        python3 "$SCRIPT_DIR/eval_assets.py" --base "$NANOCHAT_RUNTIME_DIR" \
+            --repo "$NANOCHAT_REPO" --benchmarks "$EVAL_BENCHMARKS"
+    fi
+else
+    python3 -c "from scripts.base_eval import prepare_eval_data; prepare_eval_data('${EVAL_BENCHMARKS:-all}')"
+fi
 popd > /dev/null
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
@@ -481,7 +534,20 @@ run_mid_training() {
         return 1
     fi
 
-    local NUM_ITERATIONS=$(( (TRAIN_TOKENS + CKPT_TOTAL_BATCH_SIZE - 1) / CKPT_TOTAL_BATCH_SIZE ))
+    local PLAN_FILE="$RESULT_DIR/training_plan_$MODEL_TAG.json"
+    local TOTAL_BATCH_SIZE MAX_SEQ_LEN NUM_ITERATIONS PLAN_ENV
+    PLAN_ENV=$(python3 "$SCRIPT_DIR/distributed_runtime.py" plan \
+        --directory "$BASE_CKPT_DIR" --repo "$NANOCHAT_REPO" --devices "$NUM_NPU" \
+        --tokens "$TRAIN_TOKENS" --steps "$TRAIN_NUM_ITERATIONS" \
+        --device-batch-size "$DEVICE_BATCH_SIZE" \
+        --total-batch-size "${TRAIN_TOTAL_BATCH_SIZE:-$CKPT_TOTAL_BATCH_SIZE}" \
+        --output "$PLAN_FILE")
+    eval "$PLAN_ENV"
+    local DATA_CHECK_ARGS=(check-data --directory "$DATA_PATH" --devices "$NUM_NPU")
+    if [ "$EVAL_EVERY" != "-1" ]; then DATA_CHECK_ARGS+=(--validation); fi
+    python3 "$SCRIPT_DIR/distributed_runtime.py" "${DATA_CHECK_ARGS[@]}"
+    local TRACKING_RUN_NAME="$RUN_NAME"
+    if [ "$NANOCHAT_DISABLE_WANDB" = "1" ]; then TRACKING_RUN_NAME=dummy; fi
 
     echo "  Starting mid-training: $RUN_NAME"
     echo "    Data:       $DATA_PATH"
@@ -492,7 +558,7 @@ run_mid_training() {
     echo "    Steps:      $NUM_ITERATIONS"
     echo "    Log:        $LOG_FILE"
 
-    local LINK_DIR="$NANOCHAT_MODEL_DIR/base_checkpoints/$MODEL_TAG"
+    local LINK_DIR="$NANOCHAT_RUNTIME_DIR/base_checkpoints/$MODEL_TAG"
 
     if [ ! -e "$LINK_DIR" ]; then
         echo "    Creating symlink: $LINK_DIR -> $BASE_CKPT_DIR"
@@ -502,12 +568,17 @@ run_mid_training() {
     trap 'if [ -L "$LINK_DIR" ]; then echo "    Cleaning up symlink on exit: $LINK_DIR"; rm "$LINK_DIR"; fi' RETURN
 
     pushd "$NANOCHAT_REPO" > /dev/null
-    python3 -m torch.distributed.run --standalone --nproc_per_node="$NUM_NPU" -m scripts.mid_train -- \
+    export PYTHONPATH="$QUADMIX_DIR:${PYTHONPATH:-}"
+    python3 -m torch.distributed.run "${TORCHRUN_ARGS[@]}" -m nanochat_mid_compare.run_nanochat_mid_train -- \
         --num-iterations="$NUM_ITERATIONS" \
         --target-param-data-ratio="$TARGET_PARAM_DATA_RATIO" \
         --device-batch-size="$DEVICE_BATCH_SIZE" \
-        --total-batch-size="$CKPT_TOTAL_BATCH_SIZE" \
-        --run="$RUN_NAME" \
+        --total-batch-size="$TOTAL_BATCH_SIZE" \
+        --max-seq-len="$MAX_SEQ_LEN" \
+        --load-optimizer="$NANOCHAT_LOAD_OPTIMIZER" \
+        --loader="$LOADER" \
+        --sample-every=-1 \
+        --run="$TRACKING_RUN_NAME" \
         --model-tag="$MODEL_TAG" \
         --core-metric-every="$CORE_METRIC_EVERY" \
         --eval-every="$EVAL_EVERY" \
@@ -515,14 +586,18 @@ run_mid_training() {
         --data-dir="$DATA_PATH" \
         2>&1 | tee "$LOG_FILE"
     popd > /dev/null
+    python3 "$SCRIPT_DIR/distributed_runtime.py" record \
+        --directory "$MID_CHECKPOINTS_OUTPUT_DIR/$MODEL_TAG" --devices "$NUM_NPU" \
+        --phase "mid:$MODEL_TAG" --plan-file "$PLAN_FILE" --repo "$NANOCHAT_REPO" --data-directory "$DATA_PATH"
 }
 
 STATS_FILE="$DATA_DIR/dataset_stats.json"
 BUDGET_CAP=$(STATS_FILE="$STATS_FILE" python3 -c "
 import os, json
 s = json.load(open(os.environ['STATS_FILE']))
-print(s['config'].get('budget_cap', '0'))
+print(s['config'].get('training_budget', s['config'].get('budget_cap', '0')))
 ")
+if [ -n "$TRAIN_TOKEN_BUDGET" ]; then BUDGET_CAP="$TRAIN_TOKEN_BUDGET"; fi
 if [ "$BUDGET_CAP" -le 0 ] 2>/dev/null || [ -z "$BUDGET_CAP" ]; then
     echo "ERROR: budget_cap is missing or zero in dataset_stats.json" >&2
     echo "       Delete $DATA_DIR and re-run prepare_data to regenerate." >&2
@@ -532,7 +607,7 @@ read -r QUADMIX_TOKENS RANDOM_TOKENS < <(
     STATS_FILE="$STATS_FILE" python3 -c "
 import os, json
 s = json.load(open(os.environ['STATS_FILE']))
-print(s['quadmix']['tokens'], s['random']['tokens'])
+print(*(s.get(key, {}).get('tokens', 0) for key in ('quadmix', 'random')))
 "
 )
 echo "  Common training budget: $BUDGET_CAP tokens (from budget_cap)"
@@ -542,7 +617,9 @@ echo "╔══ Step 3a: Mid-training on QuadMix data ══╗"
 echo ""
 
 QUADMIX_LOG="$RESULT_DIR/mid_train_quadmix.log"
-run_mid_training "$QUADMIX_DATA" "$QUADMIX_MODEL_TAG" "quadmix_mid" "$QUADMIX_LOG" "$QUADMIX_TOKENS" "$BUDGET_CAP"
+if has_method quadmix; then
+    run_mid_training "$QUADMIX_DATA" "$QUADMIX_MODEL_TAG" "quadmix_mid" "$QUADMIX_LOG" "$QUADMIX_TOKENS" "$BUDGET_CAP"
+fi
 
 echo ""
 echo "╚════════════════════════════════════════════╝"
@@ -553,7 +630,9 @@ echo "╔══ Step 3b: Mid-training on Random data ══╗"
 echo ""
 
 RANDOM_LOG="$RESULT_DIR/mid_train_random.log"
-run_mid_training "$RANDOM_DATA" "$RANDOM_MODEL_TAG" "random_mid" "$RANDOM_LOG" "$RANDOM_TOKENS" "$BUDGET_CAP"
+if has_method random; then
+    run_mid_training "$RANDOM_DATA" "$RANDOM_MODEL_TAG" "random_mid" "$RANDOM_LOG" "$RANDOM_TOKENS" "$BUDGET_CAP"
+fi
 
 echo ""
 echo "╚═══════════════════════════════════════════╝"
@@ -585,19 +664,36 @@ fi
 #  STEP 4: EVALUATION
 # ══════════════════════════════════════════════════════════════
 
+if [ "${AMT_TRAIN_ONLY:-0}" = "1" ]; then exit 0; fi
+if [ "$NODE_RANK" != "0" ] && [ "$EVALUATION_ENABLED" = "1" ]; then
+    mkdir -p "$NANOCHAT_RUNTIME_DIR/eval_checkpoints"
+    install_shared_symlink "$NANOCHAT_RUNTIME_DIR/eval_checkpoints" "$NANOCHAT_RUNTIME_DIR/mid_checkpoints"
+fi
+
 run_eval() {
+    if [ "$EVALUATION_ENABLED" != "1" ]; then
+        echo "Evaluation disabled by workflow configuration"
+        return 0
+    fi
     local MODEL_TAG="$1"
     local MODEL_TYPE="$2"
     local LOG_FILE="$3"
+    local CHECKPOINT_STEP
 
     echo "  Evaluating: $MODEL_TAG ($MODEL_TYPE)"
 
+    CHECKPOINT_STEP=$(python3 "$SCRIPT_DIR/distributed_runtime.py" checkpoint \
+        --directory "$NANOCHAT_RUNTIME_DIR/${MODEL_TYPE}_checkpoints/$MODEL_TAG" \
+        --phase "$MODEL_TYPE:$MODEL_TAG" --devices "$NUM_NPU")
+
+    python3 "$SCRIPT_DIR/distributed_runtime.py" settle --devices "$NUM_NPU"
     pushd "$NANOCHAT_REPO" > /dev/null
-    python3 -m torch.distributed.run --standalone --nproc_per_node="$NUM_NPU" -m scripts.base_eval -- \
+    HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-100}" python3 -m torch.distributed.run "${EVAL_TORCHRUN_ARGS[@]}" -m nanochat_mid_compare.offline_base_eval \
         --eval=core \
         --eval-benchmarks="$EVAL_BENCHMARKS" \
-        --device-batch-size=32 \
+        --device-batch-size=16 \
         --model-tag="$MODEL_TAG" \
+        --step="$CHECKPOINT_STEP" \
         --model-type="$MODEL_TYPE" \
         2>&1 | tee "$LOG_FILE"
     popd > /dev/null
@@ -608,10 +704,10 @@ echo "╔══ Step 4: Evaluation ══╗"
 echo ""
 
 QUADMIX_EVAL_LOG="$RESULT_DIR/eval_quadmix.log"
-run_eval "$QUADMIX_MODEL_TAG" "mid" "$QUADMIX_EVAL_LOG"
+if has_method quadmix; then run_eval "$QUADMIX_MODEL_TAG" "mid" "$QUADMIX_EVAL_LOG"; fi
 
 RANDOM_EVAL_LOG="$RESULT_DIR/eval_random.log"
-run_eval "$RANDOM_MODEL_TAG" "mid" "$RANDOM_EVAL_LOG"
+if has_method random; then run_eval "$RANDOM_MODEL_TAG" "mid" "$RANDOM_EVAL_LOG"; fi
 
 if [ "$DO_QUALITY" -eq 1 ]; then
     for method in "${QUALITY_METHOD_ARRAY[@]}"; do
@@ -633,9 +729,11 @@ echo ""
 echo "╔══ Step 5: Generate experiment report ══╗"
 echo ""
 
+if [ "$NODE_RANK" != "0" ]; then exit 0; fi
+
 REPORT_ARGS=(
     --result-dir "$RESULT_DIR"
-    --dataset-stats "$DATA_DIR/dataset_stats.json"
+    --dataset-stats "$RESULT_DIR/dataset_stats.json"
     --quadmix-train-log "$QUADMIX_LOG"
     --random-train-log "$RANDOM_LOG"
     --quadmix-eval-log "$QUADMIX_EVAL_LOG"

@@ -87,6 +87,7 @@ def run_mixing(config: dict[str, Any]) -> None:
         "comparison_config": _comparison(config),
         "trainer_config": {
             "npu_devices": quadmix.get("devices_per_node", 8),
+            "data_world_size": config.get("training_nodes", 1) * config["training"].get("devices_per_node", 8),
             "target_param_data_ratio": config["training"].get(
                 "target_param_data_ratio", 0.5
             ),
@@ -108,7 +109,8 @@ def run_mixing(config: dict[str, Any]) -> None:
 
 def run_baseline_mixing(config):
     """Run the existing sampling implementation without launching proxy experiments."""
-    if int(os.environ.get('VC_TASK_INDEX', '0')) != 0:
+    from nanochat_mid_compare.distributed_runtime import resolve_topology
+    if resolve_topology(config['strategies'][0].get('devices_per_node', 8)).rank != 0:
         print('人工/随机采样由首节点写出；本节点无需重复采样。')
         return
     from auto_mixture_tool.pipeline import PipelineManager
@@ -127,6 +129,7 @@ def run_baseline_mixing(config):
                TARGET_PARAM_DATA_RATIO=str(training.get('target_param_data_ratio', 0.5)),
                RESULT_DIR=str(OUTPUT / 'sampled'), MID_CHECKPOINTS_OUTPUT_DIR=str(OUTPUT / 'unused_checkpoints'),
                NUM_NPU=str(config['strategies'][0].get('devices_per_node', 8)),
+               AMT_DATA_WORLD_SIZE=str(config.get('training_nodes', 1) * training.get('devices_per_node', 8)),
                SEED=str(config['strategies'][0].get('seed', 42)),
                NANOCHAT_DISABLE_WANDB='1', MIX_GENERAL_DATA='0',
                MANUAL_RATIO='')
@@ -157,6 +160,8 @@ def _prepared_data_dir() -> Path:
 
 
 def run_training(config: dict[str, Any]) -> None:
+    from nanochat_mid_compare.distributed_runtime import resolve_topology
+    rank = resolve_topology(config['training'].get('devices_per_node', 8)).rank
     data_dir = _prepared_data_dir()
     comparison = _comparison(config)
     # Validate every selected subset before paying for any model training.
@@ -191,6 +196,7 @@ def run_training(config: dict[str, Any]) -> None:
         "NUM_NPU": str(config["training"].get("devices_per_node", 8)),
         "TRAIN_NUM_ITERATIONS": str(config["training"].get("num_iterations", 0)),
         "TRAIN_TOKEN_BUDGET": str(config["training"].get("token_budget", "")),
+        "TRAIN_TOTAL_BATCH_SIZE": str(config["training"].get("total_batch_size", "")),
         "DEVICE_BATCH_SIZE": str(config["training"].get("device_batch_size", 1)),
         "EVAL_EVERY": str(config["training"].get("eval_every", -1)),
         "CORE_METRIC_EVERY": str(config["training"].get("core_metric_every", -1)),
@@ -201,7 +207,7 @@ def run_training(config: dict[str, Any]) -> None:
         "MIX_GENERAL_DATA": "0",
     })
     identity = None
-    if config.get('split_evaluation') and int(os.environ.get('VC_TASK_INDEX', '0')) == 0:
+    if config.get('split_evaluation') and rank == 0:
         from .model_comparison import build_identity
         identity = build_identity(env['NANOCHAT_MODEL_DIR'], env['BASE_MODEL_TAG'])
     subprocess.run(
@@ -210,7 +216,7 @@ def run_training(config: dict[str, Any]) -> None:
         env=env,
         check=True,
     )
-    if config.get('split_evaluation') and int(os.environ.get('VC_TASK_INDEX', '0')) == 0:
+    if config.get('split_evaluation') and rank == 0:
         from .evaluation_job import publish_models
         publish_models(config, Path(env['MID_CHECKPOINTS_OUTPUT_DIR']), data_dir, identity=identity)
 

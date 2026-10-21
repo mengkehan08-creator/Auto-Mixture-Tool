@@ -133,6 +133,10 @@ def mix_data(stem_dir, climb_files, output_dir, num_output_files, batch_per_file
     climb_gen = endless_generator(stream_texts_uniform, climb_files)
 
     random.seed(42)
+    world_size = int(os.environ.get("RANK_SIZE", "8"))
+    if world_size < 1:
+        raise ValueError("RANK_SIZE must be positive")
+    row_group_size = max(1, batch_per_file // (world_size * 2))
     current = []
     file_idx = 0
     total = num_output_files * batch_per_file
@@ -150,13 +154,13 @@ def mix_data(stem_dir, climb_files, output_dir, num_output_files, batch_per_file
 
             if len(current) >= batch_per_file:
                 out_path = os.path.join(output_dir, f"shard_{file_idx:05d}.parquet")
-                pq.write_table(pa.table({"text": current}), out_path, row_group_size=1024)
+                pq.write_table(pa.table({"text": current}), out_path, row_group_size=row_group_size)
                 current = []
                 file_idx += 1
     finally:
         if current and file_idx < num_output_files:
             out_path = os.path.join(output_dir, f"shard_{file_idx:05d}.parquet")
-            pq.write_table(pa.table({"text": current}), out_path)
+            pq.write_table(pa.table({"text": current}), out_path, row_group_size=row_group_size)
             file_idx += 1
 
         del stem_gen

@@ -5,6 +5,7 @@ import { stemTasks, normalizeEvaluationTasks } from '../../evaluation-selection.
 import ModelLibrary from '../ModelLibrary.vue'
 import ResourceGuide from '../ResourceGuide.vue'
 import ResourceCheck from '../ResourceCheck.vue'
+import { trainingParameters } from '../../data/defaults.js'
 const showGuide = ref(false)
 
 const props = defineProps({ config: { type: Object, required: true }, modelOutput: String, training: Object, runtime: Object, strategies: Array })
@@ -15,8 +16,7 @@ const comparisonReference = computed(() => ({
   training_configs: [{
     framework: 'nanochat', model: props.training.model, base_model_tag: props.training.baseModelTag,
     target_param_data_ratio: props.training.targetParamDataRatio, devices_per_node: props.training.devicesPerNode,
-    token_budget: props.training.tokenBudget, num_iterations: 0, device_batch_size: props.training.deviceBatchSize,
-    eval_every: props.training.evalEvery, core_metric_every: props.training.coreMetricEvery,
+    ...trainingParameters(props.training), num_iterations: 0,
   }],
 }))
 const selectedTasks = computed(() => normalizeEvaluationTasks(props.config.dataset.names))

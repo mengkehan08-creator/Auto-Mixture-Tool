@@ -30,7 +30,7 @@ auto-mixture = "auto_mixture_tool.cli:main"
 quadmix-platform = "quadmix_platform.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/AutoDataMixture/Auto-Mixture-Tool"
+Homepage = "https://github.com/mengkehan08-creator/Auto-Mixture-Tool"
 Paper = "https://arxiv.org/abs/2504.16511"
 
 [tool.setuptools.packages.find]

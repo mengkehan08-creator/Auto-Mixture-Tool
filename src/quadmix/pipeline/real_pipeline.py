@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Any
 import json
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -554,11 +554,18 @@ class QuaDMixPipeline:
 
     def _stage4_proxy_experiments(self, proxy_runner, n_exp, param_sets,
                                   parallel_workers, stage_times,
-                                  distributed_coordinator=None):
+                                  distributed_coordinator=None, experiment_ids=None, execution_timeout=None):
         if proxy_runner is None:
             raise ValueError("proxy_runner is required. Pass an EssentialWebProxyRunner instance.")
 
         if distributed_coordinator is not None:
+            distributed_start = time.monotonic()
+            manifest = proxy_runner.distributed_manifest()
+            manifest["quadmix_config"] = asdict(self.config)
+            manifest["parameter_hash"] = parameter_set_hash(param_sets)
+            manifest["num_experiments"] = n_exp
+            distributed_coordinator.verify_run(manifest)
+            stage_times["stage4_input_alignment"] = time.monotonic() - distributed_start
             indices = distributed_coordinator.local_indices(n_exp)
             local_params = [param_sets[index] for index in indices]
             if not local_params:
@@ -578,12 +585,18 @@ class QuaDMixPipeline:
                 min(parallel_workers, len(local_params)),
                 local_times,
                 None,
+                experiment_ids=indices,
+                execution_timeout=distributed_coordinator.timeout_seconds,
             )
-            for global_index, result in zip(indices, local_results):
-                result.metadata["experiment_id"] = global_index
+            failed = [result.metadata for result in local_results if result.metadata.get("error")]
+            if failed:
+                raise RuntimeError(f"代理实验执行失败: {failed}")
+            for result in local_results:
                 result.metadata["modelarts_node_rank"] = distributed_coordinator.node_rank
             digest = parameter_set_hash(param_sets)
-            distributed_coordinator.publish_results(local_results, digest)
+            publish_start = time.monotonic()
+            distributed_coordinator.publish_results(local_results, digest, proxy_runner.output_dir)
+            stage_times["stage4_artifact_publish"] = time.monotonic() - publish_start
 
             if not distributed_coordinator.is_primary:
                 distributed_coordinator.wait_and_download_final_output(
@@ -594,6 +607,7 @@ class QuaDMixPipeline:
             results = distributed_coordinator.gather_results(
                 self.config, n_exp, digest
             )
+            stage_times["stage4_total"] = time.monotonic() - distributed_start
             for name, seconds in local_times.items():
                 stage_times[f"node0_{name}"] = seconds
             losses = np.array([result.validation_loss for result in results])
@@ -606,12 +620,13 @@ class QuaDMixPipeline:
 
         print(f"\n[Stage 4] Running {n_exp} proxy experiments...")
 
+        runner_options = {} if experiment_ids is None else {"experiment_ids": experiment_ids}
         _t_stage4 = time.time()
         if parallel_workers > 1 and hasattr(proxy_runner, 'precompute_samples'):
             print(f"[Stage 4] Using {parallel_workers} parallel workers (dynamic task queue)")
             print(f"[Stage 4] Step 1: Pre-sampling (Eq.1-3, pure numpy, CPU only)")
             _t = time.time()
-            all_selected = proxy_runner.precompute_samples(param_sets)
+            all_selected = proxy_runner.precompute_samples(param_sets, **runner_options)
             stage_times["stage4a_precompute"] = time.time() - _t
             print(f"[Stage 4] Pre-sampling: {stage_times['stage4a_precompute']:.1f}s")
 
@@ -623,17 +638,21 @@ class QuaDMixPipeline:
 
             print(f"[Stage 4] Step 2: Dynamic parallel training (NPU workers, cache hits only)")
             _t = time.time()
+            parallel_options = dict(runner_options)
+            if execution_timeout is not None:
+                parallel_options["timeout_seconds"] = execution_timeout
             results = proxy_runner.run_batch_parallel(
                 param_sets, all_selected,
                 num_workers=parallel_workers,
                 device_type=proxy_runner.device_type,
+                **parallel_options,
             )
             stage_times["stage4c_training"] = time.time() - _t
             print(f"[Stage 4] Training: {stage_times['stage4c_training']:.1f}s")
         elif hasattr(proxy_runner, 'precompute_samples'):
             print(f"[Stage 4] CPU mode: precompute → tokenize union → sequential run")
             _t = time.time()
-            all_selected = proxy_runner.precompute_samples(param_sets)
+            all_selected = proxy_runner.precompute_samples(param_sets, **runner_options)
             stage_times["stage4a_precompute"] = time.time() - _t
             print(f"[Stage 4] Pre-sampling: {stage_times['stage4a_precompute']:.1f}s")
 
@@ -645,11 +664,12 @@ class QuaDMixPipeline:
             _t = time.time()
             results = []
             all_selected_train = getattr(proxy_runner, '_all_selected_train', all_selected)
+            ids = list(range(n_exp)) if experiment_ids is None else experiment_ids
             for i, (params, sel, sel_train) in enumerate(
                 zip(param_sets, all_selected, all_selected_train)
             ):
                 r = proxy_runner.run_experiment(
-                    params, experiment_id=i, selected_idx=sel_train,
+                    params, experiment_id=ids[i], selected_idx=sel_train,
                     sampled_doc_count=len(sel),
                 )
                 results.append(r)
@@ -657,7 +677,7 @@ class QuaDMixPipeline:
             print(f"[Stage 4] Training: {stage_times['stage4c_training']:.1f}s")
         else:
             _t = time.time()
-            results = proxy_runner.run_batch(param_sets)
+            results = proxy_runner.run_batch(param_sets, **runner_options)
             stage_times["stage4c_training"] = time.time() - _t
         stage_times["stage4_total"] = time.time() - _t_stage4
 

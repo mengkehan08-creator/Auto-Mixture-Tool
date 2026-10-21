@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createStrategy, createTrainingConfig } from './data/defaults.js'
+import { createStrategy, createTrainingConfig, trainingParameters } from './data/defaults.js'
 import { syncSharedTraining } from './shared-training.js'
 import { batchExample, planQuadMixBatch, materializeQuadMixBatch } from './quadmix-batch.js'
 import { copyWorkflow } from './copy-workflow.js'
@@ -48,4 +48,20 @@ test('copying restores the common priority and preserves differing historical no
   draft.training.nodes = 3
   syncSharedTraining(draft.strategies, draft.training)
   assert.deepEqual(draft.strategies.map(s => s.trainingNodes), [4, 3])
+})
+
+test('batch mode is shared and copied, explicit legacy batches remain fixed', () => {
+  const config = createTrainingConfig()
+  assert.equal(trainingParameters(config).total_batch_size, undefined)
+  config.totalBatchSize = 540672
+  config.batchSizeMode = 'fixed'
+  const strategies = [createStrategy(), createStrategy('random')]
+  syncSharedTraining(strategies, config)
+  assert.ok(strategies.every(s => s.trainingOverrides.total_batch_size === 540672))
+  const copy = copyWorkflow({ training: { total_batch_size: 540672 }, resources: {}, strategies: [], evaluation: { datasets: [] } })
+  assert.equal(copy.training.totalBatchSize, 540672)
+  assert.equal(copy.training.batchSizeMode, 'fixed')
+  config.batchSizeMode = 'auto'
+  assert.equal(trainingParameters(config).total_batch_size, undefined)
+  assert.equal(trainingParameters(config).batch_size_mode, 'auto')
 })

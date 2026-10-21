@@ -22,6 +22,9 @@ Aligned with RegMix:
 from __future__ import annotations
 
 import os, math, time, json, glob, threading
+import hashlib
+from dataclasses import asdict
+from pathlib import Path
 import multiprocessing as mp
 import multiprocessing.shared_memory
 from functools import partial
@@ -40,7 +43,7 @@ from quadmix.core.types import ParameterSet, ProxyResult, QuaDMixConfig
 from quadmix.core.quality_merger import compute_merged_quality_scores
 from quadmix.core.quality_rank import compute_quality_ranks
 from quadmix.core.sampler import compute_sampling_values
-from quadmix.pipeline.proxy_runner import BaseProxyRunner
+from quadmix.pipeline.proxy_runner import BaseProxyRunner, resolve_experiment_ids
 from quadmix.utils.perf_timer import PerfTimer
 from quadmix.utils.concurrency import ConcurrencyConfig, get_blas_threads, set_blas_threads
 from quadmix.utils.json_utils import sanitize_for_json
@@ -714,6 +717,72 @@ class EssentialWebProxyRunner(BaseProxyRunner):
         num_steps = self.tiny_steps if self.tiny_steps > 0 else self.max_step
         return num_steps * self.global_batch_size * self.block_size
 
+    def distributed_manifest(self) -> dict:
+        """Fingerprint effective sampling, tokenization, validation and training inputs."""
+        def array_hash(value):
+            if value is None:
+                return None
+            array = np.ascontiguousarray(value)
+            digest = hashlib.sha256(f"{array.dtype}:{array.shape}".encode("utf-8"))
+            if array.size:
+                digest.update(memoryview(array).cast("B"))
+            return digest.hexdigest()
+
+        dataset = {
+            "num_docs": self._num_docs,
+            "quality_hash": array_hash(self._normalized_quality),
+            "token_count_hash": array_hash(self._token_counts),
+            "domain_indices": {str(domain): array_hash(indices)
+                               for domain, indices in self._domain_indices.items()},
+            "domain_names": self._domain_names,
+            "quality_names": self._quality_names,
+        }
+        manager = self.metadata_manager
+        if manager is not None:
+            dataset["schema"] = asdict(manager.schema)
+            dataset["char_count_hash"] = array_hash(manager.doc_char_counts)
+            dataset["shards"] = [{
+                "name": os.path.relpath(path, manager._dir), "bytes": os.path.getsize(path),
+                "num_docs": info["num_docs"], "start_idx": info["start_idx"],
+                "row_ids_hash": array_hash(manager._row_in_shard_cols.get(index)),
+            } for index, (path, info) in enumerate(zip(manager._shard_files, manager.shard_info))]
+            manifest_path = Path(manager._dir) / "manifest.json"
+            if manifest_path.is_file():
+                dataset["source_manifest_hash"] = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+            # shortcut: no full text checksum, require shard checksums if inputs can change in place.
+
+        backend = getattr(self.tokenizer, "backend_tokenizer", None)
+        tokenizer_value = (backend.to_str() if backend is not None
+                           else json.dumps(self.tokenizer.get_vocab(), sort_keys=True))
+        return {
+            "dataset": dataset,
+            "tokenizer": {
+                "content_hash": hashlib.sha256(tokenizer_value.encode("utf-8")).hexdigest(),
+                "pad_token_id": self.tokenizer.pad_token_id,
+                "eos_token_id": self.tokenizer.eos_token_id,
+                "padding_side": getattr(self.tokenizer, "padding_side", "right"),
+                "truncation_side": getattr(self.tokenizer, "truncation_side", "right"),
+            },
+            "validation": {
+                "token_ids_hash": array_hash(self._val_token_ids.numpy()),
+                "loss_mask_hash": array_hash(self._val_loss_mask.numpy()),
+                "task_labels": self._val_task_labels,
+            },
+            "model": vars(self.model_config).copy(),
+            "training": {
+                "seed": int(self._seed_offset),
+                "steps": self.tiny_steps if self.tiny_steps > 0 else self.max_step,
+                "global_batch_size": self.global_batch_size,
+                "micro_batch_size": self.micro_batch_size,
+                "gradient_accumulation_steps": self.gradient_accumulation_steps,
+                "learning_rate": self.learning_rate, "weight_decay": self.weight_decay,
+                "warmup_fraction": self.warmup_fraction, "grad_clip": self.grad_clip,
+                "rank_ref_size": self.rank_ref_size,
+                "checkpoint_interval": self.checkpoint_interval,
+                "device_type": self.device_type,
+            },
+        }
+
     def _subsample_for_budget(
         self, selected_idx: np.ndarray, seed: int = 0,
     ) -> np.ndarray:
@@ -871,6 +940,7 @@ class EssentialWebProxyRunner(BaseProxyRunner):
             train_tokens = self._load_tokens_for_experiment(selected_idx_out, exp_id=experiment_id, shm_info=shm_info)
 
         with PerfTimer.section("create_model", _timer_prefix):
+            torch.manual_seed(int(self._seed_offset) + experiment_id)
             model = ProxyModel(config=self.model_config).to(device)
             if device.type == "npu":
                 model = model.to(torch.bfloat16)
@@ -1063,6 +1133,7 @@ class EssentialWebProxyRunner(BaseProxyRunner):
 
             meta = {
                 "experiment_id": experiment_id,
+                "seed": int(self._seed_offset) + experiment_id,
                 "variant": self.model_variant,
                 "train_loss": avg_train,
                 "val_loss": val_loss,
@@ -1355,7 +1426,7 @@ class EssentialWebProxyRunner(BaseProxyRunner):
         print(f"[ProxyRunner] Summary: {path}")
 
     def precompute_samples(
-            self, all_params: List[ParameterSet]
+            self, all_params: List[ParameterSet], experiment_ids: Optional[List[int]] = None,
     ) -> List[np.ndarray]:
         """Run Eq.1-3 + fractional sampling for all experiments."""
         from quadmix.pipeline.shared_memory import ndarray_to_shared, SharedArrayInfo
@@ -1363,6 +1434,8 @@ class EssentialWebProxyRunner(BaseProxyRunner):
         cfg = self._concurrency
         t0 = time.time()
         n = len(all_params)
+        ids = resolve_experiment_ids(n, experiment_ids)
+        positions = {experiment_id: pos for pos, experiment_id in enumerate(ids)}
         num_cpus = cfg.cpu_count
         seed_offset = self._seed_offset
 
@@ -1453,11 +1526,11 @@ class EssentialWebProxyRunner(BaseProxyRunner):
                     return_as="generator",
                     max_nbytes=None,
                 )(
-                    delayed(_presample_one)((i, params, data))
-                    for i, params in enumerate(all_params)
+                    delayed(_presample_one)((experiment_id, params, data))
+                    for experiment_id, params in zip(ids, all_params)
                 )
                 for idx, arr in results:
-                    all_selected[idx] = arr
+                    all_selected[positions[idx]] = arr
                     completed += 1
                     if completed % max(1, n // 10) == 0 or completed == n:
                         elapsed = time.time() - t0
@@ -1502,8 +1575,8 @@ class EssentialWebProxyRunner(BaseProxyRunner):
         all_selected_train: List[np.ndarray] = []
         total_train_docs = 0
         total_sampled_docs = 0
-        for i, sel in enumerate(all_selected):
-            train_sel = self._subsample_for_budget(sel, seed=i + seed_offset)
+        for experiment_id, sel in zip(ids, all_selected):
+            train_sel = self._subsample_for_budget(sel, seed=experiment_id + seed_offset)
             all_selected_train.append(train_sel)
             total_train_docs += len(train_sel)
             total_sampled_docs += len(sel)
@@ -1672,9 +1745,14 @@ class EssentialWebProxyRunner(BaseProxyRunner):
             num_workers: int = 1,
             device_type: str = "npu",
             tokenize_lookahead: int = None,
+            experiment_ids: Optional[List[int]] = None,
+            timeout_seconds: Optional[float] = None,
     ) -> List:
         """Run proxy experiments in parallel using dynamic task queue."""
         n_exp = len(params_list)
+        ids = resolve_experiment_ids(n_exp, experiment_ids)
+        if timeout_seconds is not None and (not math.isfinite(timeout_seconds) or timeout_seconds <= 0):
+            raise ValueError("worker timeout must be finite and positive")
         assert len(all_selected) == n_exp, (
             f"all_selected length {len(all_selected)} != "
             f"params_list length {n_exp}"
@@ -1690,14 +1768,14 @@ class EssentialWebProxyRunner(BaseProxyRunner):
                 zip(params_list, all_selected, all_selected_train)
             ):
                 r = self.run_experiment(
-                    params, experiment_id=i, selected_idx=sel_train,
+                    params, experiment_id=ids[i], selected_idx=sel_train,
                     sampled_doc_count=len(sel),
                 )
                 results.append(r)
             return results
 
         return self._run_batch_dynamic(
-            params_list, all_selected, num_workers, device_type, tokenize_lookahead
+            params_list, all_selected, num_workers, device_type, tokenize_lookahead, ids, timeout_seconds
         )
 
     def _run_batch_dynamic(
@@ -1707,6 +1785,8 @@ class EssentialWebProxyRunner(BaseProxyRunner):
             num_workers: int,
             device_type: str,
             tokenize_lookahead: int = None,
+            experiment_ids: Optional[List[int]] = None,
+            timeout_seconds: Optional[float] = None,
     ) -> List:
         """Dynamic task queue mode: workers pull tasks on-demand."""
         import threading
@@ -1716,6 +1796,8 @@ class EssentialWebProxyRunner(BaseProxyRunner):
             tokenize_lookahead = num_workers * 2
 
         n_exp = len(params_list)
+        ids = resolve_experiment_ids(n_exp, experiment_ids)
+        positions = {experiment_id: pos for pos, experiment_id in enumerate(ids)}
         all_results = [None] * n_exp
         shared_meta: Optional[Dict[str, "SharedArrayInfo"]] = None
         if self._mode == "sharded" and self.metadata_manager is not None:
@@ -1740,6 +1822,9 @@ class EssentialWebProxyRunner(BaseProxyRunner):
 
         config_ser = self._serialize_config(shared_meta)
         t_start = time.time()
+        deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
+        stop_event = threading.Event()
+        collector_errors = []
 
         print(f"\n[DynamicParallel] {n_exp} experiments, {num_workers} workers")
         print(f"[DynamicParallel] tokenize_lookahead={tokenize_lookahead} (batch union mode)")
@@ -1748,6 +1833,7 @@ class EssentialWebProxyRunner(BaseProxyRunner):
         ctx = mp.get_context("spawn")
         task_queue = ctx.Queue(maxsize=max(n_exp, num_workers * 2))
         result_queue = ctx.Queue()
+        worker_processes = []
 
         async_write_queue = thread_queue.Queue()
 
@@ -1784,17 +1870,19 @@ class EssentialWebProxyRunner(BaseProxyRunner):
             print(f"[TokenizeThread] STARTED at {time.time():.0f}")
             pos = 0
             batch_count = 0
-            while pos < n_exp:
+            while pos < n_exp and not stop_event.is_set():
                 with ready_cond:
                     pending = pos - completed_count
                     if pending > tokenize_lookahead:
                         print(f"[TokenizeThread] backpressure: {pending} pending shm > lookahead {tokenize_lookahead}, waiting for workers to consume...")
-                        while pos - completed_count > tokenize_lookahead:
+                        while pos - completed_count > tokenize_lookahead and not stop_event.is_set():
                             ready_cond.wait(timeout=5.0)
+                if stop_event.is_set():
+                    break
                 batch_size = num_workers if batch_count == 0 else tokenize_lookahead
                 end_pos = min(pos + batch_size, n_exp)
-                batch_ids = list(range(pos, end_pos))
-                batch_selected = [all_selected_train[i] for i in batch_ids]
+                batch_ids = ids[pos:end_pos]
+                batch_selected = all_selected_train[pos:end_pos]
 
                 try:
                     exp_token_paths = self._tokenize_batch_union(
@@ -1835,15 +1923,18 @@ class EssentialWebProxyRunner(BaseProxyRunner):
         last_progress_time = 0
         while True:
             with ready_cond:
-                ready_count = sum(1 for i in range(first_batch_end) if ready_events.get(i, False))
+                ready_count = sum(1 for i in ids[:first_batch_end] if ready_events.get(i, False))
             if ready_count == first_batch_end:
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                stop_event.set()
                 break
             if not tokenize_thread.is_alive():
                 print("[DynamicParallel] Tokenize thread died unexpectedly - aborting wait")
                 break
             if time.time() - wait_start > 900:
                 with ready_cond:
-                    for i in range(first_batch_end):
+                    for i in ids[:first_batch_end]:
                         status = ready_events.get(i, None)
                         print(f"[DynamicParallel] Exp {i} status: {status}")
                 print("[DynamicParallel] TIMEOUT waiting for first batch - check tokenize errors above")
@@ -1858,29 +1949,44 @@ class EssentialWebProxyRunner(BaseProxyRunner):
 
         def dispatcher_thread_func():
             """Push ready tasks when signaled (no busy-wait polling)."""
+            def enqueue(task):
+                while True:
+                    if stop_event.is_set():
+                        return False
+                    if (len(worker_processes) == num_workers
+                            and all(p.exitcode is not None for p in worker_processes)):
+                        return False
+                    try:
+                        task_queue.put(task, timeout=1.0)
+                        return True
+                    except thread_queue.Full:
+                        continue
+
             pos = 0
             failed_exps = []
-            while pos < n_exp:
+            while pos < n_exp and not stop_event.is_set():
+                experiment_id = ids[pos]
                 task_item = None
                 skip_item = None
                 with ready_cond:
-                    is_ready = ready_events.get(pos, None)
+                    is_ready = ready_events.get(experiment_id, None)
                     if is_ready is True:
                         with exp_shm_lock:
-                            shm_info = exp_shm_info.get(pos)
+                            shm_info = exp_shm_info.get(experiment_id)
                         task_item = (
-                            pos, params_list[pos],
+                            experiment_id, params_list[pos],
                             all_selected_train[pos], shm_info,
                             len(all_selected[pos]),
                         )
                     elif is_ready is False:
-                        skip_item = (pos, params_list[pos])
+                        skip_item = (experiment_id, params_list[pos])
                     else:
                         ready_cond.wait(timeout=1.0)
                         continue
 
                 if task_item is not None:
-                    task_queue.put(task_item)
+                    if not enqueue(task_item):
+                        return
                     pos += 1
                 elif skip_item is not None:
                     skip_pos, skip_params = skip_item
@@ -1894,7 +2000,8 @@ class EssentialWebProxyRunner(BaseProxyRunner):
                     pos += 1
 
             for _ in range(num_workers):
-                task_queue.put(None)
+                if not enqueue(None):
+                    return
 
             if failed_exps:
                 print(f"[Dispatcher] {len(failed_exps)} experiments failed tokenization")
@@ -1903,30 +2010,41 @@ class EssentialWebProxyRunner(BaseProxyRunner):
         dispatcher_thread = threading.Thread(target=dispatcher_thread_func, daemon=True)
         dispatcher_thread.start()
 
-        worker_processes = []
         alive_workers = {"count": num_workers}
 
         def collector_thread_func():
             """Collect results from result queue, with worker health monitoring."""
             nonlocal completed_count
-            last_progress_time = time.time()
+
+            def fail_pending(error):
+                nonlocal completed_count
+                for position, result in enumerate(all_results):
+                    if result is None:
+                        all_results[position] = ProxyResult(
+                            parameters=params_list[position], validation_loss=float('inf'),
+                            metadata={"experiment_id": ids[position], "error": error},
+                        )
+                        completed_count += 1
+                stop_event.set()
+                with ready_cond:
+                    ready_cond.notify_all()
+
             while completed_count < n_exp:
+                if deadline is not None and time.monotonic() >= deadline:
+                    fail_pending("execution_timeout")
+                    break
+                if stop_event.is_set():
+                    fail_pending("worker_crash")
+                    break
                 try:
                     result = result_queue.get(timeout=1.0)
-                    last_progress_time = time.time()
                     if result is None:
                         alive_workers["count"] -= 1
                         if alive_workers["count"] <= 0 and completed_count < n_exp:
                             missing = [i for i in range(n_exp) if all_results[i] is None]
                             print(f"[Collector] Workers exited; {completed_count}/{n_exp} results, "
                                   f"{len(missing)} missing (exps: {missing})")
-                            for eid in missing:
-                                all_results[eid] = ProxyResult(
-                                    parameters=params_list[eid],
-                                    validation_loss=float('inf'),
-                                    metadata={"experiment_id": eid, "error": "worker_crash"}
-                                )
-                                completed_count += 1
+                            fail_pending("worker_crash")
                             break
                         continue
                     eid = result.metadata.get("experiment_id", -1)
@@ -1939,17 +2057,16 @@ class EssentialWebProxyRunner(BaseProxyRunner):
                             missing = [i for i in range(n_exp) if all_results[i] is None]
                             print(f"[Collector] All workers crashed; {completed_count}/{n_exp} results, "
                                   f"{len(missing)} missing")
-                            for eid in missing:
-                                all_results[eid] = ProxyResult(
-                                    parameters=params_list[eid],
-                                    validation_loss=float('inf'),
-                                    metadata={"experiment_id": eid, "error": "worker_crash"}
-                                )
-                                completed_count += 1
+                            fail_pending("worker_crash")
                             break
                         continue
                     eid = result.metadata["experiment_id"]
-                    all_results[eid] = result
+                    if type(eid) is not int or eid not in positions:
+                        raise RuntimeError(f"unexpected result for experiment {eid}")
+                    position = positions[eid]
+                    if all_results[position] is not None:
+                        raise RuntimeError(f"duplicate result for experiment {eid}")
+                    all_results[position] = result
                     completed_count += 1
                     with ready_cond:
                         ready_cond.notify_all()
@@ -1959,27 +2076,42 @@ class EssentialWebProxyRunner(BaseProxyRunner):
                     if completed_count % 50 == 0 or completed_count == n_exp:
                         print(f"[Collector] {completed_count}/{n_exp} done ({elapsed:.0f}s, ETA: {eta:.0f}s)")
                 except thread_queue.Empty:
-                    pass
+                    if (len(worker_processes) == num_workers
+                            and all(p.exitcode is not None for p in worker_processes)):
+                        fail_pending("worker_crash")
                 except Exception as e:
                     print(f"[Collector] Unexpected error: {e}")
+                    collector_errors.append(str(e))
+                    fail_pending("invalid_worker_result")
+                    break
 
         collector_thread = threading.Thread(target=collector_thread_func, daemon=True)
         collector_thread.start()
 
         for wid in range(num_workers):
+            if stop_event.is_set():
+                break
             p = ctx.Process(
                 target=_worker_dynamic_loop,
                 args=(wid, device_type, config_ser, task_queue, result_queue),
             )
-            p.start()
+            try:
+                p.start()
+            except Exception as error:
+                collector_errors.append(f"worker {wid} launch failed: {error}")
+                stop_event.set()
+                with ready_cond:
+                    ready_cond.notify_all()
+                break
             worker_processes.append(p)
 
         interrupted = False
         try:
             collector_thread.join()
             dispatcher_thread.join()
-            tokenize_thread.join()
-            async_write_thread.join()
+            tokenize_thread.join(timeout=5.0 if stop_event.is_set() else None)
+            async_write_queue.put(None)
+            async_write_thread.join(timeout=5.0 if stop_event.is_set() else None)
         except KeyboardInterrupt:
             interrupted = True
             print("\n[DynamicParallel] Interrupted — sending shutdown to workers...")
@@ -1994,16 +2126,24 @@ class EssentialWebProxyRunner(BaseProxyRunner):
                     p.terminate()
 
         for p in worker_processes:
-            p.join(timeout=5.0)
+            p.join(timeout=0.5 if stop_event.is_set() else 5.0)
             if p.is_alive():
                 p.terminate()
+                p.join(timeout=5.0)
             print(f"[DynamicParallel] Worker {p.pid} exitcode={p.exitcode}")
+
+        # No consumer remains after a crash; do not wait for an undrainable feeder.
+        task_queue.cancel_join_thread()
+        task_queue.close()
+        result_queue.close()
 
         if not interrupted:
             elapsed = time.time() - t_start
-            print(f"\n[DynamicParallel] All {n_exp} experiments complete ({elapsed:.0f}s ≈ {elapsed / 60:.1f}min)")
+            failed = sum(result is None or bool(result.metadata.get("error")) for result in all_results)
+            print(f"\n[DynamicParallel] {n_exp - failed}/{n_exp} experiments succeeded, "
+                  f"{failed} failed ({elapsed:.0f}s ≈ {elapsed / 60:.1f}min)")
 
-        if shared_meta:
+        if shared_meta and not tokenize_thread.is_alive():
             import gc
             for name, info in list(shared_meta.items()):
                 try:
@@ -2016,7 +2156,7 @@ class EssentialWebProxyRunner(BaseProxyRunner):
 
         leaked = 0
         with exp_shm_lock:
-            items = list(exp_shm_info.items())
+            items = [] if tokenize_thread.is_alive() else list(exp_shm_info.items())
         for exp_id, (shm_name, shape, dtype_str) in items:
             try:
                 shm = mp.shared_memory.SharedMemory(name=shm_name)
@@ -2030,5 +2170,8 @@ class EssentialWebProxyRunner(BaseProxyRunner):
 
         if interrupted:
             raise KeyboardInterrupt
+
+        if collector_errors:
+            raise RuntimeError(f"代理 worker 执行失败: {collector_errors[0]}")
 
         return all_results

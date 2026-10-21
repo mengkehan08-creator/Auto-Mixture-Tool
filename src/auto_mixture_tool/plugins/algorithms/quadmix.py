@@ -7,6 +7,7 @@ Execution remains the responsibility of the selected executor.
 from __future__ import annotations
 
 from pathlib import Path
+import math
 from typing import Any
 
 from auto_mixture_tool.plugins.base import AlgorithmAdapter, CommandSpec
@@ -60,6 +61,8 @@ class QuadMixAlgorithm(AlgorithmAdapter):
             nodes = int(config["algorithm_nodes"])
             if nodes <= 0:
                 raise ValueError("quadmix algorithm_nodes must be positive or auto")
+            if nodes > 1 and config.get("seed") is None:
+                raise ValueError("multi-node quadmix requires a fixed seed")
             args.extend(["--distributed-nodes", str(nodes)])
         if config.get("seed") is not None:
             args.extend(["--seed", str(int(config["seed"]))])
@@ -82,6 +85,8 @@ class QuadMixAlgorithm(AlgorithmAdapter):
             if config.get(key) is None:
                 continue
             value = converter(config[key])
+            if key == "coordination_timeout" and (not math.isfinite(value) or value <= 0):
+                raise ValueError("quadmix coordination_timeout must be finite and positive")
             if value < minimum:
                 raise ValueError(f"quadmix {key} must be >= {minimum}")
             args.extend([flag, str(value)])

@@ -37,6 +37,8 @@ try:
     import quadmix
 except ImportError:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'src'))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from nanochat_mid_compare.distributed_runtime import resolve_node_identity
 from quadmix import QuaDMixConfig
 from quadmix.pipeline.real_pipeline import QuaDMixPipeline
 from quadmix.data.metadata_manager import ShardMetadataManager
@@ -455,9 +457,7 @@ def create_proxy_runner(config, args, output_dir, metadata_manager):
     return runner
 
 
-def main():
-    args = build_parser().parse_args()
-
+def run_pipeline(args, distributed_coordinator=None):
     if args.quick:
         n_exp, n_search, top_k = 200, 2000, args.top_k
     elif args.full:
@@ -466,6 +466,12 @@ def main():
         n_exp = args.num_experiments or 500
         n_search = args.num_search or 5000
         top_k = args.top_k
+
+    if distributed_coordinator is not None:
+        if args.seed is None:
+            raise ValueError("跨节点代理实验必须配置固定 seed")
+        if n_exp < distributed_coordinator.num_nodes:
+            raise ValueError("num_experiments必须不少于节点数")
 
     output_dir = args.output or os.path.join(
         QUADMIX_DIR, f"result/quadmix_{time.strftime('%Y%m%d_%H%M%S')}"
@@ -538,23 +544,6 @@ def main():
     pipeline = QuaDMixPipeline(config)
     proxy_runner = create_proxy_runner(config, args, output_dir, metadata_manager)
 
-    num_nodes = args.distributed_nodes or int(os.environ.get("MA_NUM_HOSTS", "1"))
-    node_rank = args.node_rank
-    if node_rank is None:
-        node_rank = int(os.environ.get("VC_TASK_INDEX", "0"))
-    distributed_coordinator = None
-    if num_nodes > 1:
-        from quadmix.pipeline.distributed_proxy import DistributedProxyCoordinator
-
-        coordination_uri = args.coordination_uri or os.environ.get("AMT_RUN_OBS_URI", "")
-        distributed_coordinator = DistributedProxyCoordinator(
-            coordination_uri,
-            node_rank,
-            num_nodes,
-            timeout_seconds=args.coordination_timeout,
-            backend=os.environ.get("AMT_OBS_BACKEND", "auto"),
-        )
-
     print(f"\n[Setup] Proxy runner: {n_exp} experiments, "
          f"{args.tiny_steps} steps each, "
          f"val={args.val_set}"
@@ -582,6 +571,22 @@ def main():
         distributed_coordinator=distributed_coordinator,
     )
     return 0
+
+
+def main():
+    args = build_parser().parse_args()
+    num_nodes, node_rank = resolve_node_identity(nodes=args.distributed_nodes, rank=args.node_rank)
+    if num_nodes == 1:
+        return run_pipeline(args)
+
+    from quadmix.pipeline.distributed_proxy import DistributedProxyCoordinator
+    coordinator = DistributedProxyCoordinator(
+        args.coordination_uri or os.environ.get("AMT_RUN_OBS_URI", ""),
+        node_rank, num_nodes, timeout_seconds=args.coordination_timeout,
+        backend=os.environ.get("AMT_OBS_BACKEND", "auto"),
+    )
+    with coordinator.failure_guard():
+        return run_pipeline(args, coordinator)
 
 
 if __name__ == "__main__":

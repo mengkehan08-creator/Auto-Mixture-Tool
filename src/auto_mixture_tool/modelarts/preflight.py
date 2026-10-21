@@ -41,3 +41,6 @@ def check_mounted_assets(config, stage, inputs=Path('/home/ma-user/modelarts/inp
             errors.append(f'目录缺失或为空：{path}')
     if errors:
         raise ValueError('离线挂载检查失败，请补齐 OBS 资源后重新提交：\n- ' + '\n- '.join(errors))
+    if stage == 'training':
+        from nanochat_mid_compare.distributed_runtime import validate_framework
+        validate_framework(repo)

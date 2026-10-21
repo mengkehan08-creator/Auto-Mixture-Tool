@@ -1,376 +1,455 @@
-# Auto-Mixture-Tool — 可插拔的数据配比工具平台
+# Auto-Mixture-Tool
 
-**从安装到使用请先阅读：[完整使用 Wiki](docs/WIKI.md)。** 包含代码下载、开发环境部署、OBS 资源、IAM 认证、Jupyter 界面访问、四步配置、作业管理、阶段重试和结果分析。
+数据配比、小规模训练验证与结果对比工具。通过网页配置 QuaDMix、自定义配比或随机基线，在华为云 ModelArts 上执行配比、NanoChat 训练和汇总评测。
 
-当前 UI 为每项策略创建独立配比与训练作业，全部训练成功后汇总评测。
-[两作业流程](docs/TWO_JOB_UI_WORKFLOW.md) 与 [早期展示界面说明](docs/OFFLINE_STRATEGIES_AND_UI.md) 为历史资料，当前操作以 Wiki 和实际界面为准。
+本仓库包含当前已完成的多节点适配：**一次 NanoChat 训练作业可跨多个节点组成同一个分布式训练组**；QuaDMix 代理实验则在同一配比作业内按节点分配实验。当前 Web 流程中，各策略分别创建配比和训练作业，全部必需训练成功后创建汇总评测作业。
 
-> **⚠️ Disclaimer**: 本仓库是 QuaDMix 论文的个人 clean-room 实现，并非字节官方发布，仅供教育与研究使用。
->
-> **Paper**: Fengze Liu, Weidong Zhou, Binbin Liu, et al. (ByteDance, 2025)
-> [arXiv:2504.16511v2](https://arxiv.org/abs/2504.16511)
+**仓库地址：** [mengkehan08-creator/Auto-Mixture-Tool](https://github.com/mengkehan08-creator/Auto-Mixture-Tool)。本仓库为公开仓库，可直接克隆。
 
-本项目包含**两部分**，自上而下协同工作：
+## 1. 版本与运行边界
 
-1. **原 QuadMix 算法（`src/quadmix/`）** —— 从大规模无标签语料中为 LLM 预训练挑选高质量、领域均衡的子集。它通过约 3000 次代理实验（每次训练一个 ~1M 参数模型）学习每域采样参数，再用 LightGBM 回归预测最优配比。详见下方「Algorithm Pipeline」与「Custom Datasets」等章节。
-2. **工具化可插拔平台层（`src/auto_mixture_tool/` + `src/quadmix_platform/`）** —— 把「数据校验 → 统一格式 → 配比算法 → 训练 → 验证 → 结果分析」整条流程模块化，使**算法 / 训练器 / 验证器 / 执行器均可替换**。这是本仓库相对原 QuadMix 的核心扩展。
+| 组件 | 本次分析及适配使用的版本 | 部署方式 |
+| --- | --- | --- |
+| QuaDMix | [liujin99/quadmix](https://github.com/liujin99/quadmix)，`refactor/structure`，`2591a6d5e215a62e17f0a1769dcd769ca69f3c1a` | 算法及适配代码已在本仓库 `src/quadmix/` 中，运行本工具无需另装 QuaDMix 仓库 |
+| NanoChat NPU | [liujin99/nanochat-npu](https://github.com/liujin99/nanochat-npu)，`dev-data-mix`，`6e5baa26317defa669c08e329ee819fff5908c40` | 作为独立框架代码上传 OBS，训练和评测使用同一版本 |
+| Climb / Climb-MA | [liujin99/climbmix](https://github.com/liujin99/climbmix) 与已跑通的 Climb-MA 启动方式 | 用于参考拓扑解析、全局数据分片、训练与评测衔接；运行本工具不要求额外启动 Climb |
 
-> 想直接用平台（不关心内部算法）？跳到 [「工具化平台：快速使用」](#工具化平台快速使用)。
-> 平台设计、插件编写、端到端示例的完整说明见 [`docs/AUTO_MIXTURE_TOOL.md`](docs/AUTO_MIXTURE_TOOL.md)；架构图见 [`docs/QuadMix-工具化重构模块框架图-最新.pptx`](docs/QuadMix-工具化重构模块框架图-最新.pptx)。
+配置支持 **1～16 节点，每节点固定 8 张 NPU**。截至 2026-10-21，用户已确认修复后的云端版本跑通 **2、3、4 节点训练**，其中 3 节点完成了 5 步短训及正式预算训练；这不代表其他规模或独立评测均已验收。本地另有 CPU/Gloo 数值测试、脚本执行测试和前端构建验证。
 
----
+当前网页和提交脚本默认使用以下已验证的 OBS 副本，运行依赖中的 `code_dir` 与工具代码地址保持一致：
 
-## 工具化平台：快速使用
+| 资源 | 默认 OBS 地址 |
+| --- | --- |
+| 工具代码 | `obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/releases/amt-3node-20261020/Auto-Mixture-Tool/` |
+| NanoChat 框架 | `obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/frameworks/nanochat-npu-global-rg-20261016-v2/` |
 
-平台通过一个运行时注册中心按 ID 装配数据集、算法、训练框架、评测集和执行后端。当前正式开放的组件：
+此前的 batch 参数传递、全局行组分片、OBS 目录层级和节点身份修复已整合到项目运行代码。已核对的旧加载器可由训练入口在内存中适配，挂载源码保持只读；新实验无需再运行历史修复脚本。整合范围与校验方式见 [多节点说明](docs/SCALING_MODELARTS_NODES.md#2026-10-21-修复整合)。
 
-| 模块 | 配置字段 | 当前 `id` |
-|------|------|------|
-| 数据集校验与标准化 | `dataset_id` | `stem-json-parquet`（STEM JSON 过滤转 Parquet）/ `quadmix`（原生直读） |
-| 配比算法 | `algorithm_id` | `quadmix` |
-| 训练框架 | `trainer_id` | `nanochat` |
-| 评测集/评测方法 | `evaluator_id` | `stem` |
-| 执行后端 | `executor_id` | `local` / `hpc-cluster` |
+本工具的网页和 API 是控制面，可以部署在 ModelArts Notebook 或可访问云端资源的 Linux 主机。NPU 训练由 ModelArts 作业容器执行，运行网页不需要在控制面安装 `torch_npu`。
 
-安装与两条入口（API + YAML 配置文件运行）：
+### 当前支持的 ModelArts 提交接口
 
-```bash
-pip install -e .                 # auto-mixture；quadmix-platform 是兼容别名
+现有 Web 提交器使用 `modelarts_training_job.py` 定义的 `kind / metadata / algorithm / spec` 请求体，通过 `Authorization` 和 `region` 请求头访问已适配的 ModelArts 网关。可复用你已经跑通 Climb-MA 的镜像、资源池和网关参数。
 
-# 1) 用 YAML 配置跑一条完整实验（校验→配比→训练→验证→分析）
-auto-mixture run examples/configs/demo_pipeline.yaml
+`iam_token_provider.py` 的自动取 Token 逻辑面向现有网关的 IAM JWT 服务。华为云标准 API 的 Token 认证使用 `X-Auth-Token`，不能仅替换 URL 就认定 Web 自动提交可用。没有兼容网关时，可由管理员基于本工具生成的作业配置使用控制台/API Explorer 创建作业，或者先适配提交与查询鉴权；参见华为云官方 [创建训练作业 API](https://support.huaweicloud.com/api-modelarts/CreateTrainingJob.html) 与 [使用 API 创建训练作业](https://support.huaweicloud.com/develop-modelarts/develop-modelarts-0139.html)。
 
-# 2) 启动 HTTP API（组件目录/数据集校验/任务提交/查询）
-auto-mixture serve --host 127.0.0.1 --port 8080
-```
+## 2. 部署前准备
 
-当前 STEM 生产数据使用 `stem-json-parquet` 插件：源 JSON/JSONL 先按算法规则过滤并提取 `domain` 与五个质量分，再写入 Parquet 并二次校验。源文件不覆盖。已经满足算法契约的数据仍可用 `dataset_id=quadmix` 原生直读。
+建议先复用已跑通 Climb-MA 的同一环境，再迁移工具代码和小规模验证链路。
 
-完整使用说明见 [`docs/USAGE.md`](docs/USAGE.md)；本地八卡与 HPC API 运行见 [`docs/RUN_MODES.md`](docs/RUN_MODES.md)；模块切换见 [`docs/SWITCHING_COMPONENTS.md`](docs/SWITCHING_COMPONENTS.md)；当前 STEM JSON 的字段映射、全量审查和过滤规则见 [`docs/DATASET_AUDIT.md`](docs/DATASET_AUDIT.md)。`CanonicalPipeline` 仍保留为 Python 契约与离线参照测试，不是第二套用户入口。
+| 需要准备 | 检查内容 |
+| --- | --- |
+| ModelArts 与 OBS 权限 | 创建、查询训练作业；读取代码、数据、模型和评测集；写入输出与节点协调目录 |
+| 运行资源 | 对应区域的资源池、每节点 8 卡 NPU 规格及足够节点配额 |
+| 训练镜像 | 已匹配 Ascend 驱动、CANN、PyTorch、`torch_npu` 的 Python 3.11 / aarch64 镜像 |
+| 控制面 | Linux、Python 3.11、Git；能访问作业网关并读取配置的 OBS 本地挂载 |
+| 网络 | 训练节点可相互访问，能进行 rendezvous、HCCL 通信与必要的检查点传输 |
+| 资产 | 原始候选 Parquet、两套 Tokenizer、基础 checkpoint、代理验证集、评测包与离线 wheel |
 
-ModelArts 完整流程任务使用仓库根目录的 `modelarts_training_job.py`；保留样例的 `update_parameter()`、`job_data`、`main()` 和 `requests.post()` 主体结构，只修改 `url`、`headers` 与 `job_data` 参数。算法与训练参数编辑 `examples/configs/modelarts_pipeline.yaml`。不要把填入真实Authorization的本地脚本提交到Git。
+在 ModelArts 中完成委托授权，自定义训练镜像按区域上传至 SWR；操作入口以当前控制台为准，参考官方 [创建训练作业指南](https://support.huaweicloud.com/develop-modelarts/develop-modelarts-0022.html)。多机资源与网络准备可参考官方 [多机多卡训练指南](https://support.huaweicloud.com/bestpractice-modelarts/modelarts_20_2040.html)，其中 GPU 示例不能直接替代本项目的 Ascend 镜像与启动脚本。
 
----
+本工具当前面向可信内部用户，没有独立的多用户登录和租户隔离。网页应经已认证的 Jupyter 端口代理或内部网关访问。
 
-## Algorithm Pipeline（原 QuadMix 算法）
+## 3. 下载代码并部署控制面
 
-```
-Raw Shards (parquet) → Preprocess → Metadata (domain labels + quality scores) in memory
-  ↓                                    (schema-driven: any domain/quality columns)
-Alg.1: Sample θ = (α₁…αₘ, β₁…βₘ)
-  ↓
-For each θ:
-  Eq.1: Merge quality signals with αₘ → ¯q
-  Eq.2: Rank ¯q within domain (subsample reference) → ¯r
-  Eq.3: S(¯r) = sigmoid(λ(ω-¯r))^η + ε → Bernoulli sample
-  Train 1M param proxy model → per-task val_loss (full-sequence)
-  (RegMix-style: permutation shuffle, warmup_fraction=4%)
-  ↓
-Per-task LightGBM: R(θ) → predicted loss per capability cluster
-  (Adaptive regime: conservative/moderate/aggressive based on n/p ratio)
-  (K-fold CV for R² estimation, R²≤0 tasks filtered)
-  ↓
-Search: Alg.1 × 5K → R²-weighted z-score → top-K average → θ*
-  ↓
-Eq.1+Eq.2(θ*.αₘ) → Eq.3(θ*.βₘ) → Sampled Dataset
-```
-
-## Project Structure（真实目录）
-
-```
-Auto-Mixture-Tool/
-├── configs/                       # YAML 数据集 schema 配置
-│   ├── schema_essential_web.yaml      # Essential-Web（示例数据集）
-│   └── schema_stem.yaml
-├── src/
-│   ├── quadmix/                   # 原 QuadMix 算法实现（保持独立，可被平台抽入）
-│   │   ├── core/                      # 核心算法（Eq.1-3、proxy model、域分类、质量打分）
-│   │   ├── pipeline/                  # Pipeline 编排（real_pipeline / optimizer / proxy_runner）
-│   │   ├── sampling/                  # Bernoulli 批量采样
-│   │   ├── data/                      # DatasetSchema（YAML 列映射）、多格式适配器
-│   │   └── npu/                       # DeviceManager（CPU/CUDA/NPU）
-│   ├── auto_mixture_tool/         # ★ 工具化平台层（新增）
-│   │   ├── cli.py                      # 命令行入口（serve / run <yaml>）
-│   │   ├── api/server.py              # FastAPI 服务
-│   │   ├── pipeline.py                # PipelineManager 编排器
-│   │   ├── config/                    # YAML 配置加载
-│   │   ├── data/validator.py          # 数据集校验（含可替换格式校验）
-│   │   ├── results/analysis.py        # 结果分析器
-│   │   ├── core/                      # ★ 规范契约实现（Phase 1+2）
-│   │   │   ├── dataset.py                 # UnifiedDataset / Sample（CSV/JSON/JSONL/Parquet 加载 + JSON 写出）
-│   │   │   ├── mixing.py                 # MixingAlgorithm 参照 + 命令桥接
-│   │   │   ├── quadmix_algorithm.py       # quadmix-core（抽入真实算法）
-│   │   │   ├── training.py                # Trainer 参照 + 命令桥接
-│   │   │   ├── nanochat_trainer.py        # nanochat-core（抽入真实训练）
-│   │   │   ├── evaluation.py              # Evaluator 参照 + 命令桥接
-│   │   │   ├── stem_evaluator.py          # stem-core（抽入真实评估）
-│   │   │   ├── registry.py                # 统一注册表（按 id 装配）
-│   │   │   └── pipeline.py                # CanonicalPipeline 端到端编排
-│   │   └── plugins/                   # 命令式 Adapter 插件（算法/训练/验证/执行/格式校验）
-│   └── quadmix_platform/          # 原平台抽象层
-│       ├── interfaces.py              # 四个核心接口 + 四个 Adapter + FormatValidatorAdapter
-│       ├── components.py              # local / hpc-cluster 执行器
-│       ├── service.py                 # 注册中心
-│       ├── registry.py                # ComponentRegistry
-│       └── api.py / cli.py            # 原入口（仍可用）
-├── scripts/
-│   ├── runners/                   # 原算法入口（run_essential_web_v1.py 等）
-│   ├── platform/                  # 平台插件调用的可执行脚本
-│   ├── preprocess/  validation_set/  analysis/   # 预处理 / 验证集 / 分析
-│   └── demo_run_quick.sh  demo_run_full.sh  demo_revalidate.sh  demo_reoptimize.sh  resample.sh
-├── nanochat_mid_compare/          # 下游中训练对比框架（QuadMix vs Random vs Quality）
-├── examples/                      # 平台示例（configs/demo_pipeline.yaml、platform/ 样例数据）
-├── openapi/                       # quadmix-platform.yaml（API 契约）
-├── docs/                          # 文档与架构图（含 AUTO_MIXTURE_TOOL.md、PPT）
-├── data/  result/  temp/          # 验证集（自动下载）/ 结果 / 中间数据
-└── tests/                         # 离线单测（含 CanonicalPipeline 端到端）
-```
-
-## Quick Start（原算法路径）
-
-### Virtual compute platform
-
-仓库内置 REST API 编排层，用于数据集校验与可切换的算法/训练器/验证器/执行器模块：
+以下命令在 ModelArts Notebook 的 JupyterLab Terminal 或 Linux 控制面主机执行。
 
 ```bash
-pip install -e .
-quadmix-platform serve --host 127.0.0.1 --port 8080
+cd /home/ma-user/work
+git clone https://github.com/mengkehan08-creator/Auto-Mixture-Tool.git
+cd Auto-Mixture-Tool
+git log -1 --oneline
+
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+export PYTHONPATH="$PWD:$PWD/src:${PYTHONPATH:-}"
+python -c "import fastapi, uvicorn, requests, yaml, numpy, pandas, pyarrow; print('UI dependencies OK')"
 ```
 
-打开 `http://127.0.0.1:8080/api/v1/health`。任务由 `executor_id` 指定的后端执行：dev 默认 `local`（本地子进程跑各阶段，需 `pip install -e .`），生产改 `hpc-cluster` 提交到 HPC 集群 API。完整接口与使用说明见
-[`docs/USAGE.md`](docs/USAGE.md)，集成指南与 API 契约见
-[`docs/PLATFORM_INTEGRATION_ZH.md`](docs/PLATFORM_INTEGRATION_ZH.md) 与
-[`openapi/quadmix-platform.yaml`](openapi/quadmix-platform.yaml)。
+公开仓库可通过 HTTPS 无需登录克隆。云环境无法访问 GitHub 时，在可联网机器制作代码包，再上传到 JupyterLab 解压。
 
-生产环境文件摆放、控制面/工作节点拆分、所需平台改动、上线步骤与验收清单见
-[`docs/FINAL_PLATFORM_DEPLOYMENT_ZH.md`](docs/FINAL_PLATFORM_DEPLOYMENT_ZH.md)。
+安装成功应输出 `UI dependencies OK`。仓库已包含构建后的前端，普通部署无需安装 Node.js。控制面完整离线安装步骤见 [部署 Wiki](docs/WIKI_DEPLOYMENT.md#deploy-install)。
 
-### Algorithm CLI（原 QuadMix 算法）
+## 4. 准备 OBS 资源
+
+下面统一使用 `obs://YOUR_BUCKET/amt/` 作为示例，必须替换成自己的真实桶和目录。仓库中的旧环境默认资源仅供已有环境复用，不能作为新账号拥有这些资源的依据。
+
+```text
+obs://YOUR_BUCKET/amt/
+├── releases/<版本>/Auto-Mixture-Tool/  # 当前工具代码
+├── frameworks/nanochat-npu/           # dev-data-mix 固定版本代码
+├── datasets/prepared/                 # 候选文本 Parquet
+├── models/nanochat-base/              # checkpoint 与 NanoChat Tokenizer
+├── tokenizers/gpt-neox/               # QuaDMix Tokenizer
+├── validation/proxy/                  # stem_v2_tokenized.pt
+├── validation/eval_bundle/            # CORE/STEM 评测资源
+├── wheels/                           # 与训练镜像匹配的离线 wheel
+└── runs/                             # 作业输出、模型和报告
+```
+
+### 4.1 下载指定 NanoChat 分支
+
+在可访问 GitHub 的 Linux 主机执行：
 
 ```bash
-# Install
-pip install -e .
-
-# Essential-Web demo (~1.5h, 8x NPU) — 使用示例数据集配置
-bash scripts/demo_run_quick.sh
-
-# Large-scale Essential-Web demo (~数h, 8x NPU, 500 shards)
-bash scripts/demo_run_full.sh
-
-# Custom dataset — 参考 configs/schema_essential_web.yaml 写自己的 YAML
-python scripts/runners/run_essential_web_v1.py \
-    --schema configs/schema_essential_web.yaml \
-    --preprocessed-dir temp/preprocessed \
-    --num-experiments 500 \
-    --num-search 5000 \
-    --block-size 2048 \
-    --val-set cap_v1 \
-    --search-mode r2_sigma_weighted \
-    --output result/my_run
-
-# Re-evaluate with new validation set (no proxy retraining)
-bash scripts/demo_revalidate.sh --result-dir result/xxx --val-set cap_v1
-
-# Re-optimize from existing losses
-bash scripts/demo_reoptimize.sh --result-dir result/xxx
-
-# Resample with optimal θ* on expanded data pool
-DATA_DIR=/path/to/data PARAMS_FILE=result/xxx/optimal_parameters.json \
-  bash scripts/resample.sh
+cd /home/ma-user/work
+git clone --branch dev-data-mix https://github.com/liujin99/nanochat-npu.git
+cd nanochat-npu
+git checkout --detach 6e5baa26317defa669c08e329ee819fff5908c40
+git rev-parse HEAD
 ```
 
-> **Note**: 默认验证集（`cap_v1`）首次运行会自动从
-> [HuggingFace](https://huggingface.co/datasets/liujin99/quadmix-cap-v1) 下载。
-> 其它验证集（`core_bmk_v6`、`openhermes` 等）也可经 `--val-set` 指定。
+将这个 checkout 的代码上传至 `frameworks/nanochat-npu/`。以后升级分支时重新执行兼容检查和短训练验收；不要让训练与评测使用不同版本。
 
-## Custom Datasets
+使用上述已验证的 NanoChat OBS 目录时可直接复用。旧备份加载器仅在 SHA-256 为 `2add94bfac910f44d24781347c4e7f7a4433768aef8f28c75b0b38798eecc298` 时启用项目内的全局分片兼容层；其他未知旧实现仍会在训练前拒绝。
 
-QuaDMix 通过 YAML schema 配置支持任意数据集。所有数据集（含 Essential-Web）都必须指定 `--schema`。参考 `configs/schema_essential_web.yaml`。
+### 4.2 输入数据格式
 
-### Your parquet must have:
+当前 Web 配比流程读取文本 Parquet。每个分片须至少包含以下字段，具体定义见 [数据 Schema](configs/schema_stem_quadmix_parquet.yaml)：
 
-| Column type | Required | dtype | Example |
-|---|---|---|---|
-| domain | ✓ | string or int | `category_name` (string) → auto-mapped to int 0..M-1 |
-| quality | ✓ (1+ cols) | float | `category_score`, `stem_relevance` |
-| text | ✓ | string | `content` |
-| char_count | optional | int | `doc_len` (if null → computed from text length) |
-| row_in_shard | optional | int | `row_in_shard` (if null → positional indexing) |
+| 字段 | 要求 |
+| --- | --- |
+| `domain` | 非空领域名称或符合 Schema 的编码 |
+| `text` | 非空字符串 |
+| `char_count` | 正整数 |
+| `stem_relevance`、`knowledge_value`、`notation_fidelity`、`rigor_coherence`、`noise_level` | 有限数值，不能为 NaN 或无穷大 |
 
-### Example: STEM dataset config
+格式示例见 [Parquet 示例生成脚本](examples/datasets/quadmix_parquet.py)。示例数据用于检查格式，不能作为正式算法有效性验证的数据集。
 
-```yaml
-# configs/schema_stem.yaml — actual config (copy and modify for your dataset)
-domain_col: category_name            # string column → auto int mapping via domain_names
-domain_names:                        # controls string→int mapping order (数学=0, 化学=1, ...)
-  - 数学
-  - 化学
-  - 生物学
-  - 物理
+网页会抽查各分片；云端采样/训练还会检查实际使用的数据。NanoChat 按全局 rank 分配 Parquet 行组，因此准备后的训练文件须为所有 rank 提供非空数据。仅把作业节点数调大，不会自动补足小数据集。
 
-quality_cols:                        # all default to higher_better=true
-  - stem_relevance                   #   (pre-processed: higher score = better quality)
-  - knowledge_value
-  - notation_fidelity
-  - rigor_coherence
-  - noise_level                      #   (pre-processed: higher score = less noise = better)
+### 4.3 基础模型和两套 Tokenizer
 
-quality_names:                       # display names in reports/figures (optional, defaults to col names)
-  - stem_relevance
-  - knowledge_value
-  - notation_fidelity
-  - rigor_coherence
-  - noise_level
+NanoChat 基础模型目录示例：
 
-text_col: text                       # document text column
-char_count_col: char_count_col       # pre-computed token proxy (null → compute from text)
-row_in_shard_col: source_record_idx  # explicit row indexing (null → positional)
+```text
+nanochat-base/
+├── base_checkpoints/
+│   └── d24/
+│       ├── model_XXXXXX.pt
+│       └── meta_XXXXXX.json
+└── tokenizer/
+    ├── tokenizer.pkl
+    └── token_bytes.pt
 ```
 
-对于质量列中分数越低代表质量越高的情况，使用 dict 语法：
+`d24` 必须是模型目录中真实存在的标签，权重与元数据应成对。模型结构、序列长度和默认全局 batch 以 checkpoint 元数据为准。
 
-```yaml
-quality_cols:
-  - stem_relevance                   # higher_better=true (default)
-  - name: noise_level                # override: lower score = better quality
-    higher_better: false
+QuaDMix 的 GPT-NeoX Tokenizer 目录须包含 `tokenizer.json` 等文件。它与 NanoChat 基础模型的 Tokenizer 是不同资源；`stem_v2_tokenized.pt` 是代理验证数据，不能替代任何一套 Tokenizer。
+
+### 4.4 评测包与离线依赖
+
+评测包须保留所选任务引用的所有文件，例如：
+
+```text
+eval_bundle/
+├── core.yaml
+├── eval_meta_data.csv
+├── eval_data/
+└── eval_stem/
+    ├── eval_meta_data.csv
+    └── eval_data/
+        ├── gpqa_diamond.jsonl
+        ├── gsm8k.jsonl
+        ├── math500.jsonl
+        └── mmlu_stem.jsonl
 ```
 
-### Then run:
+真实任务依赖以固定版本 NanoChat 的定义为准。自定义任务包见 [评测包说明](docs/OBS_EVALUATION_PACKAGES.md)。空文件不能代替评测数据。
+
+当前默认云端 command 使用 Python 3.11 / aarch64，离线资源目录至少要提供以下两个指定文件：
+
+```text
+lightgbm-4.6.0-py3-none-manylinux2014_aarch64.whl
+rustbpe-0.1.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+```
+
+其他依赖应已在训练镜像中：NumPy、Pandas、PyArrow、SciPy、scikit-learn、joblib、matplotlib、tqdm、psutil、Jinja2、PyTorch、`torch_npu`、Transformers、tokenizers、datasets、tiktoken、filelock、requests、PyYAML。完整运行检查以 [modelarts_runtime_check.py](scripts/modelarts_runtime_check.py) 为准。
+
+这两个 wheel 不是完整离线 Python 环境。不要单独升级镜像中的 PyTorch、`torch_npu` 或 CANN；沿用已经验收的配套版本。
+
+## 5. 上传同一版本的工具代码
+
+控制面代码与云作业读取的 OBS 代码必须是同一版本。在已克隆本仓库的控制面执行：
+
+页面中的默认地址代表此前已验证的云端副本，不会因本地代码修改自动更新。发布本次整合代码时，应使用新的版本目录，并在网页的工具地址和运行依赖 `code_dir` 中同时选择它；复制或重试旧实验时核对保存的地址。
 
 ```bash
-python scripts/runners/run_essential_web_v1.py \
-    --schema configs/schema_stem.yaml \
-    --preprocessed-dir /path/to/stem/shards \
-    --output result/stem_run
+cd /home/ma-user/work/Auto-Mixture-Tool
+RELEASE_ID=$(git rev-parse --short HEAD)
+RELEASE_DIR="/home/ma-user/work/amt-release-$RELEASE_ID"
+mkdir -p "$RELEASE_DIR"
+git archive --format=tar --prefix=Auto-Mixture-Tool/ \
+  -o "$RELEASE_DIR/Auto-Mixture-Tool.tar" HEAD
+tar -xf "$RELEASE_DIR/Auto-Mixture-Tool.tar" -C "$RELEASE_DIR"
 ```
 
-详见 `docs/DATASET_SCHEMA_DESIGN.md`。
+用 OBS 控制台或现有 OBS 上传工具，把解压后 `Auto-Mixture-Tool/` 中的文件上传到：
 
-## Validation Sets
-
-| 验证集 | 来源 | 特点 | 默认 |
-|--------|------|------|------|
-| **cap_v1** | 外部训练数据(70%) + benchmark train(30%) | 能力对齐，绕过 C2 假设，5 clusters × 8K = 40K samples | ✓ |
-| **stem_v1** | 4 STEM benchmarks (GSM8K/MMLU-22STEM/ARC-Easy/ARC-Challenge) | 与下游直接对应 (arc_easy/arc_challenge/mmlu_stem/gpqa_diamond/gsm8k_cot/math_cot_500)，full-sequence loss，~10.5K samples | |
-| core_bmk_v6 | 21 个 CORE benchmark | Benchmark 对齐，per-task loss，~31K samples | |
-| openhermes | OpenHermes-2.5-1M | SFT 对话格式，通用质量信号，10K samples | |
-
-## Validation Status
-
-**已验证环境：**
-
-| 配置项 | 规格 |
-|-------|------|
-| NPU | 8x Ascend 910B3, 64GB VRAM each |
-| 内存 | 1500 GB |
-| CPU | ARM 192 vCPUs |
-| 验证脚本 | `demo_run_quick.sh` (8 experiments) / `demo_run_full.sh` (500 experiments) |
-| 验证结果 | ✓ RegMix 风格训练 + CAP v1 验证集 + per-task LightGBM |
-
-验证日志：
-- 并行 tokenize (多 worker + 多线程) 正常执行
-- 动态任务队列调度正常（8 NPU 并行）
-- Per-task val_loss 计算正常（5 capability clusters）
-- Permutation shuffle 训练循环正常（无放回 epoch 遍历）
-- Per-task LightGBM 回归 + R²-weighted 搜索正常
-- NPU HBM 显式释放 — 实验间 `gc.collect()` + `torch.npu.empty_cache()`
-- Optimizer inf/nan 过滤 — 防止非有限 val_loss 污染 LightGBM
-
-## Demo Scripts
-
-| 脚本 | 设备 | 数据量 | 实验 | 搜索点 | 步数 | 耗时 | 用途 |
-|------|------|--------|------|--------|------|------|------|
-| `demo_run_quick.sh` | 8x NPU | 20 shards | 8 | 1,000 | 5,000 | ~1.5h | **快速测试** |
-| `demo_run_full.sh` | 8x NPU | 500 shards | 500 | 5,000 | 5,000 | ~数h | 大规模验证 |
-| `demo_revalidate.sh` | NPU | — | — | 100,000 | — | ~30min | 换验证集重评估 |
-| `demo_reoptimize.sh` | CPU | — | — | 100,000 | — | ~5min | 用已有 loss 重优化 |
-| `resample.sh` | CPU | 全量 | — | — | — | ~1h | θ* 重采样 |
-
-所有训练 demo 使用 CAP v1 验证集（40K samples）、warmup_fraction=4%、`configs/schema_essential_web.yaml` schema（22 域）。
-
-## Architecture Highlights
-
-### Multi-Shard Scalability
-|- **Schema-driven**: YAML config maps any parquet columns to domain/quality/text
-|- **Metadata in memory**: only domain labels + quality scores (~12 GB for 275M docs, Essential-Web)
-|- **Text on demand**: per-shard parquet, loaded only for selected documents
-|- **mmap token cache**: `np.load(path, mmap_mode='r')` — pages loaded lazily, not full file
-|- **Multi-format adapters**: JSON, JSONL, CSV, Parquet, plain text via unified registry
-
-### Multi-NPU Parallelism
-|- **Dynamic task queue**: Workers fetch tasks on-demand, no batch boundaries
-|- **Auto load-balancing**: Fast workers naturally do more experiments
-|- **CPU-NPU overlap**: Tokenize thread runs independently, ahead of training
-|- **~8x speedup**: 3000 experiments reduced from ~100h to ~15h with 8 NPUs
-
-### Per-Task LightGBM
-|- **5 capability clusters**: world_knowledge, symbol_logic, language_understanding, reading_comprehension, common_sense_reasoning
-|- **Adaptive regime**: conservative (n/p<3) / moderate (3-8) / aggressive (≥8) hyperparameters
-|- **K-fold CV**: Per-task R² estimation, R²≤0 tasks auto-filtered
-|- **R²-weighted search**: High-R² tasks contribute more to search objective
-
-### Incremental Workflow
-|- **Re-validate**: Swap validation set without retraining proxy models
-|- **Re-optimize**: Re-run LightGBM + search with existing losses
-|- **Resample**: Apply θ* to expanded data pool without re-running pipeline
-
-### Directory Layout
-| Path | Content | Persistence |
-|------|---------|-------------|
-| `result/<experiment>/` | optimal_parameters.json, sampled_dataset.parquet, report, figures | Permanent |
-| `temp/preprocessed/` | domain labels + quality scores per shard (schema-driven) | Keep until data changes |
-| `temp/token_cache/` | mmap-able .npy files (one per shard) | Auto-regenerated |
-
-### Data Flow
-```
-Raw: 3291 shards × 246 MB = ~808 GB total (Essential-Web, ~260B tokens)
-  │                                       (or any dataset with YAML schema)
-  ▼ [preprocess: domain + quality signals, schema-driven]
-Preprocessed: 1 shard → 1 parquet (~180 MB each)
-  │
-  ▼ [ShardMetadataManager: in-memory metadata, schema-driven]
-In-memory: domain(275M int64) + quality_scores(275M×N float64)
-  │
-  ▼ [EssentialWebProxyRunner: per-experiment, schema-driven column names]
-Token Cache: shard_{idx}_bs{bs}.npz (mmap-mode, int32 + row_index)
-  │
-  ▼ [Per-task LightGBM + R²-weighted search]
-Final: optimal_parameters.json + sampled_dataset.parquet
+```text
+obs://YOUR_BUCKET/amt/releases/<RELEASE_ID>/Auto-Mixture-Tool/
 ```
 
-## Output
+该目录下直接包含 `pyproject.toml`、`src/`、`nanochat_mid_compare/`、`scripts/`、`configs/`。保留末级目录名称 `Auto-Mixture-Tool`，因为默认启动命令按此名称查找下载后的代码目录。
 
-```
-result/<experiment_name>/
-├── optimal_parameters.json        # Optimal θ (α_m + β_m)
-├── pipeline_summary.json          # Config + metrics + statistics
-├── sampled_dataset.parquet        # Final optimally sampled dataset
-├── quadmix_report.md              # Comparison report (with per-task R²)
-├── fig1_domain_distribution.png   # Original vs optimal domain distribution
-├── fig2_quality_weights.png       # Quality signal weights
-└── proxy_experiments/             # Per-experiment results
-    ├── exp_0000/
-    │   ├── meta.json                # Full parameters + per-task val_loss
-    │   ├── model.pt                 # Saved proxy model weights (for re-validation)
-    │   ├── selected_indices.npy     # Selected document indices
-    │   └── checkpoint_trajectory.json  # val_loss at checkpoint intervals
-    └── exp_0001/ ...
+不要只上传压缩包，也不要套成两层同名目录。`git archive HEAD` 仅打包已提交的代码，不包含未提交修改。运行记录、虚拟环境与真实 IAM 认证文件不属于发布代码。
+
+## 6. 配置控制面的 OBS 映射和认证
+
+### 6.1 配置真实挂载
+
+先由环境管理员将 OBS 资源映射为控制面可读取的目录。假设实际映射为：
+
+```text
+obs://YOUR_BUCKET/amt/ → /mnt/amt/
 ```
 
-## Downstream Evaluation
-
-`nanochat_mid_compare/` 提供通过中训练对比 QuadMix 与基线的框架：
+在启动后端的终端设置：
 
 ```bash
-# QuadMix vs Random vs Quality(dclm) vs Quality(fineweb_edu)
-QUADMIX_SAMPLED_DATA=result/xxx/sampled_dataset.parquet \
-PREPROCESSED_DATA_DIR=temp/preprocessed \
-bash nanochat_mid_compare/run_experiment.sh
+export AMT_OBS_MOUNT_ROOT=/mnt/amt
+export AMT_OBS_MOUNT_PREFIX=obs://YOUR_BUCKET/amt/
+ls -ld /mnt/amt/datasets/prepared
+ls -ld /mnt/amt/frameworks/nanochat-npu
+ls -ld /mnt/amt/validation/eval_bundle
 ```
 
-Baselines are token-budget aligned (same total tokens as QuadMix output) and share the same base model checkpoint.
+这些环境变量只声明 URI 与本地目录的对应关系，**不会自动挂载 OBS**。后端需要这份映射进行输入和评测资源校验，并读取结果报告。实际资源不在映射范围时，应调整真实挂载和对应配置。
 
-## License
+### 6.2 使用现有网关的自动 IAM 认证
 
-Apache 2.0
+已有兼容网关时，将认证模板复制到仓库外：
+
+```bash
+mkdir -p /home/ma-user/work/private_auth
+chmod 700 /home/ma-user/work/private_auth
+cp -n /home/ma-user/work/Auto-Mixture-Tool/iam_token_provider.py \
+  /home/ma-user/work/private_auth/iam_token_provider.py
+chmod 600 /home/ma-user/work/private_auth/iam_token_provider.py
+export AMT_IAM_PROVIDER=/home/ma-user/work/private_auth/iam_token_provider.py
+```
+
+在私有副本中填写管理员提供的 `account`、`secret`、`project`、`enterprise`。网关不是默认地址时，应配置真实 `modelarts_endpoint` 限制认证目标；需要内部 CA 时设置 `ca_bundle`。保留证书验证。
+
+这份文件只放在控制面，不上传 GitHub、OBS 或训练镜像。后端在提交作业时取 Token，不要求把长期凭据写进页面。完整参数见 [IAM 认证说明](docs/IAM_AUTH.md)。
+
+也可不启用自动 IAM：在启动终端执行 `unset AMT_IAM_PROVIDER`，然后在“任务配置”填入网关要求的有效 Authorization。此方式的 Token 更新由使用者负责。
+
+## 7. 启动网页和 API
+
+在已经设置好挂载与认证变量的同一个终端执行：
+
+```bash
+cd /home/ma-user/work/Auto-Mixture-Tool
+source .venv/bin/activate
+export PYTHONPATH="$PWD:$PWD/src:${PYTHONPATH:-}"
+python -m auto_mixture_tool.cli --workspace "$PWD" \
+  serve --host 0.0.0.0 --port 8080
+```
+
+保持服务运行。另开终端验收：
+
+```bash
+curl --noproxy '*' http://127.0.0.1:8080/api/v1/health
+curl --noproxy '*' -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/ui
+```
+
+预期分别为健康 JSON 和 HTTP `200`。
+
+如果 JupyterLab 地址为 `https://<域名>/<实例前缀>/lab`，并且已启用端口代理，打开：
+
+```text
+https://<域名>/<实例前缀>/proxy/8080/ui
+```
+
+保留实际域名和实例前缀。直接在自己电脑打开 `127.0.0.1` 访问的是自己电脑，不能访问远程 Notebook；不能通过双击静态 HTML 替代运行后端。
+
+后端采用单进程管理一个工作区。关闭网页不会停止云作业；控制面实例休眠或后端退出会影响监控和后续作业提交。后台运行及升级方法见 [部署 Wiki](docs/WIKI_DEPLOYMENT.md#deploy-start)。
+
+## 8. 在网页创建首个实验
+
+按页面四步依次填写。
+
+### 8.1 配比策略
+
+1. 填写真实输入目录，例如 `obs://YOUR_BUCKET/amt/datasets/prepared/`。
+2. 填写实验输出根目录，例如 `obs://YOUR_BUCKET/amt/runs/`。
+3. 首次链路验证可以只保留随机策略，以便先确认数据准备与多节点训练能够衔接；采样作业用 1 节点。
+4. 测试 QuaDMix 时，将代理实验数设置为至少 `节点数 × 8`，代理步数可用 15；正式算法验证应增加实验量并查看回归与验证表现。
+5. 等待输入校验通过。默认抽查不是全文数据质量保证。
+
+### 8.2 训练配置
+
+填写 NanoChat 框架 OBS 目录、基础模型目录与真实模型标签。所有策略共用相同基础权重、Tokenizer、训练预算和评测协议，避免比较口径变化。
+
+以基础 checkpoint 的序列长度为 **2048** 为前提，2 节点短训练示例：
+
+| 参数 | 示例 |
+| --- | ---: |
+| 训练节点数 | 2 |
+| 每节点 NPU 数 | 8 |
+| 单卡 batch | 1 |
+| 全局 batch Token 数 | 524288 |
+| 训练 Token 预算 | 10485760 |
+| 预计优化步数 | 20 |
+| `eval_every` / `core_metric_every` | -1 / -1 |
+
+这组参数用于检查链路。使用不同序列长度的模型前，按第 9 节重新计算。增加节点数不会降低模型每张卡所需的基础显存。
+
+当前流程加载基础模型权重、默认冷启动优化器。旧优化器状态可能按原 world size 分片，改变节点数时不能直接恢复。
+
+### 8.3 评测配置
+
+选择已准备好的内置任务和评测包目录。初次验收可选择少量任务并使用页面提供的样本上限，随后对同一 checkpoint 使用完整任务协议验收。
+
+评测节点数独立于训练节点数。训练完成后的模型通过 INPUT 挂载交给独立评测作业；不要把评测作业自己的 OUTPUT 路径当成已训练模型来源。
+
+### 8.4 任务配置与提交
+
+将资源全部改成第 4、5 节的实际 OBS 地址，然后填写以下环境参数：
+
+| 字段 | 获取方式 |
+| --- | --- |
+| 作业创建 API 地址、region | 已跑通环境提供的兼容网关与区域 |
+| Authorization | 自动 IAM 获取，或手动填写当前有效值 |
+| `workspace_id` / 工作空间 | ModelArts 环境中的真实工作空间 |
+| `image_url` / `image_repo_id` | 已准备好的训练镜像和镜像仓库信息 |
+| `flavor_id` | 每节点 8 张 NPU 的规格 |
+| `pool_id` | 可分配所需节点数的资源池 |
+| 工具代码、GPT-NeoX Tokenizer、代理验证集、评测包、离线 wheel | 相应 OBS 目录 |
+
+默认命令已经负责离线环境设置、依赖检查与阶段启动，优先保留默认命令。检查预览中的节点数、输入挂载和输出目录，再点击提交。
+
+在“实验作业”查看各策略阶段、云作业 ID、日志及结果。配比成功后自动创建对应训练，全部必需训练成功后进行汇总评测。关闭页面不取消作业。
+
+网页流程无需直接执行根目录 `modelarts_training_job.py`。该脚本用于另一路完整流水线提交样例，节点数为 2～16，并需同步配置 `examples/configs/modelarts_pipeline.yaml` 的全部资源。不要同时执行它和网页提交同一实验。
+
+## 9. 多节点训练的计算与检查
+
+### 9.1 拓扑和单作业执行
+
+```text
+一个 ModelArts 训练作业
+  ├── 节点 0：torchrun → rank 0..7
+  ├── 节点 1：torchrun → rank 8..15
+  └── ……
+       所有 rank 属于同一个训练组，共同更新同一个模型
+```
+
+平台应提供 `MA_NUM_HOSTS`、节点编号 `VC_TASK_INDEX` 和节点列表 `VC_WORKER_HOSTS`；也支持显式 `NNODES / NODE_RANK / MASTER_ADDR / MASTER_PORT` 及已适配的 worker 主机名回退。环境变量有冲突或缺失时会失败。
+
+所有节点使用同一个唯一 `AMT_RUN_ID`。默认训练 rendezvous 端口为 29500，同作业评测和检查点 relay 使用后续端口；HCCL 还需环境规定的通信网络。不要将所有节点的 `NODE_RANK` 都设置为 0。
+
+QuaDMix 是代理实验并行：各节点运行不同全局编号的实验，由协调流程汇总。它与 NanoChat 的同模型多节点训练采用不同并行方式。
+两者共用节点身份解析，支持上述节点数、节点编号及 worker 主机名回退；QuaDMix
+通过 OBS 协调，不要求配置训练用的 `MASTER_ADDR`。使用 `obsutil` 时，工具会为
+目录上传和下载自动添加 `-flat`，保持模型和采样数据目录层级一致。
+
+### 9.2 全局 batch 必须符合拓扑
+
+```text
+world_size = 节点数 × 8
+micro_tokens = world_size × device_batch_size × sequence_len
+梯度累积次数 = total_batch_size / micro_tokens
+优化步数 = ceil(token_budget / total_batch_size)
+actual_tokens = 优化步数 × total_batch_size
+```
+
+全局 batch 必须是 `micro_tokens` 的整数倍。页面默认“自动推荐”：读取挂载基础 checkpoint 的元数据，以基础 batch 为下限，向上选择所有策略节点配置都能整除的最近共同值。页面展示最终 batch、各拓扑的梯度累积次数、预计步数和实际 Token 数；更改节点数或预算后会重新计算。
+
+切换“手动固定”可保留指定数值，不兼容时页面提示并阻止提交，后端也会在创建云端作业前校验。模型元数据不可读取时需先修正挂载或模型标签。复制旧实验会将原有显式 batch 保留为手动固定；没有显式值的实验使用自动推荐。预算本身无需是 `micro_tokens` 的倍数，会按最终 batch 向上取整到完整优化步。
+
+API 使用 `training.batch_size_mode: auto|fixed`；手动模式需提供 `training.total_batch_size`。未传模式时，有显式 batch 按手动固定处理，否则按自动推荐处理。计算结果单独保存在实验的 `training_plan`，已解析的 batch 会明确传入云端。直接运行底层训练脚本且未设置 `TRAIN_TOTAL_BATCH_SIZE` 时，仍继承检查点并执行启动校验。
+
+在序列长度 2048、单卡 batch 1 时：
+
+| 节点配置 | 自动推荐值（基础 batch 1048576） | 梯度累积次数 |
+| --- | ---: | --- |
+| 1 / 2 / 4 节点 | 1048576 | 分别为 64 / 32 / 16 次 |
+| 单个 3 节点作业 | 1081344 | 22 次 |
+| 同一实验对比 1 / 2 / 3 / 4 节点 | 1179648 | 分别为 72 / 36 / 24 / 18 次 |
+
+三节点推荐 batch 1081344 时，预算 5406720 对应 5 步；预算 401395843 对应 372 步，实际训练 402259968 Token。手动固定 1572864 也可用于上述四种拓扑的共同对比。
+
+比较节点扩缩容时，还要固定基础权重、优化器初始化、数据打包方式和评测协议。检查 `training_record.json` 的实际步数与 `actual_tokens`，不要只比较页面请求的预算。
+
+### 9.3 输出不依赖共享 OUTPUT 目录
+
+运行布局区分只读基础模型/Tokenizer 和每节点可写目录。同作业内需要评测时，node 0 将明确 step 的 model/meta 传给其他节点，按作业身份和 SHA-256 校验后再启动评测。
+
+完整拓扑、协调、检查点与数据分片说明见 [SCALING_MODELARTS_NODES.md](docs/SCALING_MODELARTS_NODES.md)。
+
+## 10. 按顺序验收，再扩大规模
+
+1. **控制面验收：** `/api/v1/health` 与 `/ui` 可访问；输入数据、框架和评测包可通过本地映射读取。
+2. **单节点验收：** 用一项策略完成配比、10～20 步训练和少量评测，检查训练记录与模型发布。
+3. **两节点验收：** 完成 16-rank 短训练，确认各全局 rank 均有非空数据；参数、节点编号与协调目录一致。
+4. **四节点验收：** 在同一模型和兼容全局 batch 下完成 32-rank 短训练，检查 HCCL、HBM 释放及大文件同步。
+5. **评测一致性：** 对同一 checkpoint 比较 8/16/32-rank 的样本覆盖和指标，提前定义并核查合理容差。
+6. **正式实验：** 增加代理实验数、训练预算和完整评测任务；保留版本、镜像、模型、统计与报告。
+
+短训练只说明链路可执行，不足以证明 QuaDMix 优于随机或人工策略。
+
+### 本地回归测试
+
+开发主机安装测试依赖后执行：
+
+```bash
+python -m pip install pytest
+python -m pytest -q tests
+```
+
+要启用固定 NanoChat 版本的真实优化器 CPU/Gloo 数值测试，还需在独立测试环境安装兼容的 CPU PyTorch，并设置：
+
+```bash
+NANOCHAT_TEST_REPO=/path/to/nanochat-npu \
+python -m pytest -q tests/test_nanochat_training_runtime.py
+```
+
+未设置外部框架路径时跳过该项测试。不要用 CPU PyTorch 包覆盖 Ascend 训练镜像的 PyTorch。仓库根目录历史文件 `test_v4.2_implementation.py` 不符合 pytest 模块命名规则，完整回归使用 `pytest tests`。
+
+前端源码维护者执行：
+
+```bash
+cd ui_demo
+npm ci
+node --test --test-concurrency=1 src/*.test.mjs
+npm run build
+```
+
+2026-10-21 整合回归：后端 566 项测试及 20 项子测试、前端 91 项测试全部通过，包含固定版本优化器的 2/3 进程 CPU/Gloo 数值测试和三个训练启动脚本。前端已构建并同步到 API 静态目录；旧策略说明测试的文案断言也已与当前界面统一。此记录不表示真实 Ascend/ModelArts 作业已在本机运行。
+
+## 11. 查看结果与排查问题
+
+训练计划 `training_plan_<model_tag>.json`、模型目录的 `training_record.json` 和 `models_manifest.json` 记录实际训练量、step、模型摘要和运行身份。结果页面会显示已有记录；旧模型无记录时显示“未记录”。
+
+采样数据、各阶段日志及结果写入所配置的 OBS 输出目录；模型和报告也可使用页面指定的独立目录。控制面工作区的 `result/.workflows/` 保存编排记录，需单独备份，代码拉取不能恢复这些记录。
+
+| 问题 | 优先检查 |
+| --- | --- |
+| 仓库无法克隆 | GitHub 网络连通性、代理和仓库地址 |
+| 网页打不开或 502 | 后端进程、端口、Jupyter 代理路径 |
+| 输入/评测校验失败 | OBS 与本地映射一致性、挂载权限、字段和任务文件 |
+| 401/403 | 网关鉴权方式、Token 有效期、委托和资源权限 |
+| 作业长时间排队 | 资源池剩余节点与当前规格 |
+| 缺少 lightgbm/rustbpe | 离线 wheel 名称、Python 版本和 CPU 架构 |
+| 分布式启动失败 | 节点编号、主节点地址、唯一 run ID、端口与前序 rank 错误 |
+| 全局 batch 不可整除 | 按第 9.2 节重新设置；不要通过增大单卡 batch 随意补齐 |
+| 某 rank 无数据 | 训练文件行组数、非空行组和采样数据量 |
+| 训练成功但评测失败 | 模型 step/校验和、评测 INPUT 挂载、任务依赖与剩余 HBM |
+| 结果页未显示报告 | 评测完成状态、OBS 输出同步、控制面结果挂载 |
+
+同作业评测的默认 HBM 释放等待上限为 120 秒，每卡空闲显存阈值为 24576 MiB，可按实际卡型配置 `AMT_EVAL_SETTLE_TIMEOUT` 与 `AMT_EVAL_MIN_FREE_MIB`。超时保留已训练模型并报错；硬件阈值必须在真实环境校准。
+
+## 12. 进一步阅读与来源
+
+- [部署 Wiki](docs/WIKI_DEPLOYMENT.md)：后台启动、离线安装、版本更新和认证细节。
+- [用户指南](docs/WIKI_USER_GUIDE.md)：四步表单、批量策略、重试与作业管理。
+- [多节点适配说明](docs/SCALING_MODELARTS_NODES.md)：拓扑、代理实验并行、数据和检查点同步。
+- [训练 Token 预算](docs/TRAINING_TOKEN_BUDGET.md)：训练量与比较口径。
+- [实验记录与验收](docs/WIKI_EXPERIMENTS.md)：输出、分析及故障排查。
+- [QuaDMix 算法与早期入口参考](docs/QUADMIX_ALGORITHM_REFERENCE.md)：迁移前 README 的算法、Schema 与历史实现说明。
+
+本项目基于 [AutoDataMixture/Auto-Mixture-Tool](https://github.com/AutoDataMixture/Auto-Mixture-Tool) 的现有实现，继续集成多节点适配和训练验证。QuaDMix 论文参见 [arXiv:2504.16511](https://arxiv.org/abs/2504.16511)。仓库中的 QuaDMix 为论文的个人实现，非论文作者官方代码。许可证声明沿用项目 `pyproject.toml` 的 Apache 2.0；引用与使用各模型、数据集时应遵守其自身许可证。

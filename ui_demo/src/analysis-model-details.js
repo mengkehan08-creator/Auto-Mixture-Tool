@@ -19,7 +19,14 @@ export function modelDetailRows(model) {
   }
   rows.push({ label: '训练 Token 预算', value: tokens(model.training?.token_budget) },
     { label: '采样 Token 数（报告记录）', value: tokens(sampling.tokens) },
-    { label: '训练文档数', value: count(sampling.train_docs) })
+    { label: '训练文档数', value: count(sampling.train_docs) },
+    { label: '实际训练 Token 数', value: tokens(model.training?.actual_tokens) })
+  if (model.training?.actual_tokens != null) {
+    rows.push({ label: '全局 batch Token 数', value: count(model.training.total_batch_size) },
+      { label: '训练节点 / 全局 NPU 数', value: `${count(model.training.nodes)} / ${count(model.training.world_size)}` },
+      { label: '实际训练步数', value: count(model.training.num_iterations) },
+      { label: '梯度累积次数', value: count(model.training.grad_accum_steps) })
+  }
   return rows
 }
 

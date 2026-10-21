@@ -18,7 +18,7 @@ const model = {
 
 test('summary includes strategy, configured ranges, actual report counts and Chinese token shares', () => {
   const rows = modelDetailRows(model)
-  assert.equal(rows.length, 10)
+  assert.equal(rows.length, 11)
   assert.equal(rows[0].value, 'QuaDMix 算法')
   assert.equal(rows[1].value, '50')
   assert.equal(rows[2].value, '15')
@@ -28,7 +28,8 @@ test('summary includes strategy, configured ranges, actual report counts and Chi
   assert.match(rows[8].value, /165,000,000/)
   assert.equal(rows[9].value, '45,678')
   assert.equal(domainTokenSummary(model), '数学 60.00% · 物理 40.00%')
-  assert.equal(modelDetailRows({ experiment_config: { type: 'random' } }).length, 4)
+  assert.equal(modelDetailRows({ experiment_config: { type: 'random' } }).length, 5)
+  assert.equal(rows[10].value, '未记录')
   assert.equal(modelDetailRows({ experiment_config: { type: 'quadmix' } })[3].value, '未记录')
   assert.equal(domainTokenSummary({ sampling: { domain_ratios: { 0: .5 } } }), '领域 0（名称未记录） 50.00%')
 })
@@ -41,8 +42,16 @@ test('B means billion tokens, missing and small values are not silently rounded 
   for (const value of [null, undefined, NaN, Infinity, -1]) assert.equal(formatBillions(value), '待统计')
 })
 
+test('actual training identity is displayed alongside the requested token budget', () => {
+  const rows = modelDetailRows({ ...model, training: { ...model.training, actual_tokens: 401604608,
+    total_batch_size: 524288, nodes: 4, world_size: 32, num_iterations: 766, grad_accum_steps: 8 } })
+  assert.match(rows.find(r => r.label === '实际训练 Token 数').value, /401,604,608/)
+  assert.equal(rows.find(r => r.label === '训练节点 / 全局 NPU 数').value, '4 / 32')
+  assert.equal(rows.find(r => r.label === '梯度累积次数').value, '8')
+})
+
 test('winner summary and successful dataset check render readable named fields', async () => {
-  const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true }, logLevel: 'error' })
+  const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true }, logLevel: 'error' })
   try {
     const { default: Summary } = await server.ssrLoadModule('/src/components/ModelExperimentSummary.vue')
     const html = await renderToString(createSSRApp(Summary, { model }))

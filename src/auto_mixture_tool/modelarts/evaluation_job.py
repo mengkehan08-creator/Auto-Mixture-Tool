@@ -44,9 +44,23 @@ def publish_models(config, root, data, identity=None):
             files.append({'path': path.relative_to(root).as_posix(), 'size': path.stat().st_size,
                           'sha256': digest(path)})
         model_config = json.loads(meta.read_text(encoding='utf-8')).get('model_config', {})
+        training = dict(config['training'])
+        record_path = folder / 'training_record.json'
+        if record_path.is_file():
+            record = json.loads(record_path.read_text(encoding='utf-8'))
+            recorded = record.get('checkpoint', {})
+            expected_files = [{**item, 'name': Path(item['path']).name} for item in files]
+            expected_files = [{k: item[k] for k in ('name', 'size', 'sha256')} for item in expected_files]
+            if (record.get('version') != 1 or record.get('status') != 'TRAINING_SUCCEEDED'
+                    or record.get('run_id') != run or record.get('phase') != f'mid:{tag}' or recorded.get('step') != step
+                    or recorded.get('files') != expected_files):
+                raise ValueError('训练完成记录与模型权重或本次作业不一致')
+            training.update(record['training'])
+            files.append({'path': record_path.relative_to(root).as_posix(), 'size': record_path.stat().st_size,
+                          'sha256': digest(record_path)})
         models.append({'id': strategy['id'], 'name': strategy.get('model_name') or strategy.get('name', kind),
                        'model_tag': tag, 'step': step, 'files': files,
-                       'training_config': config['training'],
+                       'training_config': training,
                        'strategy_config': {k: strategy[k] for k in ('type', 'seed', 'proxy_experiments', 'proxy_steps', 'search_count', 'ratios', 'sampling_bounds') if k in strategy},
                        'model_config': model_config,
                        'comparison_identity': {**(identity or {}), 'model_config': model_config},
@@ -162,13 +176,11 @@ def _run_evaluation(config, bundle, report_name):
     settings = config['evaluation']
     if settings.get('comparison_policy') in {'same-model-type', 'allow-differences'}:
         validate_comparison_models(manifest['models'], allow_differences=settings['comparison_policy'] == 'allow-differences')
-    nodes = int(os.environ.get('MA_NUM_HOSTS', '1'))
-    rank = int(os.environ.get('VC_TASK_INDEX', '0'))
+    from nanochat_mid_compare.distributed_runtime import resolve_topology
+    topology = resolve_topology(settings.get('devices_per_node', 8))
+    nodes, rank = topology.nodes, topology.rank
     if nodes != config.get('evaluation_nodes', 1):
         raise ValueError('评测节点数与配置不一致')
-    master = os.environ.get('VC_WORKER_HOSTS', '127.0.0.1').split(',')[0]
-    if nodes > 1 and not os.environ.get('VC_WORKER_HOSTS'):
-        raise ValueError('多节点评测缺少 VC_WORKER_HOSTS')
     report = OUTPUT.parent / 'reports_output' if settings.get('output_obs_uri') else OUTPUT / 'training/results'
     if report_name:
         report = report / report_name
@@ -196,9 +208,7 @@ def _run_evaluation(config, bundle, report_name):
                 if link.is_symlink():
                     link.unlink()
                 link.symlink_to(path, target_is_directory=True)
-            command = [sys.executable, '-m', 'torch.distributed.run', f'--nnodes={nodes}',
-                       f'--node_rank={rank}', f'--nproc_per_node={settings.get("devices_per_node", 8)}',
-                       '--rdzv_backend=static', f'--rdzv_endpoint={master}:{os.environ.get("MASTER_PORT", "29500")}',
+            command = [sys.executable, '-m', 'torch.distributed.run', *topology.torchrun_args(evaluation=True),
                        '-m', 'nanochat_mid_compare.offline_base_eval', '--eval=core', '--model-type=mid',
                        f'--model-tag={model["model_tag"]}', f'--step={model["step"]}',
                        '--eval-benchmarks=' + ','.join(settings['datasets']),

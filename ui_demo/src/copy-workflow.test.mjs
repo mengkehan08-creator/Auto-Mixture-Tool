@@ -4,7 +4,9 @@ import { copyWorkflow } from './copy-workflow.js'
 import { createRuntimeConfig, createTrainingConfig } from './data/defaults.js'
 test('OBS defaults match deployed script resources including proxy validation', () => {
   const runtime = createRuntimeConfig()
-  assert.equal(runtime.codeObsUri, 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/Auto-Mixture-Tool/')
+  assert.equal(runtime.codeObsUri, 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/releases/amt-3node-20261020/Auto-Mixture-Tool/')
+  assert.equal(runtime.offlineResources.find(resource => resource.role === 'code_obs_uri').uri, runtime.codeObsUri)
+  assert.equal(createTrainingConfig().frameworkObsUri, 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/chengchao/frameworks/nanochat-npu-global-rg-20261016-v2/')
   assert.ok(runtime.inputDataObsUri.endsWith('chengchao/prepared_parquet_57ffce0ca0a2/'))
   assert.equal(runtime.proxyValidationObsUri, 'obs://bucket-pangu-green-guangzhou/s00944147/l00916525/AMT_old/data/')
   assert.ok(createTrainingConfig().modelObsUri.includes('backup_0810/work/'))

@@ -42,6 +42,12 @@ class NanoChatTrainer(Trainer):
         target_param_data_ratio: float = 0.5,
         seed: int = 42,
         dry_run: bool = False,
+        token_budget: int | None = None,
+        total_batch_size: int | None = None,
+        device_batch_size: int = 1,
+        num_iterations: int = 0,
+        eval_bundle_dir: str | None = None,
+        load_optimizer: bool = False,
     ) -> None:
         self.use_stem = use_stem
         self.experiment_script = experiment_script
@@ -54,6 +60,12 @@ class NanoChatTrainer(Trainer):
         self.target_param_data_ratio = target_param_data_ratio
         self.seed = seed
         self.dry_run = dry_run
+        self.training_config = {"device_batch_size": device_batch_size, "num_iterations": num_iterations}
+        for key, value in (("token_budget", token_budget), ("total_batch_size", total_batch_size)):
+            if value is not None:
+                self.training_config[key] = value
+        self.eval_bundle_dir = eval_bundle_dir
+        self.load_optimizer = load_optimizer
 
     # ------------------------------------------------------------------ #
     def _resolve_script(self, repo_root: Path) -> Path:
@@ -86,6 +98,20 @@ class NanoChatTrainer(Trainer):
         env["TARGET_PARAM_DATA_RATIO"] = str(self.target_param_data_ratio)
         env["SEED"] = str(self.seed)
         env["RESULT_DIR"] = self.result_dir or str(output_dir / "nanochat_results")
+        env["MID_CHECKPOINTS_OUTPUT_DIR"] = str(output_dir / "mid_checkpoints")
+        env["NANOCHAT_DISABLE_WANDB"] = "1"
+        env["NANOCHAT_LOAD_OPTIMIZER"] = "1" if self.load_optimizer else "0"
+        names = {"token_budget": "TRAIN_TOKEN_BUDGET", "total_batch_size": "TRAIN_TOTAL_BATCH_SIZE",
+                 "device_batch_size": "DEVICE_BATCH_SIZE", "num_iterations": "TRAIN_NUM_ITERATIONS"}
+        for key, value in self.training_config.items():
+            if type(value) is not int or value < (0 if key == "num_iterations" else 1):
+                raise ValueError(f"Invalid NanoChat {key}")
+            env[names[key]] = str(value)
+        if self.training_config.get("token_budget") and self.training_config["num_iterations"]:
+            raise ValueError("NanoChat token budget and fixed steps cannot be combined")
+        if self.eval_bundle_dir:
+            env["NANOCHAT_EVAL_BUNDLE_DIR"] = self.eval_bundle_dir
+            env["NANOCHAT_SKIP_EVAL_DOWNLOAD"] = "1"
         return env
 
     # ------------------------------------------------------------------ #
@@ -105,7 +131,7 @@ class NanoChatTrainer(Trainer):
                 "log_uri": env.get("RESULT_DIR", ""),
                 "status": "planned",
                 "command": command,
-                "env": {k: v for k, v in env.items() if k.startswith(("QUADMIX_", "NANOCHAT_", "BASE_", "NUM_", "TARGET_", "SEED", "RESULT_", "PREPROCESSED_"))},
+                "env": {k: v for k, v in env.items() if k.startswith(("QUADMIX_", "NANOCHAT_", "BASE_", "NUM_", "TARGET_", "SEED", "RESULT_", "PREPROCESSED_", "TRAIN_", "DEVICE_", "MID_", "AMT_"))},
                 "data_path": str(data_path),
             }
 

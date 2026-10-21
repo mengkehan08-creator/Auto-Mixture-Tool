@@ -138,7 +138,9 @@ def compare_identity(reference, candidate):
 
 def training_differences(reference, candidate):
     labels = {'token_budget': '训练 Token 预算', 'device_batch_size': '单卡批量', 'sequence_len': '序列长度',
-              'learning_rate': '学习率', 'optimizer': '优化器', 'global_batch_size': '全局批量'}
+              'learning_rate': '学习率', 'optimizer': '优化器', 'global_batch_size': '全局批量',
+              'total_batch_size': '全局 batch Token 数', 'actual_tokens': '实际训练 Token 数',
+              'loader': '数据打包方式', 'load_optimizer': '优化器状态初始化'}
     return [f'{label}不同' for key, label in labels.items()
             if key in reference and key in candidate and reference[key] != candidate[key]]
 

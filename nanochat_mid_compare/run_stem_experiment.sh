@@ -39,6 +39,12 @@ python3() {
     "$AMT_PYTHON_EXECUTABLE" "$@"
 }
 
+# Resolve before creating outputs; never silently treat a missing worker rank
+# as node 0. The helper also supplies a separate evaluation rendezvous port.
+NUM_NPU="${NUM_NPU:-8}"
+DISTRIBUTED_ENV=$(python3 "$SCRIPT_DIR/distributed_runtime.py" environment --devices "$NUM_NPU")
+eval "$DISTRIBUTED_ENV"
+
 # QuaDMix remains the selected platform algorithm. Random and manual are
 # controlled comparison strategies that use the same token budget.
 COMPARISON_METHODS="${COMPARISON_METHODS:-quadmix,random,manual}"
@@ -114,7 +120,7 @@ NANOCHAT_EVAL_BUNDLE_DIR="${NANOCHAT_EVAL_BUNDLE_DIR:-}"
 
 # Writable per-node runtime layout. ModelArts input mounts are treated as
 # immutable sources and are never modified by this script.
-NANOCHAT_RUNTIME_DIR="${NANOCHAT_RUNTIME_DIR:-/tmp/auto-mixture-${AMT_RUN_ID:-$TIMESTAMP}/nanochat_model}"
+NANOCHAT_RUNTIME_DIR="${NANOCHAT_RUNTIME_DIR:-/tmp/auto-mixture-${AMT_RUN_ID:-$TIMESTAMP}/node-$NODE_RANK/nanochat_model}"
 
 # Base model tag
 BASE_MODEL_TAG="${BASE_MODEL_TAG:-d28}"
@@ -128,6 +134,9 @@ MID_CHECKPOINTS_OUTPUT_DIR="${MID_CHECKPOINTS_OUTPUT_DIR:-$SCRIPT_DIR/checkpoint
 
 # Experiment output directory
 RESULT_DIR="${RESULT_DIR:-$SCRIPT_DIR/results_stem/$TIMESTAMP}"
+if [ "$NODE_RANK" != "0" ]; then
+    RESULT_DIR="$RESULT_DIR/node-$NODE_RANK"
+fi
 mkdir -p "$RESULT_DIR"
 exec > >(tee "$RESULT_DIR/experiment.log") 2>&1
 
@@ -148,7 +157,6 @@ if ! [[ "$TRAIN_NUM_ITERATIONS" =~ ^[0-9]+$ ]]; then
     echo "ERROR: TRAIN_NUM_ITERATIONS must be a non-negative integer"
     exit 2
 fi
-NUM_NPU="${NUM_NPU:-8}"
 CORE_METRIC_EVERY="${CORE_METRIC_EVERY:--1}"
 EVAL_EVERY="${EVAL_EVERY:--1}"
 EVAL_BENCHMARKS="${EVAL_BENCHMARKS:-stem}"
@@ -167,8 +175,8 @@ export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
 
 # QuaDMix itself may use every node. Once that stage has completed, only rank 0
 # materializes the comparison datasets so ModelArts uploads one consistent copy.
-if [ "$PREPARE_ONLY" = "1" ] && [ "${VC_TASK_INDEX:-0}" != "0" ]; then
-    echo "Sampling-only stage: node ${VC_TASK_INDEX} has no post-QuaDMix work"
+if [ "$PREPARE_ONLY" = "1" ] && [ "$NODE_RANK" != "0" ]; then
+    echo "Sampling-only stage: node ${NODE_RANK} has no post-QuaDMix work"
     exit 0
 fi
 
@@ -321,31 +329,7 @@ fi
 
 ASCEND_DEVICE_LIST=$(seq -s, 0 $((NUM_NPU - 1)))
 export ASCEND_VISIBLE_DEVICES="$ASCEND_DEVICE_LIST"
-NNODES="${MA_NUM_HOSTS:-1}"
-NODE_RANK="${VC_TASK_INDEX:-0}"
-MASTER_PORT="${MASTER_PORT:-29500}"
-if [ -n "${AMT_EXPECTED_NODES:-}" ] && [ "$NNODES" -ne "$AMT_EXPECTED_NODES" ]; then
-    echo "ERROR: ModelArts reported $NNODES nodes, expected $AMT_EXPECTED_NODES"
-    exit 1
-fi
-if [ "$NNODES" -gt 1 ]; then
-    MASTER_ADDR="${VC_WORKER_HOSTS%%,*}"
-    if [ -z "$MASTER_ADDR" ]; then
-        echo "ERROR: VC_WORKER_HOSTS is required for multi-node training"
-        exit 1
-    fi
-else
-    MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
-fi
-export NNODES NODE_RANK MASTER_ADDR MASTER_PORT
-export RANK_SIZE=$((NNODES * NUM_NPU))
-TORCHRUN_ARGS=(
-    --nnodes="$NNODES"
-    --nproc_per_node="$NUM_NPU"
-    --node_rank="$NODE_RANK"
-    --rdzv_backend=static
-    --rdzv_endpoint="$MASTER_ADDR:$MASTER_PORT"
-)
+export ASCEND_RT_VISIBLE_DEVICES="$ASCEND_DEVICE_LIST"
 export HCCL_EXEC_TIMEOUT=1200
 export ASCEND_DISABLE_MEM_SWAP=1
 export ASCEND_LAUNCH_BLOCKING=0
@@ -461,7 +445,7 @@ PREP_ARGS=(
     --val-ratio "$VAL_RATIO"
     --seed "$SEED"
     --max-shards "$MAX_SHARDS"
-    --num-npu "$NUM_NPU"
+    --num-npu "${AMT_DATA_WORLD_SIZE:-$RANK_SIZE}"
 )
 if has_method quadmix; then
     PREP_ARGS+=(--quadmix-sampled-data "$QUADMIX_SAMPLED_DATA")
@@ -489,11 +473,12 @@ if has_method manual && [ -n "${MANUAL_PLANS_JSON:-}" ]; then
         --file-pattern "$FILE_PATTERN" --data-ratio "$TARGET_PARAM_DATA_RATIO" \
         --num-scaling-params "$NUM_SCALING_PARAMS" --data-multiplier "$DATA_MULTIPLIER" \
         --shard-size "$SHARD_SIZE" --val-ratio "$VAL_RATIO" --seed "$SEED" \
-        --max-shards "$MAX_SHARDS" --num-npu "$NUM_NPU"
+        --max-shards "$MAX_SHARDS" --num-npu "${AMT_DATA_WORLD_SIZE:-$RANK_SIZE}"
 fi
 
 # Update dataset_stats.json with experiment metadata
-DATA_DIR="$DATA_DIR" BASE_MODEL_TAG="$BASE_MODEL_TAG" \
+cp "$DATA_DIR/dataset_stats.json" "$RESULT_DIR/dataset_stats.json"
+STATS_FILE="$RESULT_DIR/dataset_stats.json" DATA_DIR="$DATA_DIR" BASE_MODEL_TAG="$BASE_MODEL_TAG" \
 TARGET_PARAM_DATA_RATIO="$TARGET_PARAM_DATA_RATIO" \
 NUM_SCALING_PARAMS="$NUM_SCALING_PARAMS" \
 DEVICE_BATCH_SIZE="$DEVICE_BATCH_SIZE" \
@@ -510,7 +495,7 @@ EVAL_BENCHMARKS="$EVAL_BENCHMARKS" \
 COMPARISON_METHODS="$COMPARISON_METHODS" \
 python3 -c "
 import os, json
-stats_path = os.path.join(os.environ['DATA_DIR'], 'dataset_stats.json')
+stats_path = os.environ['STATS_FILE']
 stats = json.load(open(stats_path))
 stats['config'].update({
     'base_model_tag': os.environ['BASE_MODEL_TAG'],
@@ -806,11 +791,15 @@ run_mid_training() {
         return 1
     fi
 
-    local NUM_ITERATIONS=$(( (TRAIN_TOKENS + CKPT_TOTAL_BATCH_SIZE - 1) / CKPT_TOTAL_BATCH_SIZE ))
-    if [ "$TRAIN_NUM_ITERATIONS" -gt 0 ]; then
-        NUM_ITERATIONS="$TRAIN_NUM_ITERATIONS"
-        echo "    Using configured training steps: $NUM_ITERATIONS (overrides automatic budget steps)"
-    fi
+    local PLAN_FILE="$RESULT_DIR/training_plan_$MODEL_TAG.json"
+    local TOTAL_BATCH_SIZE MAX_SEQ_LEN NUM_ITERATIONS PLAN_ENV
+    PLAN_ENV=$(python3 "$SCRIPT_DIR/distributed_runtime.py" plan \
+        --directory "$BASE_CKPT_DIR" --repo "$NANOCHAT_REPO" --devices "$NUM_NPU" \
+        --tokens "$TRAIN_TOKENS" --steps "$TRAIN_NUM_ITERATIONS" \
+        --device-batch-size "$DEVICE_BATCH_SIZE" \
+        --total-batch-size "${TRAIN_TOTAL_BATCH_SIZE:-$CKPT_TOTAL_BATCH_SIZE}" \
+        --output "$PLAN_FILE")
+    eval "$PLAN_ENV"
     local TRACKING_RUN_NAME="$RUN_NAME"
     if [ "$NANOCHAT_DISABLE_WANDB" = "1" ]; then
         TRACKING_RUN_NAME="dummy"
@@ -825,6 +814,12 @@ run_mid_training() {
     echo "    Steps:      $NUM_ITERATIONS"
     echo "    Log:        $LOG_FILE"
 
+    local DATA_CHECK_ARGS=(check-data --directory "$DATA_PATH" --devices "$NUM_NPU")
+    if [ "$EVAL_EVERY" != "-1" ]; then
+        DATA_CHECK_ARGS+=(--validation)
+    fi
+    python3 "$SCRIPT_DIR/distributed_runtime.py" "${DATA_CHECK_ARGS[@]}"
+
     local LINK_DIR="$NANOCHAT_RUNTIME_DIR/base_checkpoints/$MODEL_TAG"
 
     install_shared_symlink "$BASE_CKPT_DIR" "$LINK_DIR"
@@ -838,7 +833,8 @@ run_mid_training() {
         --num-iterations="$NUM_ITERATIONS" \
         --target-param-data-ratio="$TARGET_PARAM_DATA_RATIO" \
         --device-batch-size="$DEVICE_BATCH_SIZE" \
-        --total-batch-size="$CKPT_TOTAL_BATCH_SIZE" \
+        --total-batch-size="$TOTAL_BATCH_SIZE" \
+        --max-seq-len="$MAX_SEQ_LEN" \
         --load-optimizer="$NANOCHAT_LOAD_OPTIMIZER" \
         --run="$TRACKING_RUN_NAME" \
         --model-tag="$MODEL_TAG" \
@@ -850,6 +846,9 @@ run_mid_training() {
         --loader="$LOADER" \
         2>&1 | tee "$LOG_FILE"
     popd > /dev/null
+    python3 "$SCRIPT_DIR/distributed_runtime.py" record \
+        --directory "$MID_CHECKPOINTS_OUTPUT_DIR/$MODEL_TAG" --devices "$NUM_NPU" \
+        --phase "mid:$MODEL_TAG" --plan-file "$PLAN_FILE" --repo "$NANOCHAT_REPO" --data-directory "$DATA_PATH"
 }
 
 STATS_FILE="$DATA_DIR/dataset_stats.json"
@@ -954,6 +953,14 @@ if [ "${AMT_TRAIN_ONLY:-0}" = "1" ]; then
     exit 0
 fi
 
+# Received model copies belong to a private evaluation cache. Writing them
+# into each worker's ModelArts output mount would upload duplicate checkpoints
+# and partial transfer files to OBS.
+if [ "$NODE_RANK" != "0" ] && [ "$EVALUATION_ENABLED" = "1" ]; then
+    mkdir -p "$NANOCHAT_RUNTIME_DIR/eval_checkpoints"
+    install_shared_symlink "$NANOCHAT_RUNTIME_DIR/eval_checkpoints" "$NANOCHAT_RUNTIME_DIR/mid_checkpoints"
+fi
+
 run_eval() {
     if [ "$EVALUATION_ENABLED" != "1" ]; then
         echo "Evaluation disabled by workflow configuration"
@@ -962,15 +969,22 @@ run_eval() {
     local MODEL_TAG="$1"
     local MODEL_TYPE="$2"
     local LOG_FILE="$3"
+    local CHECKPOINT_STEP
 
     echo "  Evaluating: $MODEL_TAG ($MODEL_TYPE)"
 
+    CHECKPOINT_STEP=$(python3 "$SCRIPT_DIR/distributed_runtime.py" checkpoint \
+        --directory "$NANOCHAT_RUNTIME_DIR/${MODEL_TYPE}_checkpoints/$MODEL_TAG" \
+        --phase "$MODEL_TYPE:$MODEL_TAG" --devices "$NUM_NPU")
+
+    python3 "$SCRIPT_DIR/distributed_runtime.py" settle --devices "$NUM_NPU"
     pushd "$NANOCHAT_REPO" > /dev/null
-    python3 -m torch.distributed.run "${TORCHRUN_ARGS[@]}" -m nanochat_mid_compare.offline_base_eval \
+    HCCL_BUFFSIZE="${HCCL_BUFFSIZE:-100}" python3 -m torch.distributed.run "${EVAL_TORCHRUN_ARGS[@]}" -m nanochat_mid_compare.offline_base_eval \
         --eval=core \
         --eval-benchmarks="$EVAL_BENCHMARKS" \
         --device-batch-size=16 \
         --model-tag="$MODEL_TAG" \
+        --step="$CHECKPOINT_STEP" \
         --model-type="$MODEL_TYPE" \
         2>&1 | tee "$LOG_FILE"
     popd > /dev/null
@@ -1013,6 +1027,11 @@ if [ "$EVALUATION_ENABLED" = "1" ] && has_method manual; then
 fi
 show_progress 90 "manual-ratio model evaluation finished"
 
+if [ "$NODE_RANK" != "0" ]; then
+    echo "Node $NODE_RANK finished distributed training/evaluation; node 0 generates the report."
+    exit 0
+fi
+
 echo ""
 echo "╚════════════════════════════════════════════════════════════╝"
 echo ""
@@ -1028,7 +1047,7 @@ show_progress 95 "generating comparison report"
 
 REPORT_ARGS=(
     --result-dir "$RESULT_DIR"
-    --dataset-stats "$DATA_DIR/dataset_stats.json"
+    --dataset-stats "$RESULT_DIR/dataset_stats.json"
 )
 if has_method quadmix; then
     REPORT_ARGS+=(--quadmix-train-log "$QUADMIX_LOG" --quadmix-eval-log "$QUADMIX_EVAL_LOG")

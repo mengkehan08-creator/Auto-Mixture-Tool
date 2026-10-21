@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { createStrategy, createTrainingConfig, createRuntimeConfig } from './data/defaults.js'
 
 test('training page renders one shared schedule and collapsed risk details', async () => {
-  const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true }, logLevel: 'error' })
+  const server = await createServer({ root: fileURLToPath(new URL('..', import.meta.url)), server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true }, logLevel: 'error' })
   try {
     const { default: Panel } = await server.ssrLoadModule('/src/components/steps/TrainingConfigStep.vue')
     const strategies = Array.from({ length: 15 }, () => ({ ...createStrategy(),
@@ -18,6 +18,10 @@ test('training page renders one shared schedule and collapsed risk details', asy
     const html = await renderToString(createSSRApp(Panel, { strategies, config, runtime }))
     assert.equal((html.match(/默认训练节点数/g) || []).length, 1)
     assert.equal((html.match(/训练任务优先级/g) || []).length, 1)
+    assert.match(html, /全局 batch Token 数/)
+    assert.match(html, /自动推荐/)
+    assert.match(html, /手动固定/)
+    assert.match(html, /读取基础模型元数据/)
     assert.match(html, /15 项告警/)
     assert.match(html, /4\.00 倍/)
     assert.match(html, /1 项策略使用单独节点数/)
