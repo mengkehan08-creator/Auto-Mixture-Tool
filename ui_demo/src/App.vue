@@ -81,8 +81,7 @@ watch(() => serializeDraft({ step: currentStep.value, runtime, training, evaluat
   } catch { draftError.value = '草稿未保存，当前配置仍保留在页面中；刷新前请检查浏览器存储或缩减配置。' }
 }, { flush: 'post' })
 function sidebarNavigate(destination) {
-  if (destination !== 'create') return navigate(destination)
-  resetVisible.value = true
+  navigate(destination)
 }
 function resetExperiment() {
   resetVisible.value = false
@@ -101,13 +100,16 @@ function resetExperiment() {
 <template>
   <div class="app-shell">
     <AppSidebar :page="page" @navigate="sidebarNavigate" />
-    <ConfirmationDialog v-if="resetVisible" title="创建新的实验？" message="将恢复全部默认设置，当前未提交的配置会被清空。已提交的实验作业不会受影响。" confirm-label="确认创建" @cancel="resetVisible = false" @confirm="resetExperiment" />
+    <ConfirmationDialog v-if="resetVisible" title="新建实验并清空当前配置？" message="将恢复全部默认设置，当前未提交的配置会被清空。已提交的实验作业不会受影响。" confirm-label="确认新建" @cancel="resetVisible = false" @confirm="resetExperiment" />
     <main class="main-content">
       <div class="workspace-header">
       <header class="topbar">
         <button class="button secondary" type="button" :disabled="!navigationHistory.length" @click="goBack" aria-label="返回上一页面"><ChevronLeft :size="16" />返回</button>
         <div><h1>{{ page === 'analysis' ? '结果分析' : page === 'jobs' ? '实验作业管理' : '创建配比实验' }}</h1><p>配置算法、训练与评测后提交至 ModelArts</p></div>
-        <span class="user-chip"><span>配</span>配比用户</span>
+        <div class="topbar-actions">
+          <button v-if="page === 'create'" class="button secondary" type="button" @click="resetVisible = true">新建实验</button>
+          <span class="user-chip"><span>配</span>配比用户</span>
+        </div>
       </header>
       <StepNavigation v-if="page === 'create'" :current-step="currentStep" @change="navigate('create', $event)" />
       <StrategyActions v-if="page === 'create' && currentStep === 1" :strategies="strategies" />
@@ -120,7 +122,6 @@ function resetExperiment() {
       <div v-if="draftRestored || draftSaved || draftError" class="draft-notice">
         <p v-if="draftError" role="alert" class="error-message">{{ draftError }}</p>
         <p v-else role="status">{{ draftRestored ? '已恢复本标签页草稿，认证凭据需重新填写；数据与训练计划将重新校验。' : '草稿已保存到本标签页，刷新可恢复；认证凭据不会保存。' }}</p>
-        <button class="button secondary" type="button" @click="resetVisible = true">清空草稿并新建</button>
       </div>
 
       <MixingStrategyStep v-show="currentStep === 1" :key="formVersion" :strategies="strategies" :runtime="runtime" :training-nodes="training.nodes" />
@@ -138,8 +139,10 @@ function resetExperiment() {
 </template>
 
 <style scoped>
+.topbar-actions { display: flex; align-items: center; flex-shrink: 0; gap: 12px; }
+.topbar-actions .button { white-space: nowrap; }
 .draft-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
 .draft-notice p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.8; }
 .draft-notice .error-message { color: #9d2438; }
-.draft-notice .button { font-size: 12px; padding: 7px 10px; }
+@media (max-width: 640px) { .topbar-actions { margin-left: auto; } }
 </style>
