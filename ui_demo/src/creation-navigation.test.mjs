@@ -59,18 +59,16 @@ test('sidebar jobs → create preserves edited parameters and the current step w
   assert.deepEqual(state.strategies.map(strategy => strategy.id), strategyIds)
 })
 
-test('clicking create again keeps the current form and does not open confirmation or add history', async t => {
+test('clicking create again keeps the current form and does not open confirmation', async t => {
   const state = await createState(t)
   editConfiguration(state)
   const edited = configuration(state)
-  const historyLength = state.navigationHistory.value.length
 
   state.sidebarNavigate('create')
   state.sidebarNavigate('create')
 
   assert.equal(state.resetVisible.value, false)
   assert.deepEqual(configuration(state), edited)
-  assert.equal(state.navigationHistory.value.length, historyLength)
 })
 
 test('explicit new-experiment confirmation clears the edited form only when accepted', async t => {
@@ -87,7 +85,6 @@ test('explicit new-experiment confirmation clears the edited form only when acce
   assert.equal(state.resetVisible.value, false)
   assert.equal(state.page.value, 'create')
   assert.deepEqual(configuration(state), { ...defaults, version: defaults.version + 1 })
-  assert.deepEqual(state.navigationHistory.value, [])
   assert.equal(state.selectedId.value, '')
 })
 

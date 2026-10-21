@@ -30,20 +30,11 @@ const selectedId = ref('')
 const formVersion = ref(0)
 const resetVisible = ref(false)
 const copyNotice = ref('')
-const navigationHistory = ref([])
 function navigate(nextPage, step = currentStep.value, id = '') {
   if (page.value === nextPage && currentStep.value === step && selectedId.value === id) return
-  navigationHistory.value.push({ page: page.value, step: currentStep.value, id: selectedId.value })
   page.value = nextPage
   currentStep.value = step
   selectedId.value = id
-}
-function goBack() {
-  const previous = navigationHistory.value.pop()
-  if (!previous) return
-  page.value = previous.page
-  currentStep.value = previous.step
-  selectedId.value = previous.id
 }
 function clearSavedDraft() {
   try { draftStorage?.removeItem(draftKey); draftError.value = '' }
@@ -91,7 +82,7 @@ function resetExperiment() {
     Object.assign(target, value)
   }
   strategies.splice(0, strategies.length, ...['quadmix', 'manual', 'random'].map(createStrategy))
-  copyNotice.value = ''; formVersion.value++; navigationHistory.value = []
+  copyNotice.value = ''; formVersion.value++
   page.value = 'create'; currentStep.value = 1; selectedId.value = ''
 }
 
@@ -104,7 +95,6 @@ function resetExperiment() {
     <main class="main-content">
       <div class="workspace-header">
       <header class="topbar">
-        <button class="button secondary" type="button" :disabled="!navigationHistory.length" @click="goBack" aria-label="返回上一页面"><ChevronLeft :size="16" />返回</button>
         <div><h1>{{ page === 'analysis' ? '结果分析' : page === 'jobs' ? '实验作业管理' : '创建配比实验' }}</h1><p>配置算法、训练与评测后提交至 ModelArts</p></div>
         <div class="topbar-actions">
           <button v-if="page === 'create'" class="button secondary" type="button" @click="resetVisible = true">新建实验</button>
