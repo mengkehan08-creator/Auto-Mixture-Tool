@@ -1,7 +1,7 @@
 <script setup>
 import { Bot, Database } from '@lucide/vue'
 import { computed, ref } from 'vue'
-import { stemTasks, normalizeEvaluationTasks } from '../../evaluation-selection.js'
+import { stemTasks, normalizeEvaluationTasks, toggleEvaluationTask, selectStemEvaluationTasks } from '../../evaluation-selection.js'
 import ModelLibrary from '../ModelLibrary.vue'
 import ResourceGuide from '../ResourceGuide.vue'
 import ResourceCheck from '../ResourceCheck.vue'
@@ -20,14 +20,11 @@ const comparisonReference = computed(() => ({
   }],
 }))
 const selectedTasks = computed(() => normalizeEvaluationTasks(props.config.dataset.names))
+const taskOptions = computed(() => [...new Set([...stemTasks, ...selectedTasks.value])])
 const allSelected = computed(() => stemTasks.every(name => selectedTasks.value.includes(name)))
 
 function toggleDataset(config, name) {
-  const selected = normalizeEvaluationTasks(config.dataset.names)
-  const index = selected.indexOf(name)
-  if (index >= 0) selected.splice(index, 1)
-  else selected.push(name)
-  config.dataset.names = selected
+  config.dataset.names = toggleEvaluationTask(config.dataset.names, name)
 }
 </script>
 
@@ -40,10 +37,11 @@ function toggleDataset(config, name) {
         <div v-if="config.dataset.enabled" class="method-body">
           <div class="segmented"><button type="button" :class="{ active: config.dataset.source === 'builtin' }" @click="config.dataset.source = 'builtin'">内置评测资源</button><button type="button" :class="{ active: config.dataset.source === 'obs' }" @click="config.dataset.source = 'obs'">OBS 路径</button></div>
           <div class="eval-selection-heading"><span class="field-label">选择评测集</span>
-            <button type="button" class="stem-select-all" :class="{ active: allSelected }" :aria-pressed="allSelected" @click="config.dataset.names = normalizeEvaluationTasks([...config.dataset.names, ...stemTasks])">STEM 全选</button>
+            <button type="button" class="stem-select-all" :class="{ active: allSelected }" :aria-pressed="allSelected" @click="config.dataset.names = selectStemEvaluationTasks(config.dataset.names)">STEM 全选</button>
           </div>
-          <div class="chip-list"><button v-for="name in stemTasks" :key="name" type="button" :aria-pressed="selectedTasks.includes(name)" :class="{ active: selectedTasks.includes(name) }" @click="toggleDataset(config, name)">{{ name }}</button></div>
+          <div class="chip-list"><button v-for="name in taskOptions" :key="name" type="button" :aria-pressed="selectedTasks.includes(name)" :class="{ active: selectedTasks.includes(name) }" @click="toggleDataset(config, name)">{{ name }}{{ ['all', 'core'].includes(name) ? '（原实验预设）' : '' }}</button></div>
           <small class="eval-selection-count" role="status">已选择 {{ selectedTasks.length }} 项评测任务</small>
+          <small v-if="selectedTasks.some(name => ['all', 'core'].includes(name))" class="eval-selection-count">点击原实验预设可取消；选择 STEM 单项或全选会替换该预设。</small>
           <label v-if="config.dataset.source === 'obs'" class="field"><span>评测资源 OBS 地址</span><input v-model="config.dataset.obsUri" placeholder="obs://bucket/path/eval_bundle/" /></label>
           <section class="evaluation-job-settings">
             <div v-if="config.dataset.source === 'obs'">

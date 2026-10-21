@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { stemTasks, normalizeEvaluationTasks } from './evaluation-selection.js'
+import { stemTasks, normalizeEvaluationTasks, toggleEvaluationTask, selectStemEvaluationTasks } from './evaluation-selection.js'
 import { createEvaluationConfig } from './data/defaults.js'
 
 test('default selects six individual STEM tasks without sharing mutable state', () => {
@@ -20,4 +20,18 @@ test('legacy presets expand and submission removes duplicates without changing s
   const partial = stemTasks.filter(name => name !== 'gsm8k_cot')
   assert.deepEqual(normalizeEvaluationTasks(partial), partial)
   assert.equal(normalizeEvaluationTasks([...partial, ...stemTasks]).length, 6)
+})
+
+test('concrete task selection replaces exclusive presets and preserves other individual tasks', () => {
+  for (const preset of ['all', 'core']) {
+    const previous = [preset]
+    assert.deepEqual(normalizeEvaluationTasks(previous), [preset])
+    assert.deepEqual(toggleEvaluationTask(previous, preset), [])
+    assert.deepEqual(toggleEvaluationTask(previous, 'arc_easy'), ['arc_easy'])
+    assert.deepEqual(selectStemEvaluationTasks(previous), stemTasks)
+    assert.deepEqual(previous, [preset])
+  }
+  assert.deepEqual(toggleEvaluationTask(['mmlu_zeroshot'], 'arc_easy'), ['mmlu_zeroshot', 'arc_easy'])
+  assert.deepEqual(selectStemEvaluationTasks(['mmlu_zeroshot']), ['mmlu_zeroshot', ...stemTasks])
+  assert.deepEqual(toggleEvaluationTask(['stem'], 'arc_easy'), stemTasks.filter(name => name !== 'arc_easy'))
 })

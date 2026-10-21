@@ -21,13 +21,17 @@ const batchPlanReady = ref(false)
 const authMode = ref('manual')
 const pendingId = ref('')
 const defaultCommands = ref(null)
-const emit = defineEmits(['created'])
+const emit = defineEmits(['created', 'accepted'])
 let requestId = ''
 let submittedBody = ''
 let timer = null
 let commandTimer = null, commandVersion = 0
 const commandsPending = ref(false)
 const commandError = ref('')
+const evaluationSelection = computed(() => ({
+  datasets: props.evaluation.dataset.enabled ? normalizeEvaluationTasks(props.evaluation.dataset.names) : [],
+  obs_packages: props.evaluation.dataset.enabled && props.evaluation.dataset.source === 'obs' ? props.evaluation.obsPackages : [],
+}))
 const commandSettings = computed(() => ({
   image_url: props.runtime.modelarts.image_url,
   offline_resources: props.runtime.offlineResources,
@@ -36,7 +40,7 @@ const commandSettings = computed(() => ({
   framework_obs_uri: props.training.frameworkObsUri,
   eval_bundle_obs_uri: props.evaluation.dataset.source === 'obs' ? props.evaluation.dataset.obsUri :
     (props.runtime.offlineResources.find(r => r.role === 'eval_bundle_obs_uri')?.uri || props.runtime.evalBundleObsUri),
-  eval_packages: props.evaluation.dataset.source === 'obs' ? props.evaluation.obsPackages : [],
+  eval_packages: evaluationSelection.value.obs_packages,
   output_obs_uri: props.runtime.outputRootObsUri,
   model_output_obs_uri: props.training.outputObsUri,
   report_output_obs_uri: props.evaluation.outputObsUri,
@@ -57,7 +61,7 @@ watch(commandSettings, () => { commandVersion++; commandsPending.value = true; c
 watch(() => [props.runtime, props.training, props.evaluation, props.strategies], () => { validation.value = null }, { deep: true })
 
 const strategyNames = computed(() => props.strategies.map((strategy) => strategyOptions.find((option) => option.value === strategy.type)?.label).join('、'))
-const evaluationEnabled = computed(() => props.evaluation.dataset.enabled && (props.evaluation.dataset.names.length || props.evaluation.obsPackages.length))
+const evaluationEnabled = computed(() => Boolean(evaluationSelection.value.datasets.length || evaluationSelection.value.obs_packages.length))
 const jobPlan = computed(() => [
   ...props.strategies.flatMap(s => [
     { key: `mixing-${s.id}`, owner: s, commandKey: 'mixingCommand', module: 'mixing', label: `${strategyLabel(s)} · 配比`, name: s.mixingJobName, nameHint: strategyNameHint(s), nodes: s.mixingNodes, priority: s.mixingPriority, depends: '无，可立即提交' },
@@ -117,7 +121,7 @@ function requestBody() {
       devices_per_node: 8,
       ...trainingParameters(props.training),
     },
-    evaluation: { comparison_policy: 'allow-differences', job_name: props.evaluation.jobName, priority: props.evaluation.priority, model_ids: props.evaluation.dataset.enabled ? props.evaluation.modelIds : [], obs_packages: props.evaluation.dataset.enabled && props.evaluation.dataset.source === 'obs' ? props.evaluation.obsPackages : [], automatic_api_requested: props.evaluation.api.enabled, output_obs_uri: props.evaluation.outputObsUri, devices_per_node: 8, core_eval_batch_size: props.evaluation.coreEvalBatchSize, max_per_task: -1, datasets: props.evaluation.dataset.enabled ? normalizeEvaluationTasks(props.evaluation.dataset.names) : [] },
+    evaluation: { comparison_policy: 'allow-differences', job_name: props.evaluation.jobName, priority: props.evaluation.priority, model_ids: props.evaluation.dataset.enabled ? props.evaluation.modelIds : [], automatic_api_requested: props.evaluation.api.enabled, output_obs_uri: props.evaluation.outputObsUri, devices_per_node: 8, core_eval_batch_size: props.evaluation.coreEvalBatchSize, max_per_task: -1, ...evaluationSelection.value },
     resources: {
       code_obs_uri: props.runtime.codeObsUri,
       nanochat_repo_obs_uri: props.training.frameworkObsUri,
@@ -183,6 +187,7 @@ async function submit() {
     const body = await apiRequest('workflows', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...config, request_id: requestId }),
     })
+    emit('accepted', body.id)
     pendingId.value = body.id
     await loadWorkflows()
   } catch (reason) {
@@ -212,7 +217,7 @@ onBeforeUnmount(() => { window.clearInterval(timer); clearTimeout(commandTimer);
 
 <template>
   <section class="step-panel">
-    <div class="section-title-row"><div><h2>任务配置</h2><p>本次计划 {{ jobPlan.length }} 个独立作业。每个策略配比成功即启动训练，全部训练成功后汇总评测。</p></div></div>
+    <div class="section-title-row"><div><h2>任务配置</h2><p>本次计划 {{ jobPlan.length }} 个独立作业。每个策略配比成功即启动训练，{{ evaluationEnabled ? '全部训练成功后汇总评测。' : '本次不创建评测作业。' }}</p></div></div>
     <TrainingBatchSettings v-model:mode="training.batchSizeMode" v-model:batch-size="training.totalBatchSize" :model-obs-uri="training.modelObsUri" :base-model-tag="training.baseModelTag" :nodes="trainingNodeCounts(strategies, training)" :token-budget="training.tokenBudget" :device-batch-size="training.deviceBatchSize" @ready="batchPlanReady = $event" />
     <div class="config-block">
       <h3>作业提交清单</h3>
@@ -234,7 +239,7 @@ onBeforeUnmount(() => { window.clearInterval(timer); clearTimeout(commandTimer);
       <article><span>evaluation.output_obs_uri</span><strong class="break-path">{{ evaluation.outputObsUri || '沿用实验输出目录' }}</strong><small>评测与对比报告 · 自动追加 runs/实验名称/</small></article>
       <article><span>配比作业</span><strong>{{ strategyNames }}</strong><small>{{ strategies.length }} 个独立作业 · 各自校验与采样</small></article>
       <article><span>训练作业</span><strong>{{ training.framework }}</strong><small>{{ strategies.length }} 个独立作业 · 可并行训练</small></article>
-      <article><span>evaluation_nodes</span><strong>{{ evaluation.dataset.enabled ? `${evaluation.nodes} 节点` : '未启用评测' }}</strong><small>模型输入自动使用前序训练输出</small></article>
+      <article><span>evaluation_nodes</span><strong>{{ evaluationEnabled ? `${evaluation.nodes} 节点` : '未启用评测' }}</strong><small>模型输入自动使用前序训练输出</small></article>
       <article><span>training.token_budget</span><strong>{{ Number(training.tokenBudget).toLocaleString() }} Token</strong><small>全部策略共用训练预算</small></article>
       <article><span>输出根目录</span><strong class="break-path">{{ runtime.outputRootObsUri }}</strong><small>按实验名称隔离 mixing / sampled / training</small></article>
     </div>

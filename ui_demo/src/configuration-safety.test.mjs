@@ -27,15 +27,17 @@ test('unknown sampling size never becomes a made-up repetition estimate', () => 
 })
 test('automatic commands refresh but manual and deliberately cleared commands are preserved', () => {
   const old = { mixing: 'old mix', training: 'old train', evaluation: 'old eval' }
-  const runtime = { commands: { ...old }, autoCommandDefaults: old }
-  const strategies = [{ mixingCommand: 'old mix', trainingCommand: 'my training' }, { mixingCommand: '', trainingCommand: null }]
   const next = { mixing: 'new mix', training: 'new train', evaluation: 'new eval' }
-  refreshJobCommands(strategies, runtime, next)
-  assert.equal(strategies[0].mixingCommand, 'new mix')
-  assert.equal(strategies[0].trainingCommand, 'my training')
-  assert.equal(strategies[1].mixingCommand, '')
-  assert.equal(strategies[1].trainingCommand, 'new train')
-  assert.equal(runtime.commands.evaluation, 'new eval')
+  for (const autoCommandDefaults of [old, undefined]) {
+    const runtime = { commands: { ...old }, autoCommandDefaults }
+    const strategies = [{ mixingCommand: 'old mix', trainingCommand: 'my training' }, { mixingCommand: '', trainingCommand: null }]
+    refreshJobCommands(strategies, runtime, next)
+    assert.equal(strategies[0].mixingCommand, 'new mix')
+    assert.equal(strategies[0].trainingCommand, 'my training')
+    assert.equal(strategies[1].mixingCommand, '')
+    assert.equal(strategies[1].trainingCommand, 'new train')
+    assert.equal(runtime.commands.evaluation, 'new eval')
+  }
 })
 test('retry and reset require confirmation before mutation or submission', () => {
   for (const file of ['./components/ParallelJobRetry.vue', './components/StageRetryPanel.vue']) {
