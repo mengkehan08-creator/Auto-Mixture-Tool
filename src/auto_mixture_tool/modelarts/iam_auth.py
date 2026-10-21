@@ -98,8 +98,7 @@ class IamTokenProvider:
             return self.config.get('authorization_prefix', '') + token
 
 
-@lru_cache(maxsize=1)
-def _load_provider(path):
+def _read_provider(path):
     source = Path(path)
     if not source.is_absolute() or not source.is_file():
         raise ValueError('AMT_IAM_PROVIDER 必须指向已存在的私有 Python 文件绝对路径')
@@ -120,6 +119,11 @@ def _load_provider(path):
         return IamTokenProvider(config)
     except Exception:
         raise ValueError('无法加载 IAM 私有配置：需要 AUTH_CONFIG 或 auth 字面量字典；详细内容不会输出') from None
+
+
+@lru_cache(maxsize=1)
+def _load_provider(path):
+    return _read_provider(path)
 
 
 def get_provider():
