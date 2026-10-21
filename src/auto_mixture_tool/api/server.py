@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field, StrictInt
 
@@ -89,6 +89,28 @@ class TrainingPlanRequest(BaseModel):
     model_obs_uri: str = Field(max_length=2048)
     training: dict[str, Any]
     nodes: list[StrictInt] = Field(min_length=1, max_length=16)
+
+
+class IamConfigureRequest(BaseModel):
+    model_config = {'extra': 'forbid'}
+    endpoint: str = Field(min_length=1, max_length=2048, strict=True)
+
+
+@app.post('/api/v1/iam/configure')
+def configure_iam(payload: IamConfigureRequest, request: Request) -> dict[str, str]:
+    from auto_mixture_tool.modelarts.iam_setup import IamSetupError, configure_iam_provider
+    from auto_mixture_tool.modelarts.workflow import ModelArtsClient
+    if request.headers.get('content-type', '').split(';', 1)[0].strip().lower() != 'application/json':
+        raise HTTPException(status_code=415, detail='自动配置 IAM 只接受 JSON 请求')
+    manager = _workflow_manager()
+    try:
+        result = configure_iam_provider(manager.workspace, payload.endpoint)
+    except IamSetupError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    # Script-mode clients capture their provider at construction time.
+    if isinstance(manager.client, ModelArtsClient):
+        manager.client = None
+    return result
 
 
 @app.post('/api/v1/training-plan')

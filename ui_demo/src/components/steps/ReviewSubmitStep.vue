@@ -19,6 +19,9 @@ const connectionError = ref('')
 const validation = ref(null)
 const batchPlanReady = ref(false)
 const authMode = ref('manual')
+const iamConfiguring = ref(false)
+const iamMessage = ref('')
+const iamError = ref('')
 const pendingId = ref('')
 const defaultCommands = ref(null)
 const emit = defineEmits(['created', 'accepted'])
@@ -26,6 +29,8 @@ let requestId = ''
 let submittedBody = ''
 let timer = null
 let commandTimer = null, commandVersion = 0
+let validationVersion = 0
+let authModeVersion = 0
 const commandsPending = ref(false)
 const commandError = ref('')
 const evaluationSelection = computed(() => ({
@@ -58,7 +63,8 @@ async function updateCommands() {
   finally { if (version === commandVersion) commandsPending.value = false }
 }
 watch(commandSettings, () => { commandVersion++; commandsPending.value = true; clearTimeout(commandTimer); commandTimer = setTimeout(updateCommands, 350) }, { deep: true })
-watch(() => [props.runtime, props.training, props.evaluation, props.strategies], () => { validation.value = null }, { deep: true })
+function clearValidation() { validationVersion++; validation.value = null }
+watch(() => [props.runtime, props.training, props.evaluation, props.strategies], clearValidation, { deep: true })
 
 const strategyNames = computed(() => props.strategies.map((strategy) => strategyOptions.find((option) => option.value === strategy.type)?.label).join('、'))
 const evaluationEnabled = computed(() => Boolean(evaluationSelection.value.datasets.length || evaluationSelection.value.obs_packages.length))
@@ -154,23 +160,53 @@ async function loadWorkflows() {
 }
 
 async function checkConfiguration() {
+  const version = ++validationVersion
   error.value = ''
   validation.value = null
   try {
+    if (iamConfiguring.value) throw new Error('正在配置自动 IAM，请稍后检查或提交。')
     if (!props.runtime.datasetEstimate?.ready) throw new Error('输入数据尚未自动校验通过，请返回配比配置等待校验完成或查看失败原因。')
     if (commandsPending.value) throw new Error('启动命令正在更新，请稍后检查或提交。')
     if (commandError.value) throw new Error(commandError.value)
     if (!props.runtime.commands) throw new Error('启动命令尚未加载，请点击重新加载默认命令。')
     validateJobCommands(jobPlan.value)
-    validation.value = await apiRequest('workflows/validate', {
+    const result = await apiRequest('workflows/validate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody()),
     })
+    if (version !== validationVersion) return false
+    validation.value = result
     if (!validation.value.ready) throw new Error(`请补充 ModelArts 配置：${validation.value.missing_settings.map(key => fieldLabels[key] || key).join('、')}`)
     return true
   } catch (reason) {
-    error.value = reason.message
+    if (version === validationVersion) error.value = reason.message
     return false
   }
+}
+
+async function configureIam() {
+  if (iamConfiguring.value || status.value === 'loading') return
+  iamConfiguring.value = true
+  iamMessage.value = ''
+  iamError.value = ''
+  try {
+    if (!props.runtime.modelarts.endpoint?.trim()) throw new Error('请先填写 ModelArts 作业 API 地址（url）。')
+    const result = await apiRequest('iam/configure', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: props.runtime.modelarts.endpoint }),
+    })
+    if (result.auth_mode !== 'iam') throw new Error('服务尚未启用自动 IAM，请重试。')
+    authModeVersion++
+    authMode.value = result.auth_mode
+    props.runtime.modelarts.authorization = ''
+    clearValidation()
+    error.value = ''
+    status.value = 'idle'
+    requestId = ''
+    submittedBody = ''
+    iamMessage.value = result.message || '已为当前服务启用自动 IAM，提交时自动获取 Authorization。'
+  } catch (reason) {
+    iamError.value = reason.message || '自动 IAM 配置失败，请重试。'
+  } finally { iamConfiguring.value = false }
 }
 
 async function submit() {
@@ -197,9 +233,10 @@ async function submit() {
 }
 
 async function loadCommands() {
+  const version = authModeVersion
   try {
     const defaults = await apiRequest('workflow-defaults')
-    authMode.value = defaults.auth_mode || 'manual'
+    if (version === authModeVersion) authMode.value = defaults.auth_mode || 'manual'
     if (authMode.value === 'iam') props.runtime.modelarts.authorization = ''
     defaultCommands.value = defaults.commands
     initializeJobCommands(props.strategies, props.runtime, defaults.commands)
@@ -231,8 +268,17 @@ onBeforeUnmount(() => { window.clearInterval(timer); clearTimeout(commandTimer);
     <div class="section-title-row modelarts-heading"><div><h3>ModelArts 作业配置</h3><p>已填入脚本默认值，可按资源池与镜像调整。</p></div></div>
     <div class="form-grid two-cols">
       <label v-for="key in ['endpoint', 'region', 'workspace_id', 'workspace_name', 'image_url', 'image_repo_id', 'flavor_id', 'pool_id']" :key="key" class="field"><span>{{ fieldLabels[key] }}</span><textarea rows="2" v-model="runtime.modelarts[key]" autocomplete="off" ></textarea></label>
-      <label v-if="authMode === 'iam'" class="field"><span>Authorization</span><input value="自动获取（提交时执行）" readonly /><small>已启用私有 IAM 配置；Token 仅用于后端请求，不在页面显示。</small></label>
-      <label v-else class="field"><span>Authorization</span><input v-model="runtime.modelarts.authorization" type="password" autocomplete="off" /><small>当前为手动模式。配置 AMT_IAM_PROVIDER 并重启后端，可自动获取。</small></label>
+      <div class="field authorization-field" :aria-busy="iamConfiguring">
+        <label for="modelarts-authorization">Authorization</label>
+        <div class="authorization-control">
+          <input v-if="authMode === 'iam'" id="modelarts-authorization" value="自动获取（提交时执行）" readonly aria-describedby="modelarts-authorization-help" />
+          <input v-else id="modelarts-authorization" v-model="runtime.modelarts.authorization" type="password" autocomplete="off" :disabled="iamConfiguring" aria-describedby="modelarts-authorization-help" />
+          <button class="button secondary" type="button" :disabled="iamConfiguring || status === 'loading'" @click="configureIam"><LoaderCircle v-if="iamConfiguring" class="spin" :size="16" />{{ iamConfiguring ? '正在配置 IAM…' : authMode === 'iam' ? '重新配置 IAM' : '自动配置 IAM' }}</button>
+        </div>
+        <small id="modelarts-authorization-help">{{ authMode === 'iam' ? '当前服务已启用自动 IAM；提交时由后端获取 Authorization，凭据不在页面显示。' : '当前为手动模式。可填写 Authorization，或点击右侧按钮为当前服务启用自动 IAM。' }}</small>
+        <p v-if="iamMessage" class="success-message" role="status">{{ iamMessage }}</p>
+        <p v-if="iamError" class="error-message" role="alert">{{ iamError }}</p>
+      </div>
     </div>
     <div class="review-grid">
       <article><span>training.output_obs_uri</span><strong class="break-path">{{ training.outputObsUri || '沿用实验输出目录' }}</strong><small>模型与检查点 · 自动追加 runs/实验名称/</small></article>
@@ -262,8 +308,8 @@ onBeforeUnmount(() => { window.clearInterval(timer); clearTimeout(commandTimer);
     <p class="path-preview">提交会创建收费云作业，结果保存到指定 OBS 目录下的独立实验子目录。</p>
     <p v-if="validation?.ready" class="success-message" role="status">配置检查通过。{{ validation.message }}</p>
     <div class="submission-actions" :aria-busy="status === 'loading'">
-      <button class="button secondary" type="button" :disabled="status === 'loading'" @click="checkConfiguration">检查配置（不创建作业）</button>
-      <button class="button submit-button" type="button" :disabled="!runtime.datasetEstimate?.ready || !batchPlanReady || status === 'loading' || (status === 'success' && submittedBody === JSON.stringify(requestBody()))" @click="submit">
+      <button class="button secondary" type="button" :disabled="iamConfiguring || status === 'loading'" @click="checkConfiguration">检查配置（不创建作业）</button>
+      <button class="button submit-button" type="button" :disabled="iamConfiguring || !runtime.datasetEstimate?.ready || !batchPlanReady || status === 'loading' || (status === 'success' && submittedBody === JSON.stringify(requestBody()))" @click="submit">
       <LoaderCircle v-if="status === 'loading'" class="spin" :size="18" /><Rocket v-else :size="18" />
       {{ status === 'loading' ? '正在检查并提交实验…' : !runtime.datasetEstimate?.ready ? '等待输入数据校验通过' : '提交到 ModelArts' }}
       </button>
@@ -282,6 +328,11 @@ onBeforeUnmount(() => { window.clearInterval(timer); clearTimeout(commandTimer);
 .job-plan tbody tr:hover { background: #f7faff; }
 .modelarts-heading { margin-top: 26px; }
 .modelarts-heading h3 { margin-bottom: 0; }
+.authorization-field > label { color: #3e506a; font-size: 13px; }
+.authorization-control { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; }
+.authorization-control input { flex: 1 1 180px; min-width: 0; width: 0; }
+.authorization-control .button { flex: 0 0 auto; }
+.authorization-field > p { margin: 0; }
 .job-commands { margin-top: 28px; }
 .job-commands > p, .job-command-heading small { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
 .job-command-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 14px; margin-bottom: 18px; }

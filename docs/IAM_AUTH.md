@@ -29,6 +29,12 @@ chmod 600 /home/ma-user/work/private_auth/iam_token_provider.py
 
 ## 启动 UI 后端
 
+“任务配置”页的 Authorization 右侧提供“自动配置 IAM”按钮。先填写有效的 ModelArts 作业 API 地址，再点击按钮，后端会读取已有的非空 `AMT_IAM_PROVIDER` 指定文件；未设置或为空时，使用工具目录同级 `private_auth/iam_token_provider.py`。例如工具目录是 `/home/ma-user/work/Auto-Mixture-Tool-main` 时，默认私有配置为 `/home/ma-user/work/private_auth/iam_token_provider.py`。私有配置必须已填写有效认证信息，且位于 Git 仓库之外。已指定的非空路径无效时会报错，不会切换到其他身份。
+
+按钮通过 `POST /api/v1/iam/configure` 调用后端配置脚本逻辑，浏览器仅发送当前 ModelArts 地址，不接受文件路径或脚本内容。后端只用 AST 读取私有配置字典，检查目标地址授权范围后，在当前服务进程中设置 `AMT_IAM_PROVIDER`，立即生效；不会执行私有文件中的 Python 代码、请求 Token 或创建云作业。成功后清空页面手动 Authorization 并要求重新检查配置，失败保留手动输入。实际 Token 仍在提交时获取。
+
+这项操作仅对当前后端进程有效，服务重启后可再次点击；若希望启动时自动启用，仍使用下方的环境变量方式。按钮不会迁移其他进程的代理、CA 配置或修改私有文件。缺少私有配置时，按前面的准备步骤创建一次；按钮不能凭空生成 IAM 凭据。
+
 如明确接受风险，需同时跳过 IAM 与 ModelArts 证书验证，在仓库外私有文件的 `auth` 或 `AUTH_CONFIG` 字典内添加：
 
 ```python
